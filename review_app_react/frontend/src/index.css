@@ -1,0 +1,114 @@
+@import "@databricks/appkit-ui/styles.css";
+
+/*
+ * Palantir / Blueprint-inspired light theme.
+ * Industrial, hairline-bordered, restrained grayscale palette with a single
+ * accent blue (Blueprint's signature #2965CC) used sparingly for primary
+ * actions, links, active tab indicators and focus rings. Status colors
+ * (blocked/advisory/eligible) are muted tint-chip pairs, not saturated pills.
+ *
+ * This overrides @databricks/appkit-ui/styles.css's own `:root` tokens
+ * (same variable names -- --background, --primary, --radius, etc.) rather
+ * than replacing its components: every appkit-ui component already reads
+ * these names via its own `@theme inline` mapping, so redefining the leaf
+ * variables here re-themes Button/Input/RadioGroup/Alert/Progress/Spinner/
+ * Collapsible everywhere they're used, with no per-component changes. Only
+ * Badge and Card are hand-authored replacements (see components/ui/), since
+ * those are the highest-visibility elements (status chips, containers).
+ */
+:root {
+  --background: #ffffff;
+  --foreground: #111418;
+  --card: #ffffff;
+  --card-foreground: #111418;
+  --primary: #2965cc;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f3f5;
+  --secondary-foreground: #111418;
+  --muted: #fafbfc;
+  --muted-foreground: #5f6b7a;
+  --accent: #edf2fb;
+  --accent-foreground: #215db0;
+  --destructive: #b23b3b;
+  --border: #dde1e6;
+  --input: #dde1e6;
+  --ring: #2965cc;
+  --radius: 0.25rem;
+
+  /* Status chip pairs: tinted background + darker text of the same hue. */
+  --status-blocked-bg: #fbeaea;
+  --status-blocked-fg: #b23b3b;
+  --status-advisory-bg: #fbf1e1;
+  --status-advisory-fg: #a66a1e;
+  --status-eligible-bg: #e6f3ec;
+  --status-eligible-fg: #1f7a4d;
+  --status-neutral-bg: #f1f3f5;
+  --status-neutral-fg: #444b54;
+
+  --font-geist-sans: Inter, ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-geist-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+    Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+/*
+ * appkit-ui's own `@theme inline` block already maps --color-background,
+ * --color-primary, etc. to `var(--background)`/`var(--primary)`/... (the
+ * same leaf variables overridden above), and --radius to a single
+ * `var(--radius)` with no lg/md/sm scale. This block only adds what that
+ * one doesn't already provide: the 3-tier radius scale and font family
+ * mapping (appkit-ui defines no --font-sans/--font-mono at all, so
+ * `font-sans`/`font-mono` utilities were previously unstyled).
+ */
+@theme inline {
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 0.0625rem);
+  --radius-sm: calc(var(--radius) - 0.125rem);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/*
+ * This is a light-only product surface: force it regardless of OS/browser
+ * `prefers-color-scheme`. (The `light` class on <html> in index.html is
+ * what actually defeats appkit-ui's `:root:not(.light)` dark-mode block;
+ * this property only affects native form-control rendering.)
+ */
+html {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  min-height: 100svh;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans);
+  font-size: 14px;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+code,
+kbd,
+samp {
+  font-family: var(--font-geist-mono);
+}
+
+/* Small uppercase, letter-spaced micro-label used as a section eyebrow
+   above content blocks (e.g. "GLOSSARY", "TRACEABILITY MATRIX"). */
+.eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+/* Applied to any rendered identifier / count / timestamp value. */
+.mono-id {
+  font-family: var(--font-geist-mono);
+  font-variant-numeric: tabular-nums;
+}

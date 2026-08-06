@@ -1,0 +1,100 @@
+# Client artifacts never leave Unity Catalog volumes
+*.xlsx
+*.docx
+*.pdf
+*.contract.json
+*.contract.v2.json
+extractions/
+rendered/
+reports/
+warehouse/
+data/
+
+# Local-mode fixtures/outputs are the local-filesystem equivalent of the UC
+# volumes above -- same "client artifacts never leave" rule applies here too.
+local_dev_fixtures/
+
+# Personal data (individuals' names, mailboxes, a direct phone number) split
+# out of tools/anonymization_mapping.py. Never tracked; see that module's
+# _resolve() for how it is spliced back in, and note it is NOT recoverable
+# from git if lost.
+tools/anonymization_pii_rules_local.py
+
+# local
+.DS_Store
+venv/
+.env*
+!.env.example
+__pycache__/
+*.pyc
+
+# review_app_react/frontend build artifacts -- rebuilt via `npm run build`
+# before any Databricks App deploy (see review_app_react/app.yaml)
+review_app_react/frontend/node_modules/
+review_app_react/frontend/dist/
+
+# ---------------------------------------------------------------------------
+# Demo fixtures -- tracked deliberately, so that `git clone` alone is enough
+# to run the demo and the transfer zip stops being the delivery mechanism.
+#
+# These six files are anonymized: every client identifier was replaced and
+# the result verified per decompressed zip part. They are NOT client
+# artifacts, which is why they are exempt from the rules above.
+#
+# Scoping is deliberately narrow and the ORDER BELOW IS LOAD-BEARING. Git
+# will not descend into an excluded directory, so a parent cannot be
+# re-included by a negation further down -- each level is therefore
+# re-included, then its contents re-excluded, before the next level down.
+# The effect is that exactly six files become visible and everything else
+# under local_dev_fixtures/ (sttm_out_runs/, uploads/, warehouse/,
+# parsed_frd/, extractions/, reports/, rendered/) stays ignored.
+#
+# tools/anonymization_pii_rules_local.py is untouched by any of this and
+# remains ignored by its own rule above.
+# ---------------------------------------------------------------------------
+
+# Repo-root copies. Anchored with a leading slash so these cannot re-include
+# any other .docx/.xlsx elsewhere in the tree.
+!/demo_frd.docx
+!/demo_sttm.xlsx
+
+# Descend into local_dev_fixtures/, then re-exclude its contents.
+!local_dev_fixtures/
+local_dev_fixtures/*
+
+# Descend into the three directories that hold tracked fixtures, then
+# re-exclude their contents. sttm_out_runs/ and uploads/ are deliberately
+# absent here, so they remain excluded by the line above.
+!local_dev_fixtures/frd_raw/
+!local_dev_fixtures/sttm_reference/
+!local_dev_fixtures/sttm_out/
+local_dev_fixtures/frd_raw/*
+local_dev_fixtures/sttm_reference/*
+local_dev_fixtures/sttm_out/*
+
+# One level deeper for the contracts directory.
+!local_dev_fixtures/sttm_out/contracts/
+local_dev_fixtures/sttm_out/contracts/*
+
+# The sttm_out/ and sttm_out/contracts/ descents above no longer re-include
+# any file: the two contract JSONs that used to be negated here are now
+# deliberately untracked, so a fresh clone opens with an empty document list
+# and populates only once a run completes through render (which promotes its
+# contract into sttm_out/contracts/ -- see orchestration.py's
+# _promote_contract; local-mode run steps are in README.md).
+#
+# Those two descents are RETAINED ON PURPOSE, not left behind by oversight.
+# They match nothing today, but a negation added under sttm_out/contracts/
+# later would silently fail without them (git cannot re-include a file whose
+# parent directory is excluded). Meanwhile the `contracts/*` line above keeps
+# the directory's contents ignored, which is exactly what keeps each promoted
+# run output out of git.
+
+# Finally, the two fixture files themselves.
+!local_dev_fixtures/frd_raw/demo_frd.docx
+!local_dev_fixtures/sttm_reference/demo_sttm.xlsx
+
+# Local venv + editable-install build metadata
+.venv/
+src/*.egg-info/
+.pytest_cache/

@@ -1,0 +1,54 @@
+bundle:
+  name: frd_sttm_agent
+
+include:
+  - resources/*.yml
+
+# Variables shared across the four pipeline notebooks. Defaults match the
+# widget defaults hardcoded in notebooks/01_frd_ingest.py .. 04_sttm_render.py
+# today (soham_workspace.sttm_agent). See resources/frd_sttm_job.yml for how
+# each variable maps onto each notebook's actual widget names -- they don't
+# all agree (e.g. 01_frd_ingest calls the shared documents table "table",
+# while 02_extract/03_contract_build call it "docs_table").
+variables:
+  catalog:
+    description: Unity Catalog catalog name, shared by all four notebooks.
+    # DEV-WORKSPACE-ONLY default — soham_workspace exists only in the
+    # internal dev workspace. Override per target; never assume it
+    # resolves in the client workspace.
+    default: soham_workspace
+  schema:
+    description: Unity Catalog schema name, shared by all four notebooks.
+    # DEV-WORKSPACE-ONLY default (pairs with the catalog above).
+    default: sttm_agent
+  docs_table:
+    description: >-
+      Delta table holding parsed FRD documents. Written by 01_frd_ingest
+      (widget name "table") and read by 02_extract and 03_contract_build
+      (widget name "docs_table" in both) -- one table, two widget names.
+    default: frd_documents
+  out_volume:
+    description: >-
+      UC volume root for pipeline outputs (extractions/, contracts/,
+      reports/, rendered/). Widget name "out_volume" in 02_extract,
+      03_contract_build, and 04_sttm_render. Also fed into 01_frd_ingest's
+      "preview_volume" widget, which writes optional debug markdown copies
+      under the same volume (set to "" on that one task to skip).
+    default: sttm_out
+  contracts_table:
+    description: >-
+      Delta table for feed-level mapping contracts. Widget name
+      "contracts_table" in both 03_contract_build (writes) and
+      04_sttm_render (reads) -- names already agree here.
+    default: frd_contracts
+  notification_email:
+    description: >-
+      Email address notified on job failure. PLACEHOLDER — set a real
+      team address (not a personal one) per target before deploying to a
+      shared workspace.
+    default: replace-me@example.com
+
+targets:
+  dev:
+    mode: development
+    default: true

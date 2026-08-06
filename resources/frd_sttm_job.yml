@@ -1,0 +1,100 @@
+# Chains the four FRD->STTM notebooks (notebooks/01_frd_ingest.py ..
+# 04_sttm_render.py) into one Databricks Job: ingest -> extract ->
+# contract_build -> render. Manual/on-demand trigger only (no schedule) --
+# see databricks.yml for the shared variables referenced below.
+#
+# Retries: job-level task retries are explicitly 0. 02_extract and
+# 03_contract_build are designed to fail loudly on deterministic errors
+# (schema violations, refusals, truncation) and only retry transient
+# Anthropic API errors internally via the SDK client's own `max_retries`
+# (a base_parameter passed to the notebook, unrelated to the task-level
+# `max_retries: 0` below). Job-level retries would mask or double-retry
+# failures the notebooks are already designed to surface.
+#
+# Compute: no job_cluster is defined anywhere in this file -- every task
+# below has no cluster reference, which is what puts it on serverless
+# compute, matching 02_extract's documented requirement.
+
+resources:
+  jobs:
+    frd_sttm_pipeline:
+      name: frd_sttm_pipeline
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: docs_table
+          default: ${var.docs_table}
+        - name: out_volume
+          default: ${var.out_volume}
+        - name: contracts_table
+          default: ${var.contracts_table}
+
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+
+      tasks:
+        - task_key: ingest
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/01_frd_ingest.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              raw_volume: frd_raw
+              table: "{{job.parameters.docs_table}}"
+              preview_volume: "{{job.parameters.out_volume}}"
+
+        - task_key: extract
+          depends_on:
+            - task_key: ingest
+          # Job-level orchestration retries -- deliberately 0, so this layer
+          # never masks or double-retries a deterministic failure (schema
+          # violation, refusal, truncation) that 02_extract.py is designed to
+          # surface. Not the same knob as the `max_retries: "2"` base_parameter
+          # below: that one only controls the Anthropic SDK client's own
+          # internal retries for transient API errors (429/5xx), handled
+          # entirely inside the notebook. Same name, two different layers.
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/02_extract.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              docs_table: "{{job.parameters.docs_table}}"
+              out_volume: "{{job.parameters.out_volume}}"
+              model: claude-opus-4-8
+              max_tokens: "16000"
+              max_retries: "2"
+              secret_scope: sttm_agent
+              secret_key: anthropic_api_key
+
+        - task_key: contract_build
+          depends_on:
+            - task_key: extract
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/03_contract_build.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              docs_table: "{{job.parameters.docs_table}}"
+              contracts_table: "{{job.parameters.contracts_table}}"
+              out_volume: "{{job.parameters.out_volume}}"
+
+        - task_key: render
+          depends_on:
+            - task_key: contract_build
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/04_sttm_render.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              contracts_table: "{{job.parameters.contracts_table}}"
+              runs_table: frd_sttm_runs
+              reference_volume: sttm_reference
+              out_volume: "{{job.parameters.out_volume}}"

@@ -1,0 +1,10 @@
+# Demo fixtures are OOXML zip containers. Mark them binary so that no
+# filter, diff driver, or line-ending normalisation can ever touch them on
+# checkout or commit. A CRLF/LF translation applied to a zip container
+# silently corrupts it -- the file still has a plausible size, and the
+# corruption only surfaces when something tries to open it.
+#
+# `binary` is the built-in macro for `-text -diff`, i.e. never do
+# end-of-line conversion and never attempt a textual diff.
+*.docx binary
+*.xlsx binary

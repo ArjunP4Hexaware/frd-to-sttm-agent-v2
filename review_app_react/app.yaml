@@ -1,0 +1,22 @@
+# Databricks App manifest, per Databricks' documented app.yaml schema (command + env: docs.databricks.com/aws/en/
+# dev-tools/databricks-apps/app-runtime) but a custom Python command, since
+# this app is a FastAPI process (not one of the built-in Streamlit/Dash/
+# Gradio Python app types) that also serves the frontend's built static
+# assets -- see backend/app.py's StaticFiles mount. DATABRICKS_APP_PORT is
+# injected by the platform at runtime; backend/app.py reads it directly.
+#
+# Deploy prerequisite: `cd frontend && npm install && npm run build` first,
+# so frontend/dist/ exists for backend/app.py to serve. Not run here --
+# this app is not being deployed this session (see README's Local mode /
+# `databricks apps deploy` note).
+command: ["python", "backend/app.py"]
+
+env:
+  - name: "STTM_APP_MODE"
+    value: "databricks"
+  - name: "CATALOG"
+    value: "soham_workspace"
+  - name: "SCHEMA"
+    value: "sttm_agent"
+  - name: "OUT_VOLUME"
+    value: "sttm_out"

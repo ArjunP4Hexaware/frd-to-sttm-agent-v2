@@ -1,0 +1,45 @@
+[project]
+name = "frdsttm"
+version = "0.1.0"
+description = "FRD-to-STTM agent: generates source-to-target mapping workbooks from Functional Requirements Documents on Databricks"
+requires-python = ">=3.11"
+dependencies = [
+    # Notebook-parity core — what 02_extract %pip-installs inside Databricks.
+    "anthropic>=0.60",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+# Everything else the four notebooks need to run as plain local scripts
+# (docx/pdf parsing, workbook rendering, the no-Spark local Delta tables).
+local = [
+    "python-docx",
+    "pypdf",
+    "openpyxl",
+    "deltalake",
+    "streamlit",
+    "databricks-sdk",
+    "google-genai",
+]
+# The review app's FastAPI backend (review_app_react/backend). The deployed
+# Databricks App does NOT read this — Apps installs
+# review_app_react/requirements.txt, kept in sync by hand.
+ui = [
+    "fastapi",
+    "uvicorn[standard]",
+    "databricks-sdk",
+]
+dev = [
+    "pytest",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

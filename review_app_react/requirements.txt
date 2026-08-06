@@ -1,0 +1,9 @@
+# Databricks Apps deployment manifest — the platform pip-installs THIS file
+# (the requirements.txt at the app root, next to app.yaml) when the review
+# app is deployed with `databricks apps deploy`. Local dev installs the same
+# deps via the [ui] extra in the repo-root pyproject.toml instead
+# (pip install -e ".[ui]"); keep the two lists in sync by hand.
+fastapi
+uvicorn[standard]
+pydantic>=2
+databricks-sdk
