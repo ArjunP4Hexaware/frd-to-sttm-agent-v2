@@ -71,7 +71,7 @@ def _mids_spec() -> FrdIngestionSpec:
             business_context_summary=(
                 "Ingest Community Demographic, Community Risk, and Individual "
                 "Risk files from Civic Vantage (CV) into the Lakehouse "
-                "for social risk intelligence reporting."
+                "for community and member risk analytics reporting."
             ),
         ),
         in_scope=[
@@ -146,7 +146,7 @@ def _mids_spec() -> FrdIngestionSpec:
                 sub_domain="Social Determinants of Health",
                 landing_location=r"mftlanding\inbound\care_management\sdh\civic_vantage",
                 stage_target=TableTarget(schema="stg_care", tables=["cv_individual_risk"], load_strategy="Truncate and Load"),
-                standard_target=TableTarget(schema="cm", tables=["cv_individual_risk"], load_strategy="Append"),
+                standard_target=TableTarget(schema="care", tables=["cv_individual_risk"], load_strategy="Append"),
                 validation_rules=list(common_rules),
                 recycle_rule=_MIDS_RECYCLE,
                 sttm_reference="STTM-Medicare Expansion-OHDS-Social Factors.xlsx",
