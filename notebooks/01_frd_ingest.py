@@ -82,15 +82,34 @@ print(f"raw:   {RAW_DIR}\ntable: {TABLE}\npreview: {PREVIEW_DIR}")
 # COMMAND ----------
 
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Shared FRD label contract (contracts/frd_label_contract.json), loaded via
+# frdsttm.label_contract — the versioned artifact this parser and the
+# upstream brd-to-frd-agent renderer both key off (same file committed to
+# both repos). The sys.path bootstrap mirrors the notebooks/_*.py shims so
+# `import frdsttm` resolves in every mode this cell executes in: plain
+# local script, Databricks Git folder, and the upstream repo's round-trip
+# test (which exec's these cells individually with __file__ set).
+try:
+    _here = Path(__file__).resolve().parent
+except NameError:
+    _here = Path.cwd()
+for _cand in (_here.parent / "src", _here / "src", Path.cwd().parent / "src", Path.cwd() / "src"):
+    if (_cand / "frdsttm").is_dir() and str(_cand) not in sys.path:
+        sys.path.insert(0, str(_cand))
+
+from frdsttm.label_contract import PROJECT_ID_DIGITS_RE, REQ_ID_FAMILIES
 
 SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt", ".docx", ".pdf"}
 
 # Requirement-id families seen across the BRD (BR/REQ/FR) and the
-# IS-Methodology FRD templates (SRQ/SIR/NFR/MDST). Reshaped to bold markers.
+# IS-Methodology FRD templates (SRQ/SIR/NFR/MDST), from the shared label
+# contract. Reshaped to bold markers.
 _REQUIREMENT_ID_RE = re.compile(
-    r"^\s*((?:BR|REQ|FR|SRQ|SIR|NFR|MDST)[-\s]?\d+)\b[\s:.—–-]*(.*)$", re.I
+    r"^\s*((?:" + "|".join(REQ_ID_FAMILIES) + r")[-\s]?\d+)\b[\s:.—–-]*(.*)$", re.I
 )
 
 # Styles that are navigation chrome, not document content. Only TOC styles:
@@ -336,7 +355,9 @@ def _collapse_blank_lines(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text)
 
 
-_PROJECT_ID_RE = re.compile(r"(\d{6,8})")
+# 6-8 digit project id, per the shared label contract's digits pattern
+# (see the contract bootstrap in the parser cell above).
+_PROJECT_ID_RE = PROJECT_ID_DIGITS_RE
 
 
 def infer_project_id(filename: str) -> str | None:

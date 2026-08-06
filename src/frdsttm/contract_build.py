@@ -9,6 +9,7 @@ Databricks, or a direct import locally). Logic is unchanged; only the
 model imports below were added for package context.
 """
 
+from frdsttm.label_contract import PROJECT_ID_LINE_RE
 from frdsttm.models import FrdIngestionSpec, GatedAmbiguity, Project  # noqa: F401
 
 import hashlib
@@ -74,8 +75,13 @@ def _make_ambiguity(kind: str, text: str, candidates: List[str], context: dict) 
 
 # --------------------------------------------------------------------------- #
 # Deterministic enrichment — facts a regex owns, not an LLM.
+# The project-id line pattern comes from the shared, versioned label
+# contract (contracts/frd_label_contract.json — see frdsttm.label_contract),
+# because it targets the 'Project ID: NNNNNNN' body line the upstream
+# brd-to-frd-agent renderer emits. The Region/LOB pattern is this repo's
+# own and stays local.
 # --------------------------------------------------------------------------- #
-_PROJECT_ID_RE = re.compile(r"project\s*id\s*:?\s*(\d{6,8})")
+_PROJECT_ID_RE = PROJECT_ID_LINE_RE
 _REGION_LOB_RE = re.compile(r"(REG#\d+)\s+(\d{4})")
 
 

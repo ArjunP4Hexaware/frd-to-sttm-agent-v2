@@ -11,13 +11,18 @@ agent** in the five-agent AI-in-Engineering program at AmeriHealth
 Caritas: BRD→FRD → **FRD→STTM** → CodeGen → Code Review (SQL Optimization
 is standalone). Two hand-off contracts matter:
 
-- **Upstream (fragile):** `01_frd_ingest` parses the IS-Methodology labels
-  the BRD→FRD agent's renderer hardcodes ("In Scope", "Assumptions,
+- **Upstream (versioned):** `01_frd_ingest` parses the IS-Methodology
+  labels the BRD→FRD agent's renderer emits ("In Scope", "Assumptions,
   Constraints & Dependencies", `Project ID: NNNNNNN`, req-id families
   `BR|REQ|FR|SRQ|SIR|NFR|MDST`, the `TBD — pending client input…`
-  placeholder routed to open items). The contract is hardcoded prose on
-  BOTH sides with no shared versioned artifact — never reword either side
-  unilaterally.
+  placeholder routed to open items). Both sides load these from the
+  shared, versioned `contracts/frd_label_contract.json` (v1.0.0),
+  committed **byte-identically to both repos** and loaded via
+  `frdsttm.label_contract` (fails loudly if missing/unversioned; no
+  hardcoded fallback). Any contract change bumps `version` and must land
+  as identical files in both repos in the same change set — the upstream
+  repo's round-trip suite byte-compares the two copies and fails on
+  drift. Never edit one side alone.
 - **Downstream (the pipeline's biggest known gap):** `03_contract_build`
   emits `<doc_id>.contract.json`, which the CodeGen agent consumes as its
   FRD feed contract — that half works. But CodeGen ALSO requires a
@@ -38,9 +43,12 @@ notebooks/_models.py, _local_tables.py, _mock_extractions.py,
                         src/frdsttm/; %run and local imports both hit these
 src/frdsttm/            models.py (FrdIngestionSpec, GatedAmbiguity,
                         HumanResolution), contract_build.py (enrich /
-                        grounding_audit / gating), local_tables.py,
+                        grounding_audit / gating), label_contract.py
+                        (shared-label-contract loader), local_tables.py,
                         mock_extractions.py
-tests/                  35 pure-function tests (no LLM/network/Spark)
+contracts/frd_label_contract.json   the shared FRD label contract (see
+                        "Upstream" above; identical copy in brd-to-frd-agent)
+tests/                  41 pure-function tests (no LLM/network/Spark)
 schema/sttm_extraction_schema.json   the extraction contract (mirrors models)
 databricks.yml + resources/frd_sttm_job.yml   asset bundle, job frd_sttm_pipeline
 review_app_react/       FastAPI + Vite/React review app (Databricks App;
@@ -56,7 +64,7 @@ tools/                  anonymization mapping + applier (mandated fixture path)
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[local,dev]"        # deps from pyproject.toml
 
-pytest                               # 35 tests, offline
+pytest                               # 41 tests, offline
 
 python notebooks/01_frd_ingest.py                        # parse demo_frd
 STTM_MOCK_EXTRACTION=1 python notebooks/02_extract.py    # zero-cost mock
@@ -109,9 +117,12 @@ extraction quality.
 
 - **No committed workbook→STTM-mapping-contract extractor** (see Purpose
   above) — the program pipeline's biggest gap.
-- **The upstream label contract is unversioned prose on both sides**; the
-  BRD→FRD repo's round-trip test is the only guard, and it skips without a
-  cross-checkout.
+- **The upstream label contract is versioned** in
+  `contracts/frd_label_contract.json` (shared with brd-to-frd-agent — see
+  Purpose above), but the cross-repo byte-identity check lives in the
+  BRD→FRD repo's suite and still skips there without its
+  `reference/frd-sttm-agent` checkout; this repo's own tests only pin its
+  local copy.
 - Ambiguity ids are stable hashes of kind+text+context and are the join
   key for saved human resolutions; they were migrated once
   (`scripts/migrate_ambiguity_ids.py`) — changing the id scheme again
