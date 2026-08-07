@@ -105,13 +105,13 @@ class Feed(_Model):
         description=(
             "Short name for the feed, preferring the document's own naming "
             "(e.g. a target table name like 'cv_community_risk', or "
-            "'CAQH TPL Inbound Files')."
+            "'CVX Coverage Inbound Files')."
         ),
     )
     source_system: Optional[str] = Field(
         default=None,
         description=(
-            "The vendor/source that produces the file, e.g. 'CAQH', "
+            "The vendor/source that produces the file, e.g. 'CVX', "
             "'Civic Vantage (CV)', a state system. Null if not stated."
         ),
     )
@@ -121,7 +121,7 @@ class Feed(_Model):
             "Every file name pattern stated for this feed, verbatim including "
             "date placeholders and wildcards (e.g. "
             "'demographic_extract_CCYY_MM.csv', "
-            "'YYYYMMDD_1022_1340_COBReport_*_P_I_1_T.txt')."
+            "'YYYYMMDD_2044_1540_CoverageReport_*_P_I_1_T.txt')."
         ),
     )
     file_format: Optional[str] = Field(
@@ -178,7 +178,7 @@ class Feed(_Model):
         default=None,
         description=(
             "ADLS/landing path verbatim if stated, e.g. "
-            "'mftlanding/inbound/member/tpl/caqh'. Null if not stated."
+            "'mftlanding/inbound/member/coverage/cvx'. Null if not stated."
         ),
     )
     stage_target: Optional[TableTarget] = Field(
@@ -244,7 +244,7 @@ class Feed(_Model):
         default=None,
         description=(
             "How the document refers to the accompanying mapping/STTM document "
-            "for this feed (e.g. 'Refer CAQH STTM'). Null if none."
+            "for this feed (e.g. 'Refer CVX STTM'). Null if none."
         ),
     )
     requirement_ids: List[str] = Field(
@@ -336,7 +336,7 @@ class AmbiguityContext(_Model):
     field: Optional[str] = Field(default=None, description="disagreement/advisory_grounding: the dotted or bracketed field path this ambiguity concerns.")
     agent_value: Optional[str] = Field(default=None, description="disagreement: the value the LLM extracted.")
     content_value: Optional[str] = Field(default=None, description="disagreement: the value the deterministic regex found in the source content.")
-    path: Optional[str] = Field(default=None, description="advisory_grounding: the full field path as shown in the report, e.g. 'feeds[0](CAQH TPL Inbound Files).phi_pii_notes'.")
+    path: Optional[str] = Field(default=None, description="advisory_grounding: the full field path as shown in the report, e.g. 'feeds[0](CVX Coverage Inbound Files).phi_pii_notes'.")
     feed_index: Optional[int] = Field(default=None, description="advisory_grounding: index into contract['feeds'] when the flagged field is feed-scoped; null for top-level paths (in_scope, acd(name), etc).")
     original_value: Optional[str] = Field(default=None, description="advisory_grounding: the exact flagged string, captured directly rather than re-parsed from `text` later.")
 

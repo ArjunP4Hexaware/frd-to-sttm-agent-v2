@@ -50,15 +50,15 @@
         "properties": {
           "feed_name": {
             "type": "string",
-            "description": "Short name for the feed, preferring the document's own naming (e.g. a target table name like 'cv_community_risk', or 'CAQH TPL Inbound Files'). "
+            "description": "Short name for the feed, preferring the document's own naming (e.g. a target table name like 'cv_community_risk', or 'CVX Coverage Inbound Files'). "
           },
           "source_system": {
             "type": "string",
-            "description": "The vendor/source that produces the file, e.g. 'CAQH', 'Civic Vantage (CV)', a state system. Null if not stated."
+            "description": "The vendor/source that produces the file, e.g. 'CVX', 'Civic Vantage (CV)', a state system. Null if not stated."
           },
           "file_name_patterns": {
             "type": "array",
-            "description": "Every file name pattern stated for this feed, verbatim including date placeholders and wildcards (e.g. 'demographic_extract_CCYY_MM.csv', 'YYYYMMDD_1022_1340_COBReport_*_P_I_1_T.txt').",
+            "description": "Every file name pattern stated for this feed, verbatim including date placeholders and wildcards (e.g. 'demographic_extract_CCYY_MM.csv', 'YYYYMMDD_2044_1540_CoverageReport_*_P_I_1_T.txt').",
             "items": { "type": "string" }
           },
           "file_format": {
@@ -92,7 +92,7 @@
           "sub_domain": { "type": "string", "description": "Sub-domain if stated, e.g. 'Third Party Liability', 'Social Determinants of Health'." },
           "landing_location": {
             "type": "string",
-            "description": "ADLS/landing path verbatim if stated, e.g. 'mftlanding/inbound/member/tpl/caqh'. Null if not stated."
+            "description": "ADLS/landing path verbatim if stated, e.g. 'mftlanding/inbound/member/coverage/cvx'. Null if not stated."
           },
           "stage_target": {
             "type": "object",
@@ -137,7 +137,7 @@
           },
           "sttm_reference": {
             "type": "string",
-            "description": "How the document refers to the accompanying mapping/STTM document for this feed (e.g. 'Refer CAQH STTM'). Null if none."
+            "description": "How the document refers to the accompanying mapping/STTM document for this feed (e.g. 'Refer CVX STTM'). Null if none."
           },
           "requirement_ids": {
             "type": "array",
