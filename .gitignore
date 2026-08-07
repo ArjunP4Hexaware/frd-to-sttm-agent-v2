@@ -98,3 +98,27 @@ local_dev_fixtures/sttm_out/contracts/*
 .venv/
 src/*.egg-info/
 .pytest_cache/
+
+# ---------------------------------------------------------------------------
+# Tracked demo replay set -- the second live-E2E run's artifact set
+# (docs/LIVE_E2E_2026-08-07.md, post-fix re-run), promoted deliberately so a
+# fresh clone can replay the demo offline, exactly like the demo pair above.
+# Same load-bearing descend-then-re-exclude pattern as the fixtures block:
+# each level is re-included and its contents re-excluded, so exactly this
+# one set becomes visible. FUTURE sets stay untracked by default: any other
+# sttm_out_demo_* / sttm_out_live_e2e_* directory (the demo app's run
+# outputs and later E2E runs) is still caught by `local_dev_fixtures/*`
+# above, as are demo_uploads/ and demo_raw/.
+# ---------------------------------------------------------------------------
+!local_dev_fixtures/sttm_out_live_e2e_20260807b/
+local_dev_fixtures/sttm_out_live_e2e_20260807b/*
+!local_dev_fixtures/sttm_out_live_e2e_20260807b/contracts/
+!local_dev_fixtures/sttm_out_live_e2e_20260807b/contracts/*
+!local_dev_fixtures/sttm_out_live_e2e_20260807b/extractions/
+!local_dev_fixtures/sttm_out_live_e2e_20260807b/extractions/*
+!local_dev_fixtures/sttm_out_live_e2e_20260807b/parsed_frd/
+!local_dev_fixtures/sttm_out_live_e2e_20260807b/parsed_frd/*
+!local_dev_fixtures/sttm_out_live_e2e_20260807b/rendered/
+!local_dev_fixtures/sttm_out_live_e2e_20260807b/rendered/*
+!local_dev_fixtures/sttm_out_live_e2e_20260807b/reports/
+!local_dev_fixtures/sttm_out_live_e2e_20260807b/reports/*
