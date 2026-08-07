@@ -4,33 +4,39 @@
 # MAGIC
 # MAGIC Phase 3 of the FRD→STTM pipeline. A single-turn structured-extraction
 # MAGIC call, not an agent loop: reads each row of the `frd_documents` Delta
-# MAGIC table, sends the `content` column to Claude via the Anthropic Python
-# MAGIC SDK's structured-outputs endpoint
-# MAGIC (`client.messages.parse(output_format=FrdIngestionSpec)`), and writes
+# MAGIC table, sends the `content` column to Claude via a plain streaming
+# MAGIC `messages.stream()` call with the `FrdIngestionSpec` JSON schema
+# MAGIC rendered into the prompt (`frdsttm.live_extraction`), and writes
 # MAGIC one `<doc_id>.json` per document to `sttm_out/extractions/` — the
 # MAGIC directory `03_contract_build` reads from.
 # MAGIC
-# MAGIC The SDK enforces the `FrdIngestionSpec` JSON schema server-side, so
-# MAGIC the return value is either a validated Pydantic object or an
-# MAGIC exception — never a silently-coerced dict. The same `FrdIngestionSpec`
-# MAGIC is re-validated in Phase 4 with `extra="forbid"`, so any schema drift
-# MAGIC fails loudly on both sides.
+# MAGIC **Why schema-in-prompt, not `messages.parse(output_format=...)`.**
+# MAGIC Server-side structured outputs compile the schema into a grammar, and
+# MAGIC FrdIngestionSpec's grammar deterministically exceeds the API compiler's
+# MAGIC limit (`400 "The compiled grammar is too large"`) — measured on the
+# MAGIC first live E2E; see docs/LIVE_E2E_2026-08-07.md defect D1 and
+# MAGIC `frdsttm/live_extraction.py`'s docstring. The schema (field
+# MAGIC descriptions and all, so the per-field guidance still reaches the
+# MAGIC model) travels in the user prompt instead, and the response is
+# MAGIC validated client-side with `FrdIngestionSpec.model_validate_json` —
+# MAGIC whose `extra="forbid"` re-creates the drift guard. The same spec is
+# MAGIC re-validated in Phase 4, so drift still fails loudly on both sides.
+# MAGIC The call streams so a large `max_tokens` (default 64000, widget/env
+# MAGIC `max_tokens`) cannot hit HTTP timeouts.
 # MAGIC
 # MAGIC **Why the base Anthropic SDK, not the Claude Agent SDK.** This step is
 # MAGIC one prompt in, one JSON object out — no tool use, no filesystem access,
-# MAGIC no multi-turn reasoning, no subagents. `messages.parse` is the direct
-# MAGIC fit: server-enforced JSON schema, typed Pydantic return, no loop
-# MAGIC machinery. The Claude Agent SDK (`ClaudeSDKClient` / `query()`) is
-# MAGIC built for agentic loops with tools and permissions; wrapping a single
-# MAGIC structured call in it would add layers with no runtime benefit and
-# MAGIC would lose server-side schema enforcement unless the extraction were
-# MAGIC re-expressed as a tool call. If this step ever grows into a
-# MAGIC multi-turn workflow (e.g. it re-reads sections or calls a lookup
-# MAGIC tool), the Agent SDK becomes the right home; today it isn't.
+# MAGIC no multi-turn reasoning, no subagents. The Claude Agent SDK
+# MAGIC (`ClaudeSDKClient` / `query()`) is built for agentic loops with tools
+# MAGIC and permissions; wrapping a single call in it would add layers with no
+# MAGIC runtime benefit. If this step ever grows into a multi-turn workflow
+# MAGIC (e.g. it re-reads sections or calls a lookup tool), the Agent SDK
+# MAGIC becomes the right home; today it isn't.
 # MAGIC
 # MAGIC **Fail-loudly semantics** (matching Phase 4's philosophy):
-# MAGIC - Malformed model output → the SDK's server-side schema enforcement raises;
-# MAGIC   we surface `doc_id` in the error and stop the run.
+# MAGIC - Malformed model output → client-side validation raises naming every
+# MAGIC   failed field; we surface `doc_id` in the error and stop the run.
+# MAGIC   There is deliberately NO re-ask/repair loop.
 # MAGIC - `stop_reason` of `refusal` or `max_tokens` → raise. `max_tokens` means the
 # MAGIC   extraction was truncated mid-JSON and would fail Phase 4 anyway.
 # MAGIC - Transient `429`/`5xx` are retried by the SDK client (`max_retries`
@@ -69,7 +75,11 @@ SCHEMA = _param("schema", "sttm_agent")
 DOCS_TABLE_NAME = _param("docs_table", "frd_documents")
 OUT_VOLUME = _param("out_volume", "sttm_out")
 MODEL = _param("model", "claude-opus-4-8")
-MAX_TOKENS = int(_param("max_tokens", "16000"))
+# 64000 (was 16000): R3 mitigation from docs/LIVE_E2E_2026-08-07.md — the
+# demo FRD used 3.3k output tokens at ~700-800/feed, so 16k capped out
+# around 15-20 feeds. The call streams, so the larger ceiling cannot hit
+# HTTP timeouts.
+MAX_TOKENS = int(_param("max_tokens", "64000"))
 MAX_RETRIES = int(_param("max_retries", "2"))
 SECRET_SCOPE = _param("secret_scope", "sttm_agent")
 SECRET_KEY = _param("secret_key", "anthropic_api_key")
@@ -193,22 +203,27 @@ else:
 
 # COMMAND ----------
 
+# MAGIC %run ./_live_extraction
+
+# COMMAND ----------
+
 # `%run` above is a Databricks-only magic -- inert (just a comment) when this
 # file executes as a plain script, so FrdIngestionSpec would never get
-# defined locally without this explicit import. _models.py has no
-# Databricks/Spark dependency, so this import works unmodified either way.
+# defined locally without this explicit import. Neither module has a
+# Databricks/Spark dependency, so these imports work unmodified either way.
 if not IS_DATABRICKS:
     from _models import FrdIngestionSpec  # noqa: F401
+    from _live_extraction import extract_live  # noqa: F401
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## System prompt
 # MAGIC Short framing only. Per-field guidance lives on the Pydantic model in
-# MAGIC `_models.py` as `Field(description=...)` — `messages.parse()` sends
-# MAGIC that schema (descriptions and all) server-side, so per-field rules
-# MAGIC (verbatim identifiers, attribution splitting, "NA" overrides) reach
-# MAGIC the model via the schema, not this prompt.
+# MAGIC `_models.py` as `Field(description=...)` — `frdsttm.live_extraction`
+# MAGIC renders that schema (descriptions and all) into the user prompt, so
+# MAGIC per-field rules (verbatim identifiers, attribution splitting, "NA"
+# MAGIC overrides) reach the model via the schema, not this prompt.
 
 # COMMAND ----------
 
@@ -255,10 +270,11 @@ assert docs, f"No documents in {DOCS_TABLE} — run 01_frd_ingest first."
 
 # MAGIC %md
 # MAGIC ## Extract
-# MAGIC One `messages.parse()` call per document. Server-side schema enforcement
-# MAGIC means the return value is either a validated `FrdIngestionSpec` or an
-# MAGIC exception — never a silently-coerced dict. Per-doc failures are fatal;
-# MAGIC we surface `doc_id` in the error so a re-run knows which one to investigate.
+# MAGIC One streaming call per document via `extract_live()` — schema-in-prompt,
+# MAGIC client-side `extra="forbid"` validation. The return value is either a
+# MAGIC validated `FrdIngestionSpec` or an exception — never a silently-coerced
+# MAGIC dict. Per-doc failures are fatal; we surface `doc_id` in the error so a
+# MAGIC re-run knows which one to investigate.
 
 # COMMAND ----------
 
@@ -287,12 +303,13 @@ for d in docs:
         )
     else:
         try:
-            response = client.messages.parse(
+            response = extract_live(
+                client,
+                d["doc_id"],
+                d["content"],
                 model=MODEL,
                 max_tokens=MAX_TOKENS,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": d["content"]}],
-                output_format=FrdIngestionSpec,
+                system_prompt=SYSTEM_PROMPT,
             )
         except anthropic.APIError as exc:
             raise RuntimeError(f"{d['doc_id']}: extraction failed — {exc}") from exc

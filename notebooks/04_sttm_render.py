@@ -679,10 +679,51 @@ def resolve_attribution(contract, dictionary, feed_match, already_settled=frozen
             feed["recycle_rule"] = None
 
     prov = contract.setdefault("_provenance", {})
+
+    # D2 fix (docs/LIVE_E2E_2026-08-07.md): an attribution ambiguity whose
+    # candidate feeds already EQUAL the dictionary-confirmed set is settled
+    # by the same evidence a removal uses -- the extraction agrees with the
+    # dictionary, there is just nothing left to remove. Before this pass, a
+    # dictionary-correct extraction stayed gated (zero removals -> the
+    # clearing below never ran) while a spread-across-all-feeds extraction
+    # cleared to PASS. Confirm-and-clear those individually; ambiguities the
+    # dictionary cannot adjudicate (no known column token, or a partial
+    # overlap) keep their human gate.
+    n_removals = len(resolutions)
+    confirmed_ids = set()
+    for amb in prov.get("ambiguities", []):
+        if amb.get("kind") != "attribution":
+            continue
+        ctx = amb.get("context") or {}
+        rule = ctx.get("rule") or amb.get("text", "")
+        cand = set(ctx.get("feed_indices") or [])
+        if not cand:
+            continue
+        cols = {_nl(c) for c in _COL_TOKEN.findall(rule)} & all_cols
+        if cols:
+            dict_set = {i for i, cs in cols_by_feed.items() if cols & cs}
+        elif "recycle" in _nl(rule):
+            dict_set = set(recycle_feeds)
+        else:
+            continue
+        if dict_set and cand == dict_set:
+            confirmed_ids.add(amb["id"])
+            resolutions.append(
+                f"confirmed rule attribution on "
+                f"{[contract['feeds'][j]['feed_name'] for j in sorted(cand)]} "
+                f"— candidates match dictionary column membership exactly: "
+                f"{rule[:90]!r}")
+
     prov["attribution_resolutions"] = resolutions
-    if resolutions:
+    if n_removals:
+        # Removals re-attribute every rule deterministically -- the
+        # pre-existing behavior clears all attribution ambiguities.
         prov["ambiguities"] = [a for a in prov.get("ambiguities", [])
                                if a["kind"] != "attribution"]
+    elif confirmed_ids:
+        prov["ambiguities"] = [a for a in prov.get("ambiguities", [])
+                               if a["id"] not in confirmed_ids]
+    if resolutions:
         if contract.get("status") == "PASS_WITH_FLAGS" and not prov["ambiguities"] \
                 and not prov.get("grounding", {}).get("advisory_flagged"):
             contract["status"] = "PASS"
