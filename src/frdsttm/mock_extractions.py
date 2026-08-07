@@ -6,8 +6,8 @@
 # MAGIC (see that notebook's extraction-loop cell) to skip the real Anthropic API
 # MAGIC call entirely. **Not a quality benchmark** — these two `FrdIngestionSpec`
 # MAGIC objects were hand-built by reading the real parsed markdown for the two
-# MAGIC `local_dev_fixtures/frd_raw/` sample FRDs (Medicare Expansion/MIDS Socially
-# MAGIC Determined, Payment Integrity/CAQH TPL 1005034) and copying real facts —
+# MAGIC `local_dev_fixtures/frd_raw/` sample FRDs (the anonymized Medicare
+# MAGIC Expansion demo pair, Payment Integrity/CAQH TPL 1005034) and copying facts —
 # MAGIC file patterns, schemas, table names, requirement ids, business rules —
 # MAGIC verbatim or near-verbatim from that content. Real extraction-quality
 # MAGIC numbers (grounding %, eval % against reference workbooks) live in
@@ -17,7 +17,7 @@
 # MAGIC
 # MAGIC Each spec deliberately reproduces a genuine ambiguity from its source FRD
 # MAGIC rather than a clean happy path:
-# MAGIC - **MIDS**: the FRD's own Data Quality section states the ZIP_CODE-null
+# MAGIC - **demo_frd**: the FRD's own Data Quality section states the ZIP_CODE-null
 # MAGIC   rule, MEMBER_ID-null rule, and 7-day recycle rule once, then lists all
 # MAGIC   three feed files as the target ("...from the below files") without
 # MAGIC   saying which rule applies to which file — the exact vague-attribution
@@ -368,7 +368,7 @@ def mock_spec_for(doc_id: str, content: str | None = None) -> FrdIngestionSpec:
         raise MockSpecNotFoundError(
             f"STTM_MOCK_EXTRACTION=1 but no hand-authored mock spec could be "
             f"confidently matched for doc_id={doc_id!r} -- neither the filename "
-            f"nor the document content matched a known fixture (MIDS, CAQH) with "
+            f"nor the document content matched a known fixture (demo_frd, CAQH) with "
             f"enough confidence. Add a mock spec to notebooks/_mock_extractions.py "
             f"for this document, or unset STTM_MOCK_EXTRACTION to call the real API."
         )

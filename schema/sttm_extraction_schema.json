@@ -8,7 +8,7 @@
       "properties": {
         "project_id": {
           "type": "string",
-          "description": "Project identifier exactly as stated, e.g. '1005034'. Null if not stated."
+          "description": "Project identifier exactly as stated, e.g. '1007412'. Null if not stated."
         },
         "project_name": {
           "type": "string",
@@ -50,15 +50,15 @@
         "properties": {
           "feed_name": {
             "type": "string",
-            "description": "Short name for the feed, preferring the document's own naming (e.g. a target table name like 'sd_community_risk', or 'CAQH TPL Inbound Files'). "
+            "description": "Short name for the feed, preferring the document's own naming (e.g. a target table name like 'cv_community_risk', or 'CAQH TPL Inbound Files'). "
           },
           "source_system": {
             "type": "string",
-            "description": "The vendor/source that produces the file, e.g. 'CAQH', 'Socially Determined (SD)', a state system. Null if not stated."
+            "description": "The vendor/source that produces the file, e.g. 'CAQH', 'Civic Vantage (CV)', a state system. Null if not stated."
           },
           "file_name_patterns": {
             "type": "array",
-            "description": "Every file name pattern stated for this feed, verbatim including date placeholders and wildcards (e.g. 'demographics_package_CCYY_MM.csv', 'YYYYMMDD_1022_1340_COBReport_*_P_I_1_T.txt').",
+            "description": "Every file name pattern stated for this feed, verbatim including date placeholders and wildcards (e.g. 'demographic_extract_CCYY_MM.csv', 'YYYYMMDD_1022_1340_COBReport_*_P_I_1_T.txt').",
             "items": { "type": "string" }
           },
           "file_format": {
@@ -85,7 +85,7 @@
           },
           "lobs": {
             "type": "array",
-            "description": "Lines of business in scope for this feed, as stated: names like 'MIDS', bare codes like '0100', or Region/LOB code pairs listed in metadata tables (e.g. 'REG#1 0100') - capture every code listed.",
+            "description": "Lines of business in scope for this feed, as stated: names like 'OHDS', bare codes like '0100', or Region/LOB code pairs listed in metadata tables (e.g. 'REG#1 0100') - capture every code listed.",
             "items": { "type": "string" }
           },
           "domain": { "type": "string", "description": "Data domain if stated, e.g. 'Member'." },
@@ -99,7 +99,7 @@
             "description": "Stage (silver) layer target as stated.",
             "properties": {
               "catalog": { "type": "string", "description": "Catalog/workspace if stated, e.g. 'PR_DLK'. Null otherwise." },
-              "schema": { "type": "string", "description": "Schema name, e.g. 'stg_mbr', 'stg_sdoh'." },
+              "schema": { "type": "string", "description": "Schema name, e.g. 'stg_mbr', 'stg_sdh'." },
               "tables": { "type": "array", "description": "All stage table names for this feed, verbatim.", "items": { "type": "string" } },
               "load_strategy": { "type": "string", "description": "As stated, e.g. 'Truncate and Load'." }
             }
@@ -109,19 +109,19 @@
             "description": "Standard (gold) layer target as stated.",
             "properties": {
               "catalog": { "type": "string", "description": "Catalog if stated, e.g. 'PR_STD'. Null otherwise." },
-              "schema": { "type": "string", "description": "Schema name, e.g. 'MBR', 'sdoh', 'cm'." },
+              "schema": { "type": "string", "description": "Schema name, e.g. 'MBR', 'sdh', 'care'." },
               "tables": { "type": "array", "description": "All standard table names for this feed, verbatim.", "items": { "type": "string" } },
               "load_strategy": { "type": "string", "description": "As stated, e.g. 'Append'." }
             }
           },
           "validation_rules": {
             "type": "array",
-            "description": "Stated processing/validation rules for this feed, one per rule, close to verbatim. Check ALL sections, especially 'Data Ingestion Requirements' subsections ('Data Quality', 'Technical Metadata', 'Administrative Metadata'): rules are often written as prose inside a single Description cell that covers several files at once — split them and attribute each rule to the feed whose file or table it names, even when nearby template rows read 'NA' or are blank. Examples: 'Process shall fail when file layout is not as per source dictionary', 'If the ZIP_CODE column is NULL, reject the record to the reject table', 'Member ID validation should be performed against Facets for existence', 'LOB_ID field should be mapped to Payer Area field'.",
+            "description": "Stated processing/validation rules for this feed, one per rule, close to verbatim. Check ALL sections, especially 'Data Ingestion Requirements' subsections ('Data Quality', 'Technical Metadata', 'Administrative Metadata'): rules are often written as prose inside a single Description cell that covers several files at once — split them and attribute each rule to the feed whose file or table it names, even when nearby template rows read 'NA' or are blank. Examples: 'Process shall fail when file layout is not as per source dictionary', 'If the ZIP_CODE column is NULL, reject the record to the reject table', 'Member ID validation should be performed against CoreMember for existence', 'LOB_ID field should be mapped to Payer Area field'.",
             "items": { "type": "string" }
           },
           "recycle_rule": {
             "type": "string",
-            "description": "Any stated recycle/retry handling for unmatched or rejected records, including a dedicated recycle table, a recycle flag, or a day window (e.g. 'Invalid records moved to Recycle table, retained 15 days', 'Recycle Flag enabled for 7 days: check SBSB_ID against PR_STD.FACETS.CMC_SBSB_SUBSC for GRGR_CK = 31'). Capture the window and any reference table/condition verbatim. Often stated in prose inside Data Quality sections rather than in a labeled row — a template row saying 'NA' does not override a prose statement that names this feed's file. Null only if the document truly states none for this feed."
+            "description": "Any stated recycle/retry handling for unmatched or rejected records, including a dedicated recycle table, a recycle flag, or a day window (e.g. 'Invalid records moved to Recycle table, retained 15 days', 'Recycle Flag enabled for 7 days: check SUBS_ID against PR_STD.COREMEMBER.CM_SUBS_MASTER for GRP_CK = 47'). Capture the window and any reference table/condition verbatim. Often stated in prose inside Data Quality sections rather than in a labeled row — a template row saying 'NA' does not override a prose statement that names this feed's file. Null only if the document truly states none for this feed."
           },
           "history_backfill": {
             "type": "string",

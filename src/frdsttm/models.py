@@ -35,7 +35,7 @@ class Project(_Model):
 
     project_id: Optional[str] = Field(
         default=None,
-        description="Project identifier exactly as stated, e.g. '1005034'. Null if not stated.",
+        description="Project identifier exactly as stated, e.g. '1007412'. Null if not stated.",
     )
     project_name: Optional[str] = Field(
         default=None,
@@ -75,8 +75,8 @@ class TableTarget(_Model):
         default=None,
         alias="schema",
         description=(
-            "Schema name (e.g. 'stg_mbr' or 'stg_sdoh' for the stage layer; "
-            "'MBR', 'sdoh', or 'cm' for the standard layer)."
+            "Schema name (e.g. 'stg_mbr' or 'stg_sdh' for the stage layer; "
+            "'MBR', 'sdh', or 'care' for the standard layer)."
         ),
     )
     tables: List[str] = Field(
@@ -104,7 +104,7 @@ class Feed(_Model):
         default=None,
         description=(
             "Short name for the feed, preferring the document's own naming "
-            "(e.g. a target table name like 'sd_community_risk', or "
+            "(e.g. a target table name like 'cv_community_risk', or "
             "'CAQH TPL Inbound Files')."
         ),
     )
@@ -112,7 +112,7 @@ class Feed(_Model):
         default=None,
         description=(
             "The vendor/source that produces the file, e.g. 'CAQH', "
-            "'Socially Determined (SD)', a state system. Null if not stated."
+            "'Civic Vantage (CV)', a state system. Null if not stated."
         ),
     )
     file_name_patterns: List[str] = Field(
@@ -120,7 +120,7 @@ class Feed(_Model):
         description=(
             "Every file name pattern stated for this feed, verbatim including "
             "date placeholders and wildcards (e.g. "
-            "'demographics_package_CCYY_MM.csv', "
+            "'demographic_extract_CCYY_MM.csv', "
             "'YYYYMMDD_1022_1340_COBReport_*_P_I_1_T.txt')."
         ),
     )
@@ -159,7 +159,7 @@ class Feed(_Model):
         default_factory=list,
         description=(
             "Lines of business in scope for this feed, as stated: names like "
-            "'MIDS', bare codes like '0100', or Region/LOB code pairs listed "
+            "'OHDS', bare codes like '0100', or Region/LOB code pairs listed "
             "in metadata tables (e.g. 'REG#1 0100') - capture every code listed."
         ),
     )
@@ -202,7 +202,7 @@ class Feed(_Model):
             "are blank. Examples: 'Process shall fail when file layout is not "
             "as per source dictionary', 'If the ZIP_CODE column is NULL, "
             "reject the record to the reject table', 'Member ID validation "
-            "should be performed against Facets for existence', 'LOB_ID field "
+            "should be performed against CoreMember for existence', 'LOB_ID field "
             "should be mapped to Payer Area field'."
         ),
     )
@@ -213,7 +213,7 @@ class Feed(_Model):
             "records, including a dedicated recycle table, a recycle flag, or "
             "a day window (e.g. 'Invalid records moved to Recycle table, "
             "retained 15 days', 'Recycle Flag enabled for 7 days: check "
-            "SBSB_ID against PR_STD.FACETS.CMC_SBSB_SUBSC for GRGR_CK = 31'). "
+            "SUBS_ID against PR_STD.COREMEMBER.CM_SUBS_MASTER for GRP_CK = 47'). "
             "Capture the window and any reference table/condition verbatim. "
             "Often stated in prose inside Data Quality sections rather than "
             "in a labeled row — a template row saying 'NA' does not override "

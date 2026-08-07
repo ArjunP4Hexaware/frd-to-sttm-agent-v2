@@ -750,7 +750,7 @@ def _style_row(ws, r, n_cols, fill):
 
 
 def render_sheet_per_table(contract, out_path):
-    """MIDS dialect: FILE_DETAILS + VERSION_HISTORY + one MAPPING-* sheet per feed."""
+    """Demo (CV) dialect: FILE_DETAILS + VERSION_HISTORY + one MAPPING-* sheet per feed."""
     wb = Workbook()
     ws = wb.active
     ws.title = "FILE_DETAILS"

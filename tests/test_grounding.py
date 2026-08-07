@@ -41,15 +41,15 @@ def test_tokens_drops_short_words():
 # --------------------------------------------------------------------------- #
 
 def test_strict_ok_is_normalized_substring():
-    content = norm("Pattern: demographics_package_CCYY_MM.csv arrives monthly")
-    assert _strict_ok("demographics_package_CCYY_MM.csv", content)
+    content = norm("Pattern: demographic_extract_CCYY_MM.csv arrives monthly")
+    assert _strict_ok("demographic_extract_CCYY_MM.csv", content)
     assert not _strict_ok("invented_file.csv", content)
 
 
 def test_advisory_ok_threshold():
-    content_tokens = set(_tokens("records must match member identifiers in facets"))
+    content_tokens = set(_tokens("records must match member identifiers in coremember"))
     # All tokens present -> ok.
-    assert _advisory_ok("member records match facets", content_tokens)
+    assert _advisory_ok("member records match coremember", content_tokens)
     # Mostly absent tokens -> flagged.
     assert not _advisory_ok("completely unrelated invented prose", content_tokens)
 
@@ -71,10 +71,10 @@ def test_grounding_audit_strict_failure_on_invented_pattern():
 
 
 def test_grounding_audit_clean_spec_passes():
-    content = "Project ID: 1005034. Feed sd_risk delivers sd_risk_file.csv."
+    content = "Project ID: 1005034. Feed cv_risk delivers cv_risk_file.csv."
     spec = _spec(
         project={"project_id": "1005034"},
-        feeds=[{"feed_name": "sd_risk", "file_name_patterns": ["sd_risk_file.csv"]}],
+        feeds=[{"feed_name": "cv_risk", "file_name_patterns": ["cv_risk_file.csv"]}],
     )
     audit = grounding_audit(spec, content, [])
     assert audit["strict_failed"] == []

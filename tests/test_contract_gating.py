@@ -9,10 +9,10 @@ def _build(raw_extraction: dict, content: str) -> dict:
     return build_contract("doc1", "doc1.docx", raw_extraction, content)
 
 
-CLEAN_CONTENT = "Project ID: 1005034. Feed sd_risk delivers sd_risk_file.csv."
+CLEAN_CONTENT = "Project ID: 1005034. Feed cv_risk delivers cv_risk_file.csv."
 CLEAN_EXTRACTION = {
     "project": {"project_id": "1005034"},
-    "feeds": [{"feed_name": "sd_risk", "file_name_patterns": ["sd_risk_file.csv"]}],
+    "feeds": [{"feed_name": "cv_risk", "file_name_patterns": ["cv_risk_file.csv"]}],
 }
 
 
@@ -60,7 +60,7 @@ def test_pass_with_flags_on_attribution_ambiguity():
 
 def test_pass_with_flags_on_advisory_grounding_flag():
     raw = {
-        "feeds": [{"feed_name": "sd_risk", "file_name_patterns": ["sd_risk_file.csv"],
+        "feeds": [{"feed_name": "cv_risk", "file_name_patterns": ["cv_risk_file.csv"],
                    "validation_rules": ["entirely invented prose overlapping nothing"]}]
     }
     res = _build(raw, CLEAN_CONTENT)

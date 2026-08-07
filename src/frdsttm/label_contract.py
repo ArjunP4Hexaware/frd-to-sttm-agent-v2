@@ -4,7 +4,7 @@ frdsttm.label_contract — loader for the shared FRD label contract.
 ``contracts/frd_label_contract.json`` is the versioned artifact that
 replaced the hardcoded IS-Methodology label prose previously mirrored
 between this repo's ingest/contract-build path and the upstream
-brd-to-frd-agent's amerihealth renderer. The SAME file is committed
+brd-to-frd-agent's IS-Methodology renderer. The SAME file is committed
 byte-identically to BOTH repos; the upstream repo's round-trip suite
 fails loudly if the two copies drift. Any contract change bumps
 ``version`` and must land as identical files in both repos in the same

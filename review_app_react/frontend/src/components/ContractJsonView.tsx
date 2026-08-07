@@ -29,7 +29,7 @@ function FeedFieldsSection({ name, fields }: { name: string; fields: unknown[] }
 
 /**
  * Full contract JSON, with `feeds[*].fields` collapsed by default -- that's
- * the bulk of the file (300+ KB on MIDS, one entry per source column with
+ * the bulk of the file (300+ KB on the demo fixture, one entry per source column with
  * its derived stage/standard mapping). Everything else -- top-level
  * metadata (project, in_scope, assumptions_constraints_dependencies, etc.)
  * and `_provenance` (ambiguities, resolution_audit, human_resolutions) --

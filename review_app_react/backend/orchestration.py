@@ -5,15 +5,15 @@ with a review step in between if the pipeline gates on unresolved
 ambiguities. First-demo scope, deliberately simplified in two ways (per the
 task this was built against -- not oversights):
 
-- Mock extraction only, MIDS-fixture-scoped: `_mock_extractions.py`'s
+- Mock extraction only, demo-fixture-scoped: `_mock_extractions.py`'s
   two-tier matcher (see notebooks/_mock_extractions.py) is a *general*
   matcher that also correctly recognizes the CAQH fixture (existing
   terminal-driven runs of the pipeline depend on that). This orchestration
   layer is narrower: an upload is only accepted into the demo flow if it
-  resolves specifically to the MIDS mock spec (see `_assert_mids_scoped`
+  resolves specifically to the demo_frd mock spec (see `_assert_demo_scoped`
   below) -- any other document (including a perfectly legitimate CAQH
   upload) is refused with a clear, structured error, consistent with "this
-  first working demo is MIDS-only."
+  first working demo is demo-fixture-only."
 - In-memory run-state tracking (`RUNS` below), no external queue or
   database. A backend restart loses all in-flight run state; fine for a
   local single-process demo, not something to build on for anything real.
@@ -71,12 +71,12 @@ LOCAL_ROOT = REPO_ROOT / "local_dev_fixtures"
 # Databricks-magic-free module -- safe to import directly, unlike
 # 01-04_*.py which run pipeline driver code at import time (see this
 # module's docstring). Only its tier-1 filename matcher is reused here;
-# see _assert_mids_scoped().
+# see _assert_demo_scoped().
 sys.path.insert(0, str(NOTEBOOKS_DIR))
 from _mock_extractions import _tier1_filename_match  # noqa: E402
 
 # The only fixture this orchestration demo accepts -- see module docstring.
-_MIDS_KEY = "demo_frd"
+_DEMO_KEY = "demo_frd"
 
 RunStatus = Literal[
     "pending", "running_ingest", "running_extract", "running_contract_build",
@@ -106,10 +106,10 @@ def _get_run_or_404(run_id: str) -> dict:
     return run
 
 
-def _assert_mids_scoped(doc_id: str) -> None:
-    """This orchestration demo is MIDS-only (see module docstring) -- refuse
-    an upload whose filename doesn't confidently resolve to the MIDS mock
-    spec via the same tier-1 filename matcher notebooks/_mock_extractions.py
+def _assert_demo_scoped(doc_id: str) -> None:
+    """This orchestration demo is demo-fixture-only (see module docstring) --
+    refuse an upload whose filename doesn't confidently resolve to the demo_frd
+    mock spec via the same tier-1 filename matcher notebooks/_mock_extractions.py
     uses, rather than silently running a CAQH (or unrelated) upload through
     the pipeline and surprising the reviewer with the wrong mock data
     downstream.
@@ -120,20 +120,20 @@ def _assert_mids_scoped(doc_id: str) -> None:
     that notebook can't expose as an import (its whole body runs at import
     time -- the same constraint documented throughout this file and
     04_sttm_render.py). Tier 1 alone is sufficient for this demo's actual
-    inputs: the real MIDS/CAQH fixture filenames, and MIDS filename variants
+    inputs: the demo/CAQH fixture filenames, and demo_frd filename variants
     (e.g. a re-uploaded "... (1).docx" copy), all resolve unambiguously by
-    filename. A genuinely neutral filename with real MIDS *content* would
-    pass this gate incorrectly -- see notebooks/_mock_extractions.py's
+    filename. A genuinely neutral filename with real demo-fixture *content*
+    would pass this gate incorrectly -- see notebooks/_mock_extractions.py's
     `mock_spec_for()` for the full two-tier match, which is still what
     actually selects the mock spec during 02_extract.py and would still
     raise MockSpecNotFoundError for a non-fixture upload even if this
     filename-only gate let it through."""
     match = _tier1_filename_match(doc_id)
-    if match != _MIDS_KEY:
+    if match != _DEMO_KEY:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"This demo's mock-extraction pipeline is scoped to the MIDS fixture only. "
+                f"This demo's mock-extraction pipeline is scoped to the demo fixture only. "
                 f"'{doc_id}' did not match it by filename "
                 f"(matched: {match!r} instead)."
             ),
@@ -146,54 +146,19 @@ def _assert_mids_scoped(doc_id: str) -> None:
 def _run_env(run: dict) -> dict:
     """Build the subprocess env for one pipeline stage.
 
-    PROVIDER SELECTION (added 2026-07-30). This function used to hardcode
-    `STTM_MOCK_EXTRACTION=1` unconditionally, which meant an upload-driven run
-    was ALWAYS mock no matter what the launcher exported. That is still the
-    default, but it is now conditional, for two reasons:
-
-    1. It is the only thing standing between this app and a live extraction.
-       Stage 2 runs here as a subprocess (see _run_stage), so whatever this
-       dict says is what the extraction actually does.
-    2. `env = os.environ.copy()` inherits STTM_LLM_PROVIDER from the parent
-       process. Setting STTM_MOCK_EXTRACTION=1 on top of an inherited
-       STTM_LLM_PROVIDER=gemini is a CONFLICT that 02_extract.py deliberately
-       raises on rather than guessing -- so leaving this unconditional would
-       have made every upload-driven run fail outright once the launcher
-       started exporting the provider.
-
-    Live requires BOTH the provider and a non-empty key. If the provider asks
-    for gemini but no key is present we fall back to mock and log at WARNING
-    -- the fallback is loud and recorded, never silent, and the provider var
-    is cleared so the conflict check cannot fire on the way down.
+    Always mock: upload-driven runs are pinned to `STTM_MOCK_EXTRACTION=1`
+    regardless of what the parent process exported. Stage 2 runs here as a
+    subprocess (see _run_stage), so this dict is the only thing standing
+    between this app and a live billed extraction. An inherited
+    STTM_LLM_PROVIDER is cleared deliberately: a live provider alongside the
+    mock flag is the conflict 02_extract.py refuses to resolve.
     """
     env = os.environ.copy()
     env["RAW_VOLUME"] = f"uploads/{run['run_id']}"
     env["SCHEMA"] = run["schema"]
     env["OUT_VOLUME"] = f"sttm_out_runs/{run['run_id']}"
-
-    provider = os.environ.get("STTM_LLM_PROVIDER", "").strip().lower()
-    has_key = bool(os.environ.get("GEMINI_API_KEY", "").strip())
-
-    if provider == "gemini" and has_key:
-        env["STTM_LLM_PROVIDER"] = "gemini"
-        env.pop("STTM_MOCK_EXTRACTION", None)
-        _log.info(
-            "run %s: LIVE Gemini extraction (STTM_LLM_PROVIDER=gemini, key present)",
-            run["run_id"],
-        )
-    else:
-        if provider == "gemini" and not has_key:
-            _log.warning(
-                "run %s: STTM_LLM_PROVIDER=gemini was requested but GEMINI_API_KEY is "
-                "empty -- falling back to MOCK replay for this run. The extraction "
-                "will NOT be live.",
-                run["run_id"],
-            )
-        env["STTM_MOCK_EXTRACTION"] = "1"
-        # Cleared deliberately: an inherited provider alongside the mock flag
-        # is the conflict 02_extract.py refuses to resolve.
-        env.pop("STTM_LLM_PROVIDER", None)
-
+    env["STTM_MOCK_EXTRACTION"] = "1"
+    env.pop("STTM_LLM_PROVIDER", None)
     return env
 
 
@@ -423,7 +388,7 @@ def start_run(run_id: str, background_tasks: BackgroundTasks) -> RunStatusRespon
     if run["status"] != "pending":
         raise HTTPException(status_code=409, detail=f"Run is already {run['status']!r}; cannot start again.")
 
-    _assert_mids_scoped(run["doc_id"])
+    _assert_demo_scoped(run["doc_id"])
 
     run["status"] = "running_ingest"
     run["error"] = None

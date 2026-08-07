@@ -7,8 +7,8 @@ a Source-to-Target Mapping (STTM) workbook plus a machine-readable
 feed-level mapping contract, via four Databricks notebooks: ingest →
 extract (Anthropic structured outputs) → contract build (validation,
 grounding audit, ambiguity gating) → render/eval. It is the **second
-agent** in the five-agent AI-in-Engineering program at AmeriHealth
-Caritas: BRD→FRD → **FRD→STTM** → CodeGen → Code Review (SQL Optimization
+agent** in the client's five-agent AI-in-Engineering
+program: BRD→FRD → **FRD→STTM** → CodeGen → Code Review (SQL Optimization
 is standalone). Two hand-off contracts matter:
 
 - **Upstream (versioned):** `01_frd_ingest` parses the IS-Methodology
@@ -91,7 +91,8 @@ dev-only `soham_workspace.sttm_agent` defaults per target.
   `02_extract` fails fast naming both remedies.
 - Provider seam: `STTM_LLM_PROVIDER` unset preserves default behavior
   (`STTM_MOCK_EXTRACTION` decides mock vs Anthropic); `mock` / `anthropic`
-  / `gemini` select explicitly. Setting a live provider while
+  select explicitly — the program is Anthropic-only as model vendor.
+  Setting a live provider while
   `STTM_MOCK_EXTRACTION` is also set RAISES rather than silently picking.
   Mock mode is gated on `not IS_DATABRICKS` — a real workspace run can
   never silently skip extraction.

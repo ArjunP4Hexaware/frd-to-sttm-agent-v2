@@ -145,8 +145,8 @@ export const UPLOAD_INTRO =
  * It belongs beside the control it constrains, not at the head of the first
  * thing the viewer reads.
  *
- * Not removable: uploads that don't resolve to the MIDS fixture are refused
- * with a 422 (see orchestration.py's _assert_mids_scoped), so dropping this
+ * Not removable: uploads that don't resolve to the demo fixture are refused
+ * with a 422 (see orchestration.py's _assert_demo_scoped), so dropping this
  * would leave anyone clicking around to hit a refusal with no warning.
  */
 export const UPLOAD_SCOPE_NOTE =

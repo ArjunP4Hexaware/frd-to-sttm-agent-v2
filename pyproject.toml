@@ -19,7 +19,6 @@ local = [
     "deltalake",
     "streamlit",
     "databricks-sdk",
-    "google-genai",
 ]
 # The review app's FastAPI backend (review_app_react/backend). The deployed
 # Databricks App does NOT read this — Apps installs

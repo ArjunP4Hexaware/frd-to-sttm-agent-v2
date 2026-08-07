@@ -17,7 +17,7 @@ import type {
  * sentence on its own. FastAPI puts that sentence under `detail`; including
  * the status line and the undecoded body around it put
  * `422 Unprocessable Entity: {"detail":"..."}` on screen -- the backend's
- * deliberate, well-worded refusals (a non-MIDS upload, a non-.docx file)
+ * deliberate, well-worded refusals (a non-demo-fixture upload, a non-.docx file)
  * read as a raw protocol dump instead of an intentional "we can't accept
  * this" message. Falls back to the status line only when the response
  * carries no usable detail string.

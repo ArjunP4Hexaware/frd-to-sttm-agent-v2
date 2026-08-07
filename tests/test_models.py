@@ -50,9 +50,9 @@ def test_feed_extra_field_is_rejected_nested():
 
 
 def test_table_target_schema_alias_round_trip():
-    tgt = TableTarget.model_validate({"schema": "stg_sdoh", "tables": ["t1"]})
-    assert tgt.schema_ == "stg_sdoh"
-    assert json.loads(tgt.model_dump_json(by_alias=True))["schema"] == "stg_sdoh"
+    tgt = TableTarget.model_validate({"schema": "stg_sdh", "tables": ["t1"]})
+    assert tgt.schema_ == "stg_sdh"
+    assert json.loads(tgt.model_dump_json(by_alias=True))["schema"] == "stg_sdh"
 
 
 def test_gated_ambiguity_round_trip():

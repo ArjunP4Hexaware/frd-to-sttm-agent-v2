@@ -11,7 +11,7 @@ interface Props {
 /**
  * File picker -> POST /api/uploads -> POST /api/runs/{run_id}/start, in one
  * user-facing step. This demo's mock-extraction pipeline is scoped to the
- * MIDS fixture only (see backend/orchestration.py's module docstring) --
+ * demo fixture only (see backend/orchestration.py's module docstring) --
  * anything else is refused by the start call with a clear error surfaced
  * here, not a crash.
  */

@@ -8,7 +8,7 @@ text match) to the GatedAmbiguity / HumanResolution schema now emitted
 natively by `03_contract_build.py` and `04_sttm_render.py` (see
 `notebooks/_models.py`).
 
-This is a ONE-TIME transform for the two real MIDS/CAQH fixtures that
+This is a ONE-TIME transform for the two local demo/CAQH fixture contracts that
 already carry hand-reviewed `human_resolutions` from prior sessions -- not a
 general-purpose converter wired into the pipeline. A fresh `03_contract_build.py`
 run never needs this: it emits the structured shape natively. Run again
@@ -54,7 +54,10 @@ from _models import GatedAmbiguity, HumanResolution  # noqa: E402
 
 CONTRACTS_DIR = REPO_ROOT / "local_dev_fixtures" / "sttm_out" / "contracts"
 FIXTURES = [
-    "FRD_Medicare Expansion-MIDS - Socially Determined.contract.json",
+    # Anonymized form of the original fixture filename (2026-08-06 scrub);
+    # the one-time migration already ran, so this allowlist entry is inert
+    # unless the local contract file is renamed to match.
+    "FRD_Medicare Expansion-OHDS - Social Factors.contract.json",
     "FRD_STG_STD_PaymentIntegrity_TPL_CAQH_To_DL_Ingestion_1005034.contract.json",
 ]
 
@@ -190,7 +193,7 @@ def _migrate_resolution(old: dict, new_ambiguity: dict) -> dict:
         rationale = note or None
     elif has_candidates:
         # A free-text override recorded against a candidate-having ambiguity
-        # -- e.g. MIDS's third gated item -- is exactly the "structural pick
+        # -- e.g. the demo fixture's third gated item -- is exactly the "structural pick
         # required, not provided" shape this migration must preserve as
         # unresolved/still-gated, not silently upgrade to applied.
         resolution_type = "free_text"
