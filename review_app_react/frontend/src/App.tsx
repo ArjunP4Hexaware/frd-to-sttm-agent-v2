@@ -6,13 +6,14 @@ import { CorpusMetricRow } from "./components/CorpusMetricRow";
 import { DocumentPicker } from "./components/DocumentPicker";
 import { SummaryHeader } from "./components/SummaryHeader";
 import { GatedItemList } from "./components/GatedItemList";
+import { DemoFlow } from "./components/DemoFlow";
 import { NewRunFlow } from "./components/NewRunFlow";
 import { DocumentsConnectedEmpty, DocumentsUnreachable } from "./components/DocumentsSourceNotice";
 import { WorkbookDownload } from "./components/WorkbookDownload";
 import { documentDisplayName } from "./lib/displayText";
 import { RunReviewProgressProvider } from "./lib/runReviewProgress";
 
-type Tab = "documents" | "new-run";
+type Tab = "documents" | "new-run" | "demo";
 
 export default function App() {
   // Plain useState tab toggle, not react-router -- same single-page,
@@ -97,8 +98,11 @@ export default function App() {
         <Button variant={tab === "new-run" ? "default" : "ghost"} onClick={() => selectTab("new-run")}>
           New upload
         </Button>
+        <Button variant={tab === "demo" ? "default" : "ghost"} onClick={() => selectTab("demo")}>
+          Client demo
+        </Button>
       </div>
-      {tab === "documents" ? <ExistingDocuments /> : <NewRunFlow />}
+      {tab === "documents" ? <ExistingDocuments /> : tab === "new-run" ? <NewRunFlow /> : <DemoFlow />}
     </div>
     </RunReviewProgressProvider>
   );

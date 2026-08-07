@@ -51,8 +51,14 @@ contracts/frd_label_contract.json   the shared FRD label contract (see
 tests/                  41 pure-function tests (no LLM/network/Spark)
 schema/sttm_extraction_schema.json   the extraction contract (mirrors models)
 databricks.yml + resources/frd_sttm_job.yml   asset bundle, job frd_sttm_pipeline
-review_app_react/       FastAPI + Vite/React review app (Databricks App;
-                        its root requirements.txt is the Apps deploy manifest)
+review_app_react/       FastAPI + Vite/React review app + client demo
+                        (Databricks App; its root requirements.txt is the
+                        Apps deploy manifest). Three tabs: gated-ambiguity
+                        review, mock upload flow (orchestration.py,
+                        unchanged), and the client demo (backend/demo.py:
+                        live 01→04 runs with backend-generated demo_<ts>
+                        suffix insulation + zero-call replay of saved
+                        artifact sets). See review_app_react/README.md.
 local_dev_fixtures/     frd_raw/, sttm_reference/ inputs; outputs land here
 demo_frd.docx / demo_sttm.xlsx   the tracked anonymized demo pair
 tools/                  anonymization mapping + applier (mandated fixture path)
@@ -106,8 +112,10 @@ All development happens on `staging`. `main` is the deployment branch;
 
 ## Fixtures & data rules
 
-Only the anonymized demo pair (`demo_frd.docx`, `demo_sttm.xlsx`) is
-tracked. **Real client documents must NEVER enter this repo** — extractions,
+Only the anonymized demo pair (`demo_frd.docx`, `demo_sttm.xlsx`) and the
+demo replay set (`local_dev_fixtures/sttm_out_live_e2e_20260807b/`, the
+post-fix live E2E run — offline replay for the demo app; see
+docs/LIVE_E2E_2026-08-07.md) are tracked. **Real client documents must NEVER enter this repo** — extractions,
 contracts, and rendered workbooks live in UC volumes (or gitignored
 `local_dev_fixtures/`). The anonymization tooling in `tools/` is the
 mandated path for any new fixture material. Mock extraction specs copy real
