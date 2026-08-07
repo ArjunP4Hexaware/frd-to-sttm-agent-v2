@@ -13,7 +13,7 @@ from pathlib import Path
 
 RENDER_SRC = Path(__file__).resolve().parent.parent / "notebooks" / "04_sttm_render.py"
 _NEEDED = {"_UNI", "_n", "_nl", "_ATTR_UNICODE_MAP", "_attr_norm",
-           "_COL_TOKEN", "resolve_attribution"}
+           "_COL_TOKEN", "_quote_rule", "resolve_attribution"}
 
 
 def _load_resolve_attribution():

@@ -633,6 +633,17 @@ def apply_human_resolutions(contract):
 _COL_TOKEN = re.compile(r"\b([A-Za-z][A-Za-z0-9_]{2,})\s+column\b", re.I)
 
 
+def _quote_rule(rule: str, limit: int = 200) -> str:
+    """Rule text for a resolution message: full up to `limit` chars, else cut
+    at a word boundary with an ellipsis — never mid-word (the old hard
+    `rule[:90]` slice produced quotes like \"...moving it to the reje\")."""
+    rule = rule.strip()
+    if len(rule) <= limit:
+        return rule
+    cut = rule[:limit].rsplit(" ", 1)[0].rstrip()
+    return f"{cut}…"
+
+
 def resolve_attribution(contract, dictionary, feed_match, already_settled=frozenset()):
     """Clears cross-feed rule ambiguities using dictionary column membership.
     Mutates the contract; returns list of resolution strings.
@@ -662,12 +673,12 @@ def resolve_attribution(contract, dictionary, feed_match, already_settled=frozen
             if cands and not (cands & cols_by_feed[i]):
                 resolutions.append(
                     f"removed rule from {feed['feed_name']!r} — column(s) "
-                    f"{sorted(cands)} not in its source dictionary: {rule[:90]!r}")
+                    f"{sorted(cands)} not in its source dictionary: {_quote_rule(rule)!r}")
                 continue
             if "recycle" in _nl(rule) and i not in recycle_feeds and recycle_feeds:
                 resolutions.append(
                     f"removed recycle rule from {feed['feed_name']!r} — its dictionary "
-                    f"carries no recycle marker: {rule[:90]!r}")
+                    f"carries no recycle marker: {_quote_rule(rule)!r}")
                 continue
             kept.append(rule)
         feed["validation_rules"] = kept
@@ -712,7 +723,7 @@ def resolve_attribution(contract, dictionary, feed_match, already_settled=frozen
                 f"confirmed rule attribution on "
                 f"{[contract['feeds'][j]['feed_name'] for j in sorted(cand)]} "
                 f"— candidates match dictionary column membership exactly: "
-                f"{rule[:90]!r}")
+                f"{_quote_rule(rule)!r}")
 
     prov["attribution_resolutions"] = resolutions
     if n_removals:

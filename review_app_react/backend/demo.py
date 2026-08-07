@@ -422,6 +422,45 @@ def list_artifact_sets() -> list[dict]:
     return sets
 
 
+QUOTE_LIMIT = 200
+_TRAILING_QUOTE = re.compile(r": '(.*)'$")
+
+
+def _truncate_words(text: str, limit: int = QUOTE_LIMIT) -> str:
+    """Full text up to `limit` chars, else a word-boundary cut + ellipsis —
+    never a mid-word chop."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip()
+    return f"{cut}…"
+
+
+def _clean_note(note: str, full_rules: list[str]) -> str:
+    """Repair a stored attribution-resolution note whose trailing rule quote
+    was hard-sliced mid-word by the pipeline's old `rule[:90]` formatting
+    (artifact sets written before the fix in 04_sttm_render._quote_rule
+    still carry it — e.g. \"...moving it to the reje'\"). If the quote is a
+    prefix of a known full rule, swap the full (cleanly truncated) rule back
+    in; otherwise trim the quote itself at a word boundary."""
+    m = _TRAILING_QUOTE.search(note)
+    if not m:
+        return note
+    quoted = m.group(1)
+    prefix = quoted.rstrip("…").strip()
+    replacement = next((r for r in full_rules if r.strip().startswith(prefix)), None)
+    if replacement is not None:
+        display = _truncate_words(replacement)
+    elif quoted and quoted[-1] in ".!?…\"'":
+        # Ends like a complete sentence — treat as full text, cap at the limit.
+        display = _truncate_words(quoted)
+    else:
+        # Old hard slice with no recoverable full text: the tail is almost
+        # certainly a cut word — drop it and mark the elision.
+        display = f"{quoted.rsplit(' ', 1)[0].rstrip()}…" if " " in quoted else f"{quoted}…"
+    return f"{note[: m.start()]}: '{display}'"
+
+
 def _mapping_rows(feed: dict) -> list[dict]:
     rows = []
     for f in feed.get("fields") or []:
@@ -490,7 +529,18 @@ def load_results(set_id: str, doc_id: str) -> dict:
     p2 = v2.get("_provenance", {})
     g1 = p1.get("grounding", {})
     detected_items = list(p1.get("ambiguities", [])) + list(g1.get("advisory_flagged", []))
-    auto_confirmed = list(p2.get("attribution_resolutions", []))
+    # Every full rule text this run knows, for repairing hard-sliced quotes
+    # in notes written by the pre-fix pipeline (see _clean_note).
+    full_rules = [
+        r for f in feeds for r in (f.get("validation_rules") or [])
+    ] + [f["recycle_rule"] for f in feeds if f.get("recycle_rule")] + [
+        (a.get("context") or {}).get("rule")
+        for a in detected_items
+        if (a.get("context") or {}).get("rule")
+    ]
+    auto_confirmed = [
+        _clean_note(n, full_rules) for n in p2.get("attribution_resolutions", [])
+    ]
     human_resolved = list(p2.get("human_resolutions", []))
     awaiting = list(p2.get("ambiguities", [])) + list(
         p2.get("grounding", {}).get("advisory_flagged", [])

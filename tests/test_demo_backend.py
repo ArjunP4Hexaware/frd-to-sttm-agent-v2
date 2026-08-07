@@ -305,3 +305,47 @@ def test_workbook_download(client):
 def test_results_404_for_unknown_doc(client):
     res = client.get(f"/api/demo/artifacts/{REPLAY_SET}/results", params={"doc": "nope"})
     assert res.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Gate-strip quote repair (_clean_note / _truncate_words)
+# --------------------------------------------------------------------------- #
+ZIP_RULE_FULL = ("If the ZIP_CODE column is NULL, then we are rejecting the "
+                 "record and moving it to the reject table from the below files.")
+
+
+def test_truncate_words_full_and_boundary():
+    assert demo._truncate_words("short rule") == "short rule"
+    long = "word " * 60
+    cut = demo._truncate_words(long, 200)
+    assert len(cut) <= 201 and cut.endswith("…") and not cut.rstrip("…").endswith("wor")
+
+
+def test_clean_note_restores_full_rule_from_old_hard_slice():
+    # The exact defect seen in rehearsal: the pre-fix pipeline stored a
+    # rule[:90] hard slice ending mid-word ("...moving it to the reje").
+    note = ("confirmed rule attribution on ['a', 'b'] — candidates match "
+            f"dictionary column membership exactly: '{ZIP_RULE_FULL[:90]}'")
+    cleaned = demo._clean_note(note, [ZIP_RULE_FULL])
+    assert "reje'" not in cleaned
+    assert ZIP_RULE_FULL in cleaned  # full rule is 118 chars — under the limit
+
+
+def test_clean_note_word_boundary_fallback_without_match():
+    note = f"removed rule from 'x' — not in its dictionary: '{ZIP_RULE_FULL[:90]}'"
+    cleaned = demo._clean_note(note, [])
+    assert "reje'" not in cleaned
+    assert cleaned.endswith("…'")
+
+
+def test_clean_note_leaves_unquoted_notes_alone():
+    note = "cleared recycle_rule on 'x' — dictionary recycle marker present only on ['y']"
+    assert demo._clean_note(note, [ZIP_RULE_FULL]) == note
+
+
+@needs_replay_set
+def test_replay_payload_serves_repaired_quote(client):
+    res = client.get(f"/api/demo/artifacts/{REPLAY_SET}/results", params={"doc": "demo_frd"})
+    notes = res.json()["gate"]["auto_confirmed_notes"]
+    assert notes and all("reje'" not in n for n in notes)
+    assert any("reject table from the below files." in n for n in notes)
