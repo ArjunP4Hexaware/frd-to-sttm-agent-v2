@@ -1,6 +1,6 @@
 ---
 name: frd-to-sttm-agent
-description: Load this when working in or asking about the frd-to-sttm-agent repo (FRD ingest, extraction schema, `03_contract_build` grounding audit or gating, `04_sttm_render`, the shared `contracts/frd_label_contract.json`, the review app, the Databricks-native rebuild in `docs/NATIVE_REBUILD_SPEC.md`, or the client demo runbook) — and ALSO load it whenever you are designing any agent elsewhere that has an LLM extract structured records (mappings, fields, entities) from a document, verifies them against the source text, and routes ambiguity to a human before a downstream consumer uses the result. It captures the exact division of labor (LLM proposes, deterministic code audits, human resolves), the three-status gating vocabulary, the "schema-in-prompt / no repair loop / truncation-is-failure" transport pattern, the confirm-and-clear-on-zero-removals bug, and the choreography needed when the same document can produce different gate shapes across runs. Read this before writing extraction prompts, grounding checks, ambiguity taxonomies, or HITL flows for a similar agent.
+description: Load this whenever you are designing any agent elsewhere that has an LLM extract structured records (mappings, fields, entities) from a document, verifies them against the source text, and routes ambiguity to a human before a downstream consumer uses the result. It captures the exact division of labor (LLM proposes, deterministic code audits, human resolves), the three-status gating vocabulary, the "schema-in-prompt / no repair loop / truncation-is-failure" transport pattern, the confirm-and-clear-on-zero-removals bug, and the choreography needed when the same document can produce different gate shapes across runs. Read this before writing extraction prompts, grounding checks, ambiguity taxonomies, or HITL flows for a similar agent. ALSO load it when working in or asking about the frd-to-sttm-agent repo itself (FRD ingest, extraction schema, `03_contract_build` grounding audit or gating, `04_sttm_render`, the shared `contracts/frd_label_contract.json`, the review app, the Databricks-native rebuild in `docs/NATIVE_REBUILD_SPEC.md`, or the client demo runbook).
 ---
 
 This skill has two parts. **Part A** is a map of the concrete FRD→STTM agent in this repo — enough that a new contributor can navigate the code, and enough that another engineer can decide whether the shape here matches their problem. **Part B** is the abstracted pattern, written so it can be applied to an unrelated "LLM extracts, code verifies, human resolves" agent.
@@ -106,11 +106,13 @@ If the fit is weak on any of those, the pattern will over-engineer the problem. 
 
 ### The five design commitments
 
-**1. Division of labor: LLM proposes, code verifies, human resolves.**
+Every item in this section is essential — skip any and the pattern breaks.
+
+**1. Division of labor: LLM proposes, code verifies, human resolves. [essential]**
 
 The LLM only reads prose and scattered tables and returns a structured record. Every downstream check is deterministic Python. The LLM is never the arbiter of "did we get this right" — audits and cross-checks are. Everything you would normally ask the model to "double-check" becomes a code path with a test.
 
-**2. Grounding audit as the quality gate — two categories, one call.**
+**2. Grounding audit as the quality gate — two categories, one call. [essential]**
 
 Every extracted string is audited against the source text before the record is trusted. Split fields into two rule categories:
 
@@ -119,7 +121,7 @@ Every extracted string is audited against the source text before the record is t
 
 Run both paths in one function call; return counts (`strict_checked`, `strict_failed`, `advisory_checked`, `advisory_flagged`) alongside the flags. Emit them as a provenance banner on the record. Never relax a threshold to make a run pass — the fix is a better extraction, a better document, or a reviewer edit.
 
-**3. Three statuses, three ambiguity kinds, three resolution types. Enforce the vocabularies at the schema level.**
+**3. Three statuses, three ambiguity kinds, three resolution types. Enforce the vocabularies at the schema level. [essential]**
 
 Statuses (strict priority):
 
@@ -133,7 +135,7 @@ Ambiguity kinds — pick a small closed set that covers your problem, and prohib
 
 Resolution types — pick the resolution **structurally** from `has_candidates`, not from `kind`. Three suffice: `candidate_pick`, `none_of_these`, `free_text`. Reject the malformed combinations at both client and server (a `free_text` on a candidate-having ambiguity is a 4xx). This is what stops the review UI from silently accepting resolutions that render nothing downstream.
 
-**4. Deterministic seams the LLM should not own.**
+**4. Deterministic seams the LLM should not own. [essential]**
 
 Any fact a regex, a lookup, or a dictionary cross-check can compute more reliably than the LLM should be owned by code, not the model — but the model still gets to see and disagree:
 
@@ -143,11 +145,11 @@ Any fact a regex, a lookup, or a dictionary cross-check can compute more reliabl
 
 The **precedence rule** at the resolution step is: human resolution first (authoritative, never re-decided), then the deterministic cross-check on whatever remains. Every non-application of a human resolution produces an audit entry (`applied` / `not_applied` with reason / `stale` if the candidate is no longer valid).
 
-**5. The confirm-and-clear-on-zero-removals rule (the D2 fix).**
+**5. The confirm-and-clear-on-zero-removals rule (the D2 fix). [essential]**
 
 If your dictionary cross-check "resolves" an ambiguity by *removing* misattributed items, a **better** extraction produces **fewer removals** — and historically leaves the flag gated forever. The rule: when the ambiguity's candidate set equals the dictionary-confirmed set, clear the flag even at zero removals. Skip this and you get "correct extraction → worse final status" the first time the model gets sharper. Regression-test the three shapes: clear at zero removals when confirmed, stay gated when inconclusive, partially clear on partial overlap.
 
-### The extraction transport — request shape
+### The extraction transport — request shape **[essential]**
 
 - **One prompt in, one JSON object out.** System prompt frames the task tersely and forbids invention of identifiers, table names, schedules, or rules. User prompt = `instruction + JSON-schema-of-the-output + full source content`. No tool use, no multi-turn, no subagents. Extended-thinking / reasoning modes may be worth trying, but must be introduced only if they measurably improve grounding on live prose — not because they are available.
 - **Client-side validation is authoritative, with `extra="forbid"` semantics everywhere (root and every nested container).** Unknown keys are an error, not a warning.
@@ -156,21 +158,21 @@ If your dictionary cross-check "resolves" an ambiguity by *removing* misattribut
 - **Streaming only to avoid HTTP timeouts** at large output-token ceilings; the response is consumed after completion. If your platform doesn't need streaming at your ceiling, drop it.
 - **Provider gate raises on unrecognized values.** Providing two providers at once (e.g. `mock` + `live`) is a startup error, not a preference.
 
-### If server-side structured output ("grammar too large") fails
+### If server-side structured output ("grammar too large") fails **[essential]**
 
 Provider-native structured output can fail deterministically on schemas with many optional properties, deeply nested nullable unions, and `additionalProperties=false` throughout. That was our D1 constraint on Anthropic's `messages.parse`. Two rules:
 
 1. Try it first. If it works on your schema, use it and drop the schema-in-prompt scaffolding.
 2. If it fails, **fall back to schema-in-prompt without hesitation. Do not simplify the schema shape to satisfy a decoder** — the schema is your contract with downstream consumers.
 
-### Mock mode discipline
+### Mock mode discipline **[essential]**
 
 Build a mock provider path — a hand-authored fixture record per source document, keyed by the same `doc_id` the live path would use. Use it to exercise everything downstream of extraction (audits, gating, review UI, rendering) without an LLM. Two rules:
 
 1. **Local-only.** Guarded off in the workspace runtime; a real production run can never silently skip the model call.
 2. **Not a benchmark.** Mocks that copy facts back from the source always ground. They prove plumbing; they say nothing about extraction quality. Baseline any grounding threshold or eval target on a live run against real documents.
 
-### Non-determinism is a demo-choreography concern
+### Non-determinism is a demo-choreography concern **[essential]**
 
 Same document, same model, same threshold → different gate shapes across runs, at identical extraction quality and identical downstream eval scores. This is inherent to the pattern (LLM sampling meets a strict audit), not a bug. Consequences for anyone shipping this to a client:
 
@@ -178,18 +180,18 @@ Same document, same model, same threshold → different gate shapes across runs,
 - **Ship replay fixtures.** A tracked run set that reproduces the flag-then-confirm narrative in one click, offline, with no API key. Zero-cost fallback if the live run's shape doesn't cooperate on demo day.
 - **A zero-gate run is not a boring run.** Reframe: "the agent flags what it isn't sure of; the dictionary auto-confirms what the data proves; anything else waits for a human. Zero means nothing needed a human this time — which is itself the point."
 
-### Review-app non-negotiables
+### Review-app non-negotiables **[essential]**
 
 - Composite key `<doc_id>::<ambiguity_id>` in client-side state so nothing leaks between documents open in the same session.
 - Strict `doc_id` matching on all detail/workbook endpoints. **No fuzzy fallback to a similarly-named document** — this is the class of bug that ships wrong data to production.
 - Empty vs unreadable are different at the API layer: a successful listing with no rows is `200 + []`; an unreadable source is `5xx`. The client uses this to auto-switch tabs on first load without hiding real errors.
 - The `ambiguity_id` scheme (a stable hash of `kind + normalized-text + context`) is the join key for saved reviewer decisions. Migrating the algorithm requires migrating every persisted decision — freeze it early.
 
-### Acceptance criteria — treat the test suite as your spec
+### Acceptance criteria — treat the test suite as your spec **[essential]**
 
 The strongest specification of "correct behavior" for this pattern is the test suite. Rebuild spec §7 groups the tests by theme (grounding & enrichment, gating vocabulary, model contract, label contract, LLM extraction transport, render/attribution, review-app backend, end-to-end demo scenarios). A rebuild is not done until an equivalent suite is green.
 
-### Porting to a new platform — this pattern is being re-targeted right now
+### Porting to a new platform — this pattern is being re-targeted right now *(incidental — swap freely)*
 
 This exact pattern is currently being ported from Python-notebooks + Anthropic-SDK + FastAPI-review-app to **Databricks-native** (Genie Code + Lakeflow Declarative Pipelines + Unity Catalog + Model Serving). `docs/NATIVE_REBUILD_SPEC.md` §6 is the target-architecture description for that port; §8 is the list of Anthropic-specific rework items (client, model id, secret scope, error taxonomy, retry policy, streaming, structured-outputs re-probe on the new endpoint, thinking modes, provider-gate values, subprocess env injection, `pyproject.toml`, docs). It is a working example of what "port this pattern to a new platform" actually costs — go read it before you assume swapping providers is a one-liner. What survives the port is the pipeline shape, the vocabularies, the audit design, and the HITL model. What changes is transport and identity.
 
