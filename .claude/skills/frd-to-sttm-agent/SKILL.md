@@ -194,15 +194,3 @@ The strongest specification of "correct behavior" for this pattern is the test s
 ### Porting to a new platform — this pattern is being re-targeted right now *(incidental — swap freely)*
 
 This exact pattern is currently being ported from Python-notebooks + Anthropic-SDK + FastAPI-review-app to **Databricks-native** (Genie Code + Lakeflow Declarative Pipelines + Unity Catalog + Model Serving). `docs/NATIVE_REBUILD_SPEC.md` §6 is the target-architecture description for that port; §8 is the list of Anthropic-specific rework items (client, model id, secret scope, error taxonomy, retry policy, streaming, structured-outputs re-probe on the new endpoint, thinking modes, provider-gate values, subprocess env injection, `pyproject.toml`, docs). It is a working example of what "port this pattern to a new platform" actually costs — go read it before you assume swapping providers is a one-liner. What survives the port is the pipeline shape, the vocabularies, the audit design, and the HITL model. What changes is transport and identity.
-
----
-
-## Judgment calls made while writing this skill
-
-- **No `references/` subfolder.** The rebuild spec is already the deep reference and lives in `docs/`. Duplicating it under `.claude/skills/frd-to-sttm-agent/references/` would create the exact "edit one, forget the other" trap the shared label contract exists to avoid. Instead this file links to `docs/NATIVE_REBUILD_SPEC.md` and the other in-repo docs by relative path.
-- **Two-audience description string.** The frontmatter deliberately names both trigger sets in one string (people working in this repo AND people designing a similar agent elsewhere). Splitting into two skills would fragment the material; making the description generic would lose the pushy, concrete-trigger language the model uses to decide when to load.
-- **Included the D2 bug by name.** It is repo-specific in its details but pattern-general in its shape (better extraction → fewer removals → stale gate), so it appears in both Part A (as a lesson) and Part B (as a rule) rather than being buried.
-- **Left non-determinism in Part B.** It is inherent to LLM-plus-strict-audit designs, not a demo-only quirk, so it belongs in the reusable pattern — not just the runbook pointer in Part A.
-- **Did not restate `NATIVE_REBUILD_SPEC.md` §6 content** even though it is directly relevant to Part B. The prompt was explicit about pointing to that section rather than summarizing it, so Part B ends with a single paragraph flagging the port and directing the reader there.
-- **Left `disable-model-invocation` and `user-invocable` unset**, per the prompt.
-- **Kept the file well under 500 lines** (≈220 lines) without needing to split.
