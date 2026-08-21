@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Alert, AlertDescription, AlertTitle, Button } from "@databricks/appkit-ui/react";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
-import { demoWorkbookUrl, useDemoResults } from "../demoApi";
+import { demoWorkbookUrl, useDemoResults, useSharePointConfig, useSharePointPublish } from "../demoApi";
 
 /**
  * The unified results view — rendered identically for a finished live run
@@ -85,7 +85,7 @@ function GateStrip({ r }: { r: R }) {
   const g = r.gate;
   return (
     <div>
-      <h2 className="eyebrow mb-2">Ambiguity gate (stage 03 → 04)</h2>
+      <h2 className="eyebrow mb-2">Ambiguity gate</h2>
       <Card className="border-2">
         <CardContent className="py-2">
           <div className="grid grid-cols-3 gap-3 text-center">
@@ -94,11 +94,11 @@ function GateStrip({ r }: { r: R }) {
               <div className="text-sm text-muted-foreground">ambiguities detected</div>
             </div>
             <div>
-              <div className="text-3xl font-semibold mono-id text-emerald-600">{g.auto_confirmed}</div>
+              <div className="text-3xl font-semibold mono-id text-pass">{g.auto_confirmed}</div>
               <div className="text-sm text-muted-foreground">auto-confirmed against the data dictionary</div>
             </div>
             <div>
-              <div className={`text-3xl font-semibold mono-id ${g.awaiting_human > 0 ? "text-amber-600" : ""}`}>
+              <div className={`text-3xl font-semibold mono-id ${g.awaiting_human > 0 ? "text-flag" : ""}`}>
                 {g.awaiting_human}
               </div>
               <div className="text-sm text-muted-foreground">awaiting human review</div>
@@ -124,7 +124,7 @@ function GateStrip({ r }: { r: R }) {
           {g.auto_confirmed_notes.length > 0 && (
             <ul className="mt-2 text-sm flex flex-col gap-1">
               {g.auto_confirmed_notes.map((note, i) => (
-                <li key={i} className="text-emerald-700">✓ {note}</li>
+                <li key={i} className="text-pass">✓ {note}</li>
               ))}
             </ul>
           )}
@@ -137,7 +137,7 @@ function GateStrip({ r }: { r: R }) {
 function VerdictTile({ r }: { r: R }) {
   const status = r.verdict.status ?? "?";
   const tone =
-    status === "PASS" ? "text-emerald-600" : status === "PASS_WITH_FLAGS" ? "text-amber-600" : "text-destructive";
+    status === "PASS" ? "text-pass" : status === "PASS_WITH_FLAGS" ? "text-flag" : "text-destructive";
   return (
     <div>
       <h2 className="eyebrow mb-2">Pipeline verdict</h2>
@@ -157,7 +157,7 @@ function EvalPanel({ r }: { r: R }) {
   const ev = r.eval;
   return (
     <div>
-      <h2 className="eyebrow mb-2">Eval vs golden STTM</h2>
+      <h2 className="eyebrow mb-2">Accuracy vs golden STTM</h2>
       <Card>
         <CardContent className="py-4 text-center">
           {ev.available ? (
@@ -176,8 +176,8 @@ function EvalPanel({ r }: { r: R }) {
             </>
           ) : (
             <div className="text-sm text-muted-foreground py-3">
-              No golden reference for uploaded documents — the eval score only exists for the preloaded demo
-              pair, where a hand-built golden STTM is available to compare against.
+              No golden reference workbook exists for this document — the accuracy score is shown only where a
+              hand-built reference STTM is available to compare against.
             </div>
           )}
         </CardContent>
@@ -199,6 +199,7 @@ function MappingsSection({ r }: { r: R }) {
           </Button>
         )}
       </div>
+      {r.workbook_available && <PublishControl setId={r.set_id} docId={r.doc_id} />}
       <div className="flex flex-col gap-3">
         {r.mappings.map((m) => (
           <MappingTable key={m.feed_name ?? "?"} feedName={m.feed_name} rows={m.rows} />
@@ -208,6 +209,86 @@ function MappingsSection({ r }: { r: R }) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The manual SharePoint publish gate (decided 2026-08-21). Publishing a
+ * workbook to the client's library is a reviewer's deliberate act, per
+ * document, after looking at the result — never a side effect of a run.
+ * Hence the two-step shape mirroring the billed-run ConfirmDialog: the first
+ * click only reveals the target and the warning; only the second click sends
+ * confirm:true. Renders nothing when SharePoint is unconfigured, same as the
+ * document picker.
+ */
+function PublishControl({ setId, docId }: { setId: string; docId: string }) {
+  const configQuery = useSharePointConfig();
+  const publish = useSharePointPublish();
+  const [confirming, setConfirming] = useState(false);
+
+  const cfg = configQuery.data;
+  if (!cfg?.configured) return null;
+
+  if (publish.isSuccess) {
+    const p = publish.data;
+    return (
+      <Alert className="mb-3">
+        <AlertTitle>Published to SharePoint</AlertTitle>
+        <AlertDescription>
+          <span className="mono-id">{p.name}</span> is now in <span className="mono-id">{p.target}</span>.{" "}
+          {p.web_url && (
+            <a href={p.web_url} target="_blank" rel="noreferrer" className="underline">
+              Open in SharePoint
+            </a>
+          )}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (!confirming) {
+    return (
+      <div className="flex justify-end mb-3">
+        <Button variant="outline" onClick={() => setConfirming(true)}>
+          Publish to SharePoint…
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <Card className="border-2 mb-3">
+      <CardHeader>
+        <CardTitle className="text-base">Publish this workbook to the client's library?</CardTitle>
+        <CardDescription>
+          <span className="mono-id">{docId}.sttm.xlsx</span> will be uploaded to{" "}
+          <span className="mono-id">
+            {cfg.site}/{cfg.library}
+            {cfg.output_folder ? `/${cfg.output_folder}` : ""}
+          </span>
+          , replacing any same-named workbook. This is the hand-off of record — publish only after the mapping
+          has been reviewed.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {publish.isError && (
+          <Alert variant="destructive">
+            <AlertDescription>{(publish.error as Error).message}</AlertDescription>
+          </Alert>
+        )}
+        <div className="flex gap-2">
+          <Button
+            disabled={publish.isPending}
+            onClick={() => publish.mutate({ set_id: setId, doc_id: docId })}
+          >
+            {publish.isPending ? "Publishing…" : "Publish it"}
+          </Button>
+          <Button variant="ghost" onClick={() => setConfirming(false)} disabled={publish.isPending}>
+            Cancel
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

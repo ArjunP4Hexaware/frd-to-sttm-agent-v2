@@ -42,9 +42,9 @@ export function WorkbookDownload({
     return (
       <div
         role="status"
-        className="rounded-md border border-amber-600/40 bg-amber-500/5 p-3 flex flex-col gap-1"
+        className="rounded-md border border-flag-bright/40 bg-flag-bright/5 p-3 flex flex-col gap-1"
       >
-        <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+        <p className="text-sm font-medium text-flag">
           {WORKBOOK_MISSING_HEADLINE}
         </p>
         <p className="text-sm text-muted-foreground">{WORKBOOK_MISSING_DETAIL}</p>

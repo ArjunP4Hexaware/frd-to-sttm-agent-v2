@@ -28,6 +28,10 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 // ---------------------------------------------------------------------------
 export interface DemoConfig {
   provider: string;
+  /** "local" = subprocess runs, gated on a backend API key; "databricks" =
+   *  the deployed App triggering the real bundle job, where the key lives in
+   *  the workspace secret scope so api_key_present is not a readiness gate. */
+  mode: "local" | "databricks";
   call_estimate: { calls: number; usd: number; seconds: number };
   api_key_present: boolean;
   golden_doc_id: string;
@@ -38,9 +42,42 @@ export interface DemoDocument {
   path: string;
   name: string;
   doc_id: string;
-  source: "preloaded" | "upload";
+  source: "preloaded" | "upload" | "sharepoint";
   is_golden: boolean;
   size_bytes: number;
+}
+
+/** SharePoint picker (backend/sharepoint_routes.py). `configured` is derived
+ *  from presence only — no credential value ever crosses this boundary. */
+export interface SharePointConfig {
+  configured: boolean;
+  site: string | null;
+  library: string | null;
+  frd_folder: string | null;
+  output_folder: string | null;
+}
+
+export interface SharePointDocument {
+  item_id: string;
+  name: string;
+  size_bytes: number;
+  modified: string;
+  web_url: string;
+}
+
+export interface SharePointListing {
+  site: string;
+  library: string;
+  folder: string;
+  documents: SharePointDocument[];
+}
+
+export interface SharePointPublishResult {
+  published: boolean;
+  name: string;
+  size_bytes: number;
+  web_url: string | null;
+  target: string;
 }
 
 export interface DemoStage {
@@ -66,6 +103,8 @@ export interface DemoRunSnapshot {
   error: string | null;
   started_at: string;
   finished_at: string | null;
+  /** Databricks-mode runs only: the workspace job-run page. Null in local mode. */
+  run_page_url: string | null;
   stages: DemoStage[];
   seq: number;
   events: DemoRunEvent[];
@@ -170,6 +209,93 @@ export function useDemoUpload() {
       form.append("file", file);
       return fetchJson<DemoDocument>("/api/demo/uploads", { method: "POST", body: form });
     },
+  });
+}
+
+/** Never retried: an unconfigured tenant (503) or a Graph refusal (502) is a
+ *  standing condition, not a blip, and retrying just delays the message. */
+export function useSharePointConfig() {
+  return useQuery({
+    queryKey: ["demo", "sharepoint", "config"],
+    queryFn: () => fetchJson<SharePointConfig>("/api/demo/sharepoint/config"),
+    retry: false,
+  });
+}
+
+export function useSharePointDocuments(enabled: boolean) {
+  return useQuery({
+    queryKey: ["demo", "sharepoint", "documents"],
+    queryFn: () => fetchJson<SharePointListing>("/api/demo/sharepoint/documents"),
+    enabled,
+    retry: false,
+  });
+}
+
+/** Downloads one library document into the demo uploads dir and returns it in
+ *  DemoDocument shape, so the caller starts it through the existing run path. */
+export function useSharePointImport() {
+  return useMutation({
+    mutationFn: (doc: { item_id: string; name: string }) =>
+      fetchJson<DemoDocument>("/api/demo/sharepoint/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(doc),
+      }),
+  });
+}
+
+/** One library item as the locate flow reports it. */
+export interface SharePointItemInfo {
+  item_id: string;
+  name: string;
+  size_bytes: number;
+  modified: string;
+  web_url: string;
+}
+
+/**
+ * The app's primary entry point (decided 2026-08-21 — no uploads): the user
+ * names an FRD and the backend finds it in the library. Exact match runs;
+ * an existing published STTM short-circuits to presentation; anything
+ * ambiguous comes back as candidates for an explicit human pick — never a
+ * best-match auto-pick.
+ */
+export type LocateResult =
+  | { status: "ready"; document: DemoDocument }
+  | { status: "existing_sttm"; frd: SharePointItemInfo; sttm: SharePointItemInfo }
+  | { status: "candidates"; candidates: SharePointItemInfo[] };
+
+export function useLocateFrd() {
+  return useMutation({
+    mutationFn: (name: string) =>
+      fetchJson<LocateResult>("/api/demo/sharepoint/locate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      }),
+  });
+}
+
+/** Download URL for an EXISTING published STTM (served only for items the
+ *  backend re-verifies are in the output folder). */
+export function sharePointSttmUrl(itemId: string): string {
+  return `/api/demo/sharepoint/sttm/${encodeURIComponent(itemId)}`;
+}
+
+/**
+ * Publish ONE reviewed workbook to the SharePoint output folder. Publishing
+ * is manual by decision (2026-08-21): the backend demands confirm:true, and
+ * this hook only ever fires from the two-step publish control after the
+ * reviewer's explicit second click — there is no auto-publish path anywhere.
+ */
+export function useSharePointPublish() {
+  return useMutation({
+    mutationFn: (req: { set_id: string; doc_id: string }) =>
+      fetchJson<SharePointPublishResult>("/api/demo/sharepoint/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...req, confirm: true }),
+      }),
   });
 }
 

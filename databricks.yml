@@ -41,6 +41,44 @@ variables:
       "contracts_table" in both 03_contract_build (writes) and
       04_sttm_render (reads) -- names already agree here.
     default: frd_contracts
+  sharepoint_host:
+    description: >-
+      SharePoint hostname, e.g. contoso.sharepoint.com. Widget name
+      "sharepoint_host" in 00_sharepoint_fetch and 05_sharepoint_publish.
+      NO DEFAULT: a blank tenant must fail loudly at load_config rather than
+      reach Graph and return an opaque 400.
+    default: ""
+  sharepoint_site_path:
+    description: >-
+      Server-relative site path, MUST start with '/' (e.g. /sites/DataOffice).
+      Graph addresses a site as {host}:{path}.
+    default: ""
+  sharepoint_library:
+    description: Document library (drive) display name holding FRDs and STTMs.
+    default: Documents
+  sharepoint_frd_folder:
+    description: >-
+      Folder within the library that 00_sharepoint_fetch reads FRDs from.
+      Blank means the library root.
+    default: ""
+  sharepoint_output_folder:
+    description: >-
+      Folder within the library that 05_sharepoint_publish writes rendered
+      STTM workbooks to. The ONLY path this repo ever writes to in SharePoint
+      -- keep the app registration's write grant scoped to it. Not referenced
+      by frd_sttm_pipeline: publishing is manual by decision (2026-08-21) --
+      the review app's confirm-gated button, or a standalone run of 05 after
+      sign-off -- never a job task downstream of render.
+    default: ""
+  sharepoint_tenant_id:
+    description: Entra ID tenant id for the app registration (app-only auth).
+    default: ""
+  sharepoint_client_id:
+    description: >-
+      Entra ID application (client) id. The client SECRET is never a bundle
+      variable -- it lives only in the secret scope sttm_agent/
+      sharepoint_client_secret.
+    default: ""
   notification_email:
     description: >-
       Email address notified on job failure. PLACEHOLDER — set a real

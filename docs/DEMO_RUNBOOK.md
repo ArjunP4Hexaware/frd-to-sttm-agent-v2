@@ -1,5 +1,16 @@
 # FRD→STTM client demo — runbook
 
+> **SUPERSEDED IN PART, 2026-08-21 (Arjun's decision — master context doc
+> §4a.13).** The Fri 2026-08-28 executive demo is the **entire deployed
+> Databricks App running live end to end** — the app triggers the real
+> `frd_sttm_pipeline` bundle job (`backend/jobs_runner.py`) and there is
+> **no replay choreography and no switch-tabs fallback story**. Everything
+> below describes the local, subprocess-mode demo: still accurate for
+> local rehearsal and dev, but the replay-contingency sections are not the
+> plan for Friday. Rewrite this runbook against the deployed App once the
+> Monday deploy has proven the jobs path (timings below also change:
+> serverless task startup makes a live run minutes, not ~35s).
+
 How to run the client-facing demo in `review_app_react/` (the "Client demo"
 tab). Companion to `review_app_react/README.md` (setup detail, guardrails)
 and `docs/LIVE_E2E_2026-08-07.md` (where the numbers below come from).

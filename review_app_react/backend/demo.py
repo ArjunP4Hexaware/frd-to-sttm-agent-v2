@@ -4,15 +4,28 @@ repo's idiom.
 
 Two jobs:
 
-- LIVE runs: spawn the existing pipeline notebooks (01→04) as subprocesses
-  with provider `anthropic`, streaming their console (SSE + polling
-  fallback). No pipeline code is imported or modified — the notebooks' env
-  knobs and on-disk outputs are the only interfaces used.
+- LIVE runs, two mode-switched implementations behind ONE Run lifecycle
+  (`STTM_APP_MODE`, the same knob data_access.py switches on):
+  - local (dev laptops, offline tests): spawn the pipeline notebooks
+    (01→04) as subprocesses with provider `anthropic`, streaming their
+    console (SSE + polling fallback). No pipeline code is imported or
+    modified — the notebooks' env knobs and on-disk outputs are the only
+    interfaces used.
+  - databricks (the deployed App; decided 2026-08-21): trigger the REAL
+    bundle-deployed `frd_sttm_pipeline` job via the Jobs API and poll its
+    task states. The notebooks run as genuine workspace tasks
+    (IS_DATABRICKS True), artifacts land natively in Unity Catalog and
+    survive an App restart; the finished run's out-directory is mirrored
+    back to the container disk so the results machinery below works
+    unchanged. See jobs_runner.py for the whole implementation and the
+    workspace prerequisites.
 - REPLAY: discover saved demo/e2e artifact sets under local_dev_fixtures/
   and serve a parsed results payload (extraction summary, the stage-03 gate
   moment, the stage-04 verdict, eval-vs-golden, per-mapping rows) that the
   frontend renders identically for a finished live run and a replayed set —
-  replay makes zero API calls.
+  replay makes zero API calls. In databricks mode the artifact listing
+  first rehydrates sets from the UC volume, so finished runs reappear
+  after a restart.
 
 Guardrails (same posture as the sibling app):
 
@@ -53,8 +66,15 @@ from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 import eval_report as er
+import jobs_runner
 
 router = APIRouter()
+
+# The same mode knob data_access.py reads. "databricks" = the deployed App:
+# live runs go through the Jobs API (jobs_runner.py); "local" = subprocess
+# runs. Read once at import, like data_access.APP_MODE.
+APP_MODE = os.environ.get("STTM_APP_MODE", "local")
+IS_DATABRICKS_APP = APP_MODE == "databricks"
 
 # --------------------------------------------------------------------------- #
 # Config (env-overridable; defaults are the local-mode layout)
@@ -75,12 +95,17 @@ STAGE_TIMEOUT_SECONDS = int(os.environ.get("STTM_DEMO_STAGE_TIMEOUT_SECONDS", "9
 UPLOAD_MAX_BYTES = int(os.environ.get("STTM_DEMO_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))
 UPLOAD_ALLOWED_EXTENSIONS = (".docx",)
 
-# Shown in the confirmation dialog before a billed run — measured on the
-# two live E2E runs of 2026-08-07 (docs/LIVE_E2E_2026-08-07.md).
+# Shown in the confirmation dialog before a billed run — calls/cost measured
+# on the two live E2E runs of 2026-08-07 (docs/LIVE_E2E_2026-08-07.md). The
+# wall-clock default differs by mode: ~35s as subprocesses, but a Jobs-API
+# run adds serverless task startup per stage, so the databricks default is
+# minutes, not seconds. Both remain env-overridable; re-measure on the first
+# deployed run and pin STTM_DEMO_EST_SECONDS in app.yaml.
 CALL_ESTIMATE = {
     "calls": int(os.environ.get("STTM_DEMO_EST_CALLS", "1")),
     "usd": float(os.environ.get("STTM_DEMO_EST_USD", "0.15")),
-    "seconds": int(os.environ.get("STTM_DEMO_EST_SECONDS", "35")),
+    "seconds": int(os.environ.get(
+        "STTM_DEMO_EST_SECONDS", "300" if IS_DATABRICKS_APP else "35")),
 }
 
 API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
@@ -97,10 +122,10 @@ STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 
 _STAGES = (
-    ("01_frd_ingest.py", "Ingest FRD"),
-    ("02_extract.py", "Extract (live Anthropic call)"),
-    ("03_contract_build.py", "Contract build + gate"),
-    ("04_sttm_render.py", "Render STTM + eval"),
+    ("01_frd_ingest.py", "Ingest the FRD"),
+    ("02_extract.py", "Extract mappings (AI model call)"),
+    ("03_contract_build.py", "Validate, ground & gate"),
+    ("04_sttm_render.py", "Render the STTM workbook"),
 )
 
 
@@ -159,7 +184,8 @@ class Run:
     unlike the sibling's single-CLI pipeline, each stage here IS its own
     subprocess, so the boundaries are exact rather than inferred."""
 
-    def __init__(self, doc_id: str, frd_path: Path, suffix: str, log_path: Path):
+    def __init__(self, doc_id: str, frd_path: Path, suffix: str, log_path: Path,
+                 stages=_STAGES):
         self.id = suffix
         self.suffix = suffix
         self.doc_id = doc_id
@@ -171,9 +197,13 @@ class Run:
         self.error: str | None = None
         self.started_at = _now()
         self.finished_at: str | None = None
+        # Databricks-mode runs get the workspace run-page link once the job
+        # run starts — the honest "this is really running in Databricks"
+        # pointer the progress view renders. Always None in local mode.
+        self.run_page_url: str | None = None
         self.stages = [
-            {"id": fname, "label": label, "status": "pending"}
-            for fname, label in _STAGES
+            {"id": stage_id, "label": label, "status": "pending"}
+            for stage_id, label in stages
         ]
         self.events: list[dict] = []
         self.seq = 0
@@ -217,6 +247,7 @@ class Run:
                 "error": self.error,
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
+                "run_page_url": self.run_page_url,
                 "stages": [dict(s) for s in self.stages],
                 "seq": self.seq,
                 "events": [e for e in self.events if e["seq"] > after_seq],
@@ -325,11 +356,49 @@ def _run_worker(run: Run, raw_volume: str) -> None:
             _active_run_id = None
 
 
+def _run_worker_databricks(run: Run) -> None:
+    """Databricks-mode worker: stage the FRD to the run's UC raw dir,
+    trigger the bundle job, poll it to a terminal state, then mirror the
+    run's UC out-directory back so the results machinery works unchanged.
+    Every step is jobs_runner's; this function only owns the Run lifecycle
+    (same try/finally shape as the subprocess worker above)."""
+    global _active_run_id
+    try:
+        w = jobs_runner._workspace_client()
+        job_id = jobs_runner.resolve_job_id(w)
+        run._emit("console", f"staging {run.frd_path.name} -> {jobs_runner.raw_dir_for(run.suffix)}")
+        jobs_runner.stage_frd(w, run.suffix, run.frd_path)
+        run_id = jobs_runner.start_job_run(w, job_id, run.suffix)
+        try:
+            url = w.jobs.get_run(run_id).run_page_url
+        except Exception:  # noqa: BLE001 — the link is a convenience, never worth failing a run over
+            url = None
+        with run._lock:
+            run.run_page_url = url
+        run._emit("console", f"job run {run_id} started" + (f" — {url}" if url else ""))
+        jobs_runner.poll_job_run(w, run, run_id)
+        n = jobs_runner.download_run_artifacts(w, run.suffix, LOCAL_ROOT / run.artifact_set)
+        run._emit(
+            "console",
+            f"mirrored {n} artifact file(s) from {jobs_runner.out_dir_for(run.suffix)} "
+            f"(durable copy stays in Unity Catalog)",
+        )
+        run._finish(STATUS_DONE)
+    except Exception as exc:  # noqa: BLE001 — a stuck "running" spinner is the one outcome to prevent
+        run._finish(STATUS_FAILED, f"{type(exc).__name__}: {exc}")
+    finally:
+        with _active_lock:
+            _active_run_id = None
+
+
 def start_run(frd_rel: str) -> Run:
     global _active_run_id
 
     frd_path = _validate_frd(frd_rel)
-    if not api_key_present():
+    # In databricks mode the Anthropic key lives in the workspace secret
+    # scope and is checked by the job's own extract task (which fails loudly
+    # without it); the app process neither has nor needs the key.
+    if not IS_DATABRICKS_APP and not api_key_present():
         raise RunPreflightError(
             f"{API_KEY_ENV_VAR} is not set (environment or repo .env). A live run "
             "makes billed Anthropic API calls and cannot start without it."
@@ -342,19 +411,28 @@ def start_run(frd_rel: str) -> Run:
                 "One run at a time — wait for it to finish."
             )
         suffix = _new_suffix()
-        # Stage the chosen document into a per-run raw dir: 01_frd_ingest
-        # ingests its whole RAW_VOLUME, so the run must see exactly one file
-        # — and the preloaded/frd_raw dir is never handed to a run directly.
-        raw_volume = f"{RAW_STAGING_VOLUME}/{suffix}"
-        raw_dir = LOCAL_ROOT / raw_volume
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(frd_path, raw_dir / frd_path.name)
         log_path = LOGS_DIR / f"{suffix}.log"
-        run = Run(frd_path.stem, frd_path, suffix, log_path)
+        if IS_DATABRICKS_APP:
+            run = Run(frd_path.stem, frd_path, suffix, log_path,
+                      stages=jobs_runner.JOB_STAGES)
+        else:
+            # Stage the chosen document into a per-run raw dir: 01_frd_ingest
+            # ingests its whole RAW_VOLUME, so the run must see exactly one
+            # file — and the preloaded/frd_raw dir is never handed to a run
+            # directly. (The databricks worker does the volume-side twin of
+            # this staging itself.)
+            raw_volume = f"{RAW_STAGING_VOLUME}/{suffix}"
+            raw_dir = LOCAL_ROOT / raw_volume
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(frd_path, raw_dir / frd_path.name)
+            run = Run(frd_path.stem, frd_path, suffix, log_path)
         _runs[run.id] = run
         _active_run_id = run.id
 
-    threading.Thread(target=_run_worker, args=(run, raw_volume), daemon=True).start()
+    if IS_DATABRICKS_APP:
+        threading.Thread(target=_run_worker_databricks, args=(run,), daemon=True).start()
+    else:
+        threading.Thread(target=_run_worker, args=(run, raw_volume), daemon=True).start()
     return run
 
 
@@ -611,6 +689,11 @@ def workbook_path(set_id: str, doc_id: str) -> Path:
 def demo_config() -> dict:
     return {
         "provider": "anthropic",
+        # "local" = subprocess runs gated on a local API key; "databricks" =
+        # Jobs-API runs, where the key lives in the workspace secret scope so
+        # api_key_present is not a readiness signal (the frontend gates on
+        # mode, and a missing secret fails loudly inside the extract task).
+        "mode": APP_MODE,
         "call_estimate": CALL_ESTIMATE,
         "api_key_present": api_key_present(),
         "golden_doc_id": GOLDEN_DOC_ID,
@@ -751,6 +834,14 @@ async def demo_stream_run_events(run_id: str, after: int = 0):
 
 @router.get("/api/demo/artifacts")
 def demo_list_artifacts() -> dict:
+    if IS_DATABRICKS_APP:
+        # Runs finished before an App restart live durably in the UC volume;
+        # mirror any that are missing locally before scanning. An unreadable
+        # volume is a 502 naming the fix, never an empty listing.
+        try:
+            jobs_runner.rehydrate_artifact_sets(LOCAL_ROOT)
+        except jobs_runner.JobRunnerError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"artifact_sets": list_artifact_sets()}
 
 

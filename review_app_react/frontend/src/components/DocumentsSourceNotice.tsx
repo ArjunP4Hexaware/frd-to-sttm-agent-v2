@@ -27,13 +27,13 @@ export function DocumentsConnectedEmpty({ contractsDir }: { contractsDir: string
   return (
     <div
       role="status"
-      className="rounded-md border border-emerald-600/40 bg-emerald-500/5 p-4 flex flex-col gap-2"
+      className="rounded-md border border-pass-bright/40 bg-pass-bright/5 p-4 flex flex-col gap-2"
     >
       <div className="flex items-center gap-2">
         {/* Filled dot, not an outline: reads as "live" at a glance from the
             back of a room, where the copy itself is unreadable. */}
-        <span aria-hidden="true" className="size-2 rounded-full bg-emerald-500 shrink-0" />
-        <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">
+        <span aria-hidden="true" className="size-2 rounded-full bg-pass-bright shrink-0" />
+        <p className="text-sm font-medium text-pass">
           {CONNECTED_EMPTY_HEADLINE}
         </p>
       </div>

@@ -1,27 +1,35 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle, Button, Spinner } from "@databricks/appkit-ui/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Badge } from "./ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import {
+  sharePointSttmUrl,
   subscribeDemoRunEvents,
-  useDemoArtifactSets,
   useDemoConfig,
-  useDemoDocuments,
   useDemoRunSnapshot,
-  useDemoUpload,
+  useLocateFrd,
+  useSharePointConfig,
   useStartDemoRun,
 } from "../demoApi";
-import type { DemoDocument, DemoRunEvent, DemoRunSnapshot } from "../demoApi";
+import type { DemoDocument, DemoRunEvent, DemoRunSnapshot, SharePointItemInfo } from "../demoApi";
 import { DemoResults } from "./DemoResults";
 
 /**
- * The client-facing demo tab: Live mode (billed pipeline run, with an
- * explicit cost-confirmation dialog) and Replay mode (any saved artifact
- * set, zero API calls). Both funnel into the same DemoResults view.
+ * The "Select FRD" flow — the app's primary entry point (decided
+ * 2026-08-21, superseding the upload/demo framing): the user NAMES an FRD,
+ * the app locates it in the SharePoint library itself, and then either
+ *
+ *  - presents the already-published STTM if one exists in the output folder
+ *    (no regeneration, and deliberately NO publish option — it is already
+ *    in SharePoint), or
+ *  - runs the real pipeline on it, behind the billed-run confirmation.
+ *
+ * Matching is exact-or-explicit-pick: an ambiguous name renders candidates
+ * for the user to choose from; nothing is ever auto-picked.
  */
 type Phase =
   | { kind: "setup" }
+  | { kind: "existing"; frd: SharePointItemInfo; sttm: SharePointItemInfo }
   | { kind: "confirm"; doc: DemoDocument }
   | { kind: "running"; runId: string }
   | { kind: "results"; setId: string; docId: string };
@@ -32,9 +40,16 @@ export function DemoFlow() {
   return (
     <div className="flex flex-col gap-6">
       {phase.kind === "setup" && (
-        <DemoSetup
-          onConfirmLive={(doc) => setPhase({ kind: "confirm", doc })}
-          onReplay={(setId, docId) => setPhase({ kind: "results", setId, docId })}
+        <MappingSetup
+          onExisting={(frd, sttm) => setPhase({ kind: "existing", frd, sttm })}
+          onReadyToRun={(doc) => setPhase({ kind: "confirm", doc })}
+        />
+      )}
+      {phase.kind === "existing" && (
+        <ExistingSttmView
+          frd={phase.frd}
+          sttm={phase.sttm}
+          onBack={() => setPhase({ kind: "setup" })}
         />
       )}
       {phase.kind === "confirm" && (
@@ -45,7 +60,7 @@ export function DemoFlow() {
         />
       )}
       {phase.kind === "running" && (
-        <DemoRunProgress
+        <RunProgress
           runId={phase.runId}
           onFinished={(setId, docId) => setPhase({ kind: "results", setId, docId })}
           onBack={() => setPhase({ kind: "setup" })}
@@ -55,7 +70,7 @@ export function DemoFlow() {
         <div className="flex flex-col gap-4">
           <div>
             <Button variant="ghost" onClick={() => setPhase({ kind: "setup" })}>
-              ← Back to demo setup
+              ← Select FRD
             </Button>
           </div>
           <DemoResults setId={phase.setId} docId={phase.docId} />
@@ -66,154 +81,178 @@ export function DemoFlow() {
 }
 
 // ---------------------------------------------------------------------------
-// Setup: mode toggle + document picker / artifact-set picker
+// Setup: name an FRD → locate in SharePoint; past runs below
 // ---------------------------------------------------------------------------
-function DemoSetup({
-  onConfirmLive,
-  onReplay,
+function MappingSetup({
+  onExisting,
+  onReadyToRun,
 }: {
-  onConfirmLive: (doc: DemoDocument) => void;
-  onReplay: (setId: string, docId: string) => void;
+  onExisting: (frd: SharePointItemInfo, sttm: SharePointItemInfo) => void;
+  onReadyToRun: (doc: DemoDocument) => void;
 }) {
-  const [mode, setMode] = useState<"live" | "replay">("replay");
   const configQuery = useDemoConfig();
+  const spConfig = useSharePointConfig();
+  const locate = useLocateFrd();
+  const [name, setName] = useState("");
+
+  const mode = configQuery.data?.mode ?? "local";
+  const keyPresent = mode === "databricks" ? true : (configQuery.data?.api_key_present ?? false);
+  const configured = spConfig.data?.configured ?? false;
+
+  function submit(candidateName?: string) {
+    const query = (candidateName ?? name).trim();
+    if (!query) return;
+    locate.mutate(query, {
+      onSuccess: (result) => {
+        if (result.status === "existing_sttm") onExisting(result.frd, result.sttm);
+        else if (result.status === "ready") onReadyToRun(result.document);
+        // "candidates" renders below from locate.data.
+      },
+    });
+  }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex gap-2">
-        <Button variant={mode === "replay" ? "default" : "ghost"} onClick={() => setMode("replay")}>
-          Replay a saved run
-        </Button>
-        <Button variant={mode === "live" ? "default" : "ghost"} onClick={() => setMode("live")}>
-          Live run
-        </Button>
-      </div>
-      {mode === "live" ? (
-        <LiveSetup config={configQuery.data} onConfirm={onConfirmLive} />
-      ) : (
-        <ReplaySetup onReplay={onReplay} />
-      )}
-    </div>
-  );
-}
-
-function LiveSetup({
-  config,
-  onConfirm,
-}: {
-  config: ReturnType<typeof useDemoConfig>["data"];
-  onConfirm: (doc: DemoDocument) => void;
-}) {
-  const documentsQuery = useDemoDocuments();
-  const upload = useDemoUpload();
-  const queryClient = useQueryClient();
-  const fileInput = useRef<HTMLInputElement>(null);
-
-  const keyPresent = config?.api_key_present ?? false;
-
-  return (
-    <div className="flex flex-col gap-4">
-      {!keyPresent && (
+      {!configured && spConfig.isSuccess && (
         <Alert variant="destructive">
-          <AlertTitle>Live runs unavailable</AlertTitle>
+          <AlertTitle>SharePoint is not connected</AlertTitle>
           <AlertDescription>
-            ANTHROPIC_API_KEY is not configured on the backend (environment or repo .env). Replay mode still
-            works without it.
+            This app locates FRDs in the SharePoint document library, which is not configured on this
+            backend (tenant, client id, host, site, and client secret). Wire the SharePoint environment
+            settings and reload.
           </AlertDescription>
         </Alert>
       )}
-      <p className="text-sm text-muted-foreground">
-        A live run executes the real 01→04 pipeline against the Anthropic API — pick the preloaded demo FRD or
-        upload one. <strong>Prototype — synthetic or anonymized documents only.</strong>
-      </p>
-      <div className="flex flex-col gap-2">
-        {documentsQuery.data?.documents.map((doc) => (
-          <Card key={doc.path}>
-            <CardContent className="py-2 flex items-center justify-between gap-4">
-              <div>
-                <span className="mono-id text-sm">{doc.name}</span>{" "}
-                <Badge variant="outline">{doc.source}</Badge>{" "}
-                {doc.is_golden && <Badge>golden pair — eval available</Badge>}
-              </div>
-              <Button disabled={!keyPresent} onClick={() => onConfirm(doc)}>
-                Run live…
-              </Button>
-            </CardContent>
-          </Card>
-        ))}
-        {documentsQuery.isSuccess && documentsQuery.data.documents.length === 0 && (
-          <p className="text-sm text-muted-foreground">No documents available — upload one below.</p>
-        )}
-      </div>
-      <div className="flex items-center gap-3">
-        <input
-          ref={fileInput}
-          type="file"
-          accept=".docx"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) {
-              upload.mutate(file, {
-                onSuccess: () => queryClient.invalidateQueries({ queryKey: ["demo", "documents"] }),
-              });
-            }
-            e.target.value = "";
-          }}
-        />
-        <Button variant="ghost" onClick={() => fileInput.current?.click()} disabled={upload.isPending}>
-          {upload.isPending ? "Uploading…" : "Upload an FRD (.docx)"}
-        </Button>
-        <span className="text-xs text-muted-foreground">
-          Uploads land in a gitignored directory and run through the same live pipeline; the eval panel shows a
-          score only for the preloaded golden pair.
-        </span>
-      </div>
-      {upload.isError && (
+      {!keyPresent && (
         <Alert variant="destructive">
-          <AlertDescription>{(upload.error as Error).message}</AlertDescription>
+          <AlertTitle>Pipeline runs unavailable</AlertTitle>
+          <AlertDescription>
+            ANTHROPIC_API_KEY is not configured on the backend (environment or repo .env), so a located FRD
+            cannot be processed. Existing STTMs and past runs remain viewable.
+          </AlertDescription>
         </Alert>
       )}
+
+      <div>
+        <h2 className="eyebrow mb-2">Select FRD</h2>
+        <p className="text-sm text-muted-foreground mb-3">
+          Name the FRD and the app finds it in{" "}
+          <span className="mono-id">
+            {spConfig.data?.site ?? "SharePoint"}/{spConfig.data?.library ?? ""}
+            {spConfig.data?.frd_folder ? `/${spConfig.data.frd_folder}` : ""}
+          </span>
+          . If a mapping for it has already been published, it is presented as-is; otherwise the pipeline
+          runs on the document.
+        </p>
+        <div className="flex gap-2">
+          <input
+            className="flex-1 border border-input rounded-md px-3 py-2 text-sm bg-card"
+            placeholder="FRD document name, e.g. Community Risk FRD"
+            value={name}
+            disabled={!configured}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit();
+            }}
+          />
+          <Button disabled={!configured || locate.isPending || !name.trim()} onClick={() => submit()}>
+            {locate.isPending ? "Locating…" : "Locate FRD"}
+          </Button>
+        </div>
+      </div>
+
+      {locate.isError && (
+        <Alert variant="destructive">
+          <AlertDescription>{(locate.error as Error).message}</AlertDescription>
+        </Alert>
+      )}
+
+      {locate.data?.status === "candidates" && (
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-muted-foreground">
+            No exact match — did you mean one of these? Nothing is picked automatically.
+          </p>
+          {locate.data.candidates.map((c) => (
+            <Card key={c.item_id}>
+              <CardContent className="py-2 flex items-center justify-between gap-4">
+                <div>
+                  <span className="mono-id text-sm">{c.name}</span>{" "}
+                  <span className="text-xs text-muted-foreground">
+                    {(c.size_bytes / 1024).toFixed(0)} KB · modified {c.modified.slice(0, 10)}
+                  </span>
+                </div>
+                <Button variant="outline" onClick={() => submit(c.name)}>
+                  Use this one
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
     </div>
   );
 }
 
-function ReplaySetup({ onReplay }: { onReplay: (setId: string, docId: string) => void }) {
-  const setsQuery = useDemoArtifactSets();
+/**
+ * An FRD that already has a published STTM: present it, full stop. No
+ * regeneration, and deliberately NO publish control — the workbook is
+ * already in the SharePoint output folder, which is the system of record.
+ */
+function ExistingSttmView({
+  frd,
+  sttm,
+  onBack,
+}: {
+  frd: SharePointItemInfo;
+  sttm: SharePointItemInfo;
+  onBack: () => void;
+}) {
   return (
-    <div className="flex flex-col gap-2">
-      <p className="text-sm text-muted-foreground">
-        Replay renders a previously saved run — the exact same results view, zero API calls.
-      </p>
-      {setsQuery.isLoading && <p className="text-muted-foreground">Scanning artifact sets…</p>}
-      {setsQuery.data?.artifact_sets.map((s) => (
-        <Card key={`${s.set_id}/${s.doc_id}`}>
-          <CardContent className="py-2 flex items-center justify-between gap-4">
-            <div className="flex flex-col">
-              <span className="mono-id text-sm">
-                {s.doc_id} · {s.set_id}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {s.source === "live_e2e" ? "preserved live E2E run" : "demo run"} · {s.modified_at}
-                {s.status && ` · ${s.status}`}
-                {s.eval_pct !== null && ` · eval ${s.eval_pct}%`}
-              </span>
-            </div>
-            <Button onClick={() => onReplay(s.set_id, s.doc_id)}>View results</Button>
-          </CardContent>
-        </Card>
-      ))}
-      {setsQuery.isSuccess && setsQuery.data.artifact_sets.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No saved artifact sets found — run the pipeline live once, or check out the tracked replay set.
-        </p>
-      )}
+    <div className="flex flex-col gap-4">
+      <div>
+        <Button variant="ghost" onClick={onBack}>
+          ← Select FRD
+        </Button>
+      </div>
+      <Card className="border-2">
+        <CardHeader>
+          <CardTitle>This FRD already has a published STTM</CardTitle>
+          <CardDescription>
+            <span className="mono-id">{frd.name}</span> is mapped by{" "}
+            <span className="mono-id">{sttm.name}</span>, published to the SharePoint output folder
+            (modified {sttm.modified.slice(0, 10)}, {(sttm.size_bytes / 1024).toFixed(0)} KB). It is
+            presented as-is — nothing was regenerated.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex gap-2">
+            <Button asChild>
+              <a href={sharePointSttmUrl(sttm.item_id)} download>
+                Download the STTM (.xlsx)
+              </a>
+            </Button>
+            {sttm.web_url && (
+              <Button variant="outline" asChild>
+                <a href={sttm.web_url} target="_blank" rel="noreferrer">
+                  Open in SharePoint ↗
+                </a>
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            This mapping already lives in SharePoint, so there is nothing to publish. If the FRD has been
+            revised and needs a fresh mapping, remove or rename the published workbook in the output folder
+            first — the app will then treat it as unmapped.
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Confirmation dialog — the billed-call gate
+// Confirmation — the billed-call gate
 // ---------------------------------------------------------------------------
 function ConfirmDialog({
   doc,
@@ -227,22 +266,32 @@ function ConfirmDialog({
   const configQuery = useDemoConfig();
   const start = useStartDemoRun();
   const est = configQuery.data?.call_estimate;
+  const isJob = configQuery.data?.mode === "databricks";
+  const duration =
+    est && est.seconds >= 120 ? `~${Math.round(est.seconds / 60)} min` : `roughly ${est?.seconds}s`;
 
   return (
     <Card className="border-2">
       <CardHeader>
         <CardTitle>Start a live, billed run?</CardTitle>
         <CardDescription>
-          <span className="mono-id">{doc.name}</span> will run through the real 01→04 pipeline with provider{" "}
-          <span className="mono-id">anthropic</span>.
+          <span className="mono-id">{doc.name}</span> will be processed end to end{" "}
+          {isJob ? (
+            <>
+              as the Databricks Job <span className="mono-id">frd_sttm_pipeline</span> in this workspace
+            </>
+          ) : (
+            <>using the Anthropic API</>
+          )}
+          .
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {est && (
           <p className="text-sm">
-            Expected scale: <strong>~{est.calls} billed API call</strong> (~${est.usd.toFixed(2)}), roughly{" "}
-            {est.seconds}s end to end. Outputs go to a run-scoped scratch location; curated baselines are never
-            written.
+            Expected scale: <strong>~{est.calls} billed API call</strong> (~${est.usd.toFixed(2)}), {duration}{" "}
+            end to end{isJob ? " (most of it Databricks task startup)" : ""}. Outputs are written to a
+            run-scoped location.
           </p>
         )}
         {start.isError && (
@@ -269,7 +318,7 @@ function ConfirmDialog({
 // ---------------------------------------------------------------------------
 // Progress: SSE primary, slow poll as the fallback truth
 // ---------------------------------------------------------------------------
-function DemoRunProgress({
+function RunProgress({
   runId,
   onFinished,
   onBack,
@@ -302,8 +351,19 @@ function DemoRunProgress({
       <div className="flex items-center gap-3">
         {snap?.status === "running" && <Spinner />}
         <h2 className="text-lg font-semibold">
-          Live run <span className="mono-id">{runId}</span>
+          {snap?.doc_id ? <>Processing <span className="mono-id">{snap.doc_id}</span></> : "Processing"}
         </h2>
+        <span className="text-xs text-muted-foreground mono-id">run {runId}</span>
+        {snap?.run_page_url && (
+          <a
+            href={snap.run_page_url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-sm underline text-muted-foreground"
+          >
+            View job run in Databricks ↗
+          </a>
+        )}
       </div>
       <div className="flex flex-col gap-1">
         {snap?.stages.map((stage) => (
@@ -337,7 +397,7 @@ function DemoRunProgress({
       {snap?.status !== "running" && (
         <div>
           <Button variant="ghost" onClick={onBack}>
-            ← Back to demo setup
+            ← Select FRD
           </Button>
         </div>
       )}
@@ -348,9 +408,9 @@ function DemoRunProgress({
 function StageDot({ status }: { status: string }) {
   const tone =
     status === "done"
-      ? "bg-emerald-500"
+      ? "bg-pass-bright"
       : status === "running"
-        ? "bg-blue-500 animate-pulse"
+        ? "bg-brand-sky animate-pulse"
         : status === "failed"
           ? "bg-destructive"
           : "bg-muted-foreground/30";
