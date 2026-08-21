@@ -59,8 +59,6 @@ review_app_react/       FastAPI + Vite/React review app + client demo
                         live 01→04 runs with backend-generated demo_<ts>
                         suffix insulation + zero-call replay of saved
                         artifact sets). See review_app_react/README.md.
-docs/frd-to-sttm-agent_overview_deck.pptx   ACFC overview deck (what/why/benefits/savings);
-                        regenerate with scripts/build_acfc_deck.py (python-pptx)
 local_dev_fixtures/     frd_raw/, sttm_reference/ inputs; outputs land here
 demo_frd.docx / demo_sttm.xlsx   the tracked anonymized demo pair
 tools/                  anonymization mapping + applier (mandated fixture path)
