@@ -192,10 +192,17 @@ token lifetime and a network dependency inside the parsing stage.
 - **`05` is separate from `04` on purpose.** `04` re-runs every time a
   reviewer resolves an ambiguity, and a re-render is not automatically a
   re-publish — the human gate sits between them. Running `04` must never
-  push a not-yet-approved workbook to the client's library. The bundle wires
-  `05` after `render` so a full run closes the loop; remove that task if the
-  review gate should precede publication (a workflow decision, not a code
-  change — see the notebook header).
+  push a not-yet-approved workbook to the client's library.
+
+  **DECIDED 2026-08-21, NOT YET IMPLEMENTED — the top open work item.**
+  Arjun's decision: **publishing must be a manual button the reviewer
+  presses in the review app.** Never automatic. As the bundle stands,
+  `resources/frd_sttm_job.yml` still wires `sharepoint_publish` with
+  `depends_on: render`, so a full job run *can* publish an unapproved
+  workbook. To close it: remove that task from the job, and add a
+  confirm-gated publish control to the demo tab that publishes one reviewed
+  document. The transport, config and fail-loud paths already exist — this
+  is wiring plus a button, not new plumbing.
 - **Write scope is one folder.** `sharepoint_output_folder` is the only path
   this repo ever writes to. Keep the app registration's write grant scoped
   to it.
@@ -207,6 +214,34 @@ token lifetime and a network dependency inside the parsing stage.
   say whose problem it is: 503 not configured, 502 Graph refused, 400 bad
   request, 413 over the demo cap. The picker renders nothing when
   unconfigured.
+
+## Designed, not built (decided 2026-08-21)
+
+Carry these into the next session; none is implemented.
+
+- **Manual publish button** — see the SharePoint section above. Highest
+  priority, smallest change.
+- **Duplicate-FRD detection.** Add `content_sha256` to `frd_documents` and
+  short-circuit when an STTM already exists for that exact content. **Key on
+  the content hash, not the filename** — FRDs get revised and
+  same-name-new-content is the normal case. And **never silently skip**:
+  surface it as a human decision ("an STTM for this exact content exists,
+  generated <date>, published <where> — reuse or regenerate?"). Near-duplicates
+  should show a diff rather than auto-skipping. Silently declining to produce
+  an STTM is exactly the failure mode the rest of this pipeline exists to
+  prevent.
+- **Unity Catalog as the working store.** Once harvested from SharePoint, FRDs
+  and STTMs live in UC. SharePoint remains the system of record for hand-off.
+- **Historical corpus for quality.** Harvest ACFC's FRDs + STTMs, pair them
+  deterministically, and use them as (1) an eval set — the highest-value use,
+  since the 80% UAT gate currently cannot be measured against one golden pair,
+  (2) retrieved few-shot exemplars, and (3) a mined data dictionary feeding
+  `04_sttm_render`'s existing source-dictionary cross-check. Gated on the
+  HIPAA/BAA data-handling review before any real document is harvested.
+  **NOT fine-tuning** — the Claude API has no fine-tuning surface, and it would
+  move ACFC's conventions into weights that cannot be inspected, cited, or
+  corrected, which is the opposite of this repo's grounding doctrine. Full
+  reasoning in the master context document §7a. Settled; do not re-open.
 
 ## Branching model
 
@@ -226,6 +261,12 @@ facts from the demo FRD's parsed markdown — they prove plumbing, not
 extraction quality.
 
 ## Known gaps / cautions
+
+- **The committed `.venv` is stale.** It was created at
+  `/Users/arjunpillai/Desktop/frd-to-sttm-agent/`, before the repo moved under
+  the `amerihealth-agents/` umbrella, so every console-script shebang
+  (including `.venv/bin/pytest`) points at a path that no longer exists.
+  `.venv/bin/python3 -m pytest` works. Recreate the venv when convenient.
 
 - **The workbook→mapping-contract round trip has never been run.** The
   extractor exists in code-gen-agent (`codegen extract-sttm`), but
