@@ -56,6 +56,29 @@ CATALOG = _param("catalog", "soham_workspace")
 SCHEMA = _param("schema", "sttm_agent")
 RAW_VOLUME = _param("raw_volume", "frd_raw")
 
+# "fetch" pulls from the library as documented above. "skip" is for a caller
+# that has ALREADY staged the document(s) into raw_volume itself — the review
+# app's job-triggered demo run uploads the reviewer's chosen FRD and passes
+# skip explicitly. This is an explicit opt-out validated against a closed
+# set, not a fallback: an unrecognized value raises (same provider-gate
+# idiom as 02_extract), and an unconfigured tenant still fails loudly in
+# "fetch" mode.
+FETCH_MODE = _param("sharepoint_fetch_mode", "fetch")
+if FETCH_MODE not in ("fetch", "skip"):
+    raise ValueError(
+        f"sharepoint_fetch_mode must be 'fetch' or 'skip', got {FETCH_MODE!r}. "
+        "No default is guessed for an unrecognized value."
+    )
+if FETCH_MODE == "skip":
+    print(
+        "sharepoint_fetch_mode=skip — fetch explicitly skipped by the caller, "
+        f"which staged the input document(s) into {RAW_VOLUME!r} itself. "
+        "01_frd_ingest will parse whatever is there and fails loudly if empty."
+    )
+    if IS_DATABRICKS:
+        dbutils.notebook.exit("skipped")  # noqa: F821
+    raise SystemExit(0)
+
 SECRET_SCOPE = _param("secret_scope", "sttm_agent")
 SECRET_KEY = _param("sharepoint_secret_key", "sharepoint_client_secret")
 

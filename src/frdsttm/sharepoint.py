@@ -270,14 +270,19 @@ class SharePointClient:
 
     # -- read -------------------------------------------------------------- #
 
-    def list_documents(self, suffixes: set[str] | None = None) -> list[SharePointItem]:
-        """List files in the configured FRD folder (library root when blank).
+    def list_documents(self, suffixes: set[str] | None = None,
+                       folder: str | None = None) -> list[SharePointItem]:
+        """List files in one library folder (library root when blank).
+
+        `folder` defaults to the configured FRD folder. (This override was
+        removed once as YAGNI; re-added 2026-08-21 with a real caller — the
+        review app's existing-STTM check lists `cfg.output_folder`.)
 
         Folders are skipped. When `suffixes` is given, only matching files are
         returned — the caller passes 01's SUPPORTED_SUFFIXES so the picker can
         never offer a document the pipeline cannot parse.
         """
-        folder = self.cfg.frd_folder
+        folder = self.cfg.frd_folder if folder is None else folder
         base = f"{GRAPH_ROOT}/drives/{self.drive_id()}"
         url = (f"{base}/root:/{self._encode_path(folder)}:/children" if folder
                else f"{base}/root/children")

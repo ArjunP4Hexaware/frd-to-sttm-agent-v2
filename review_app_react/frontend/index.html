@@ -7,9 +7,13 @@
 <html lang="en" class="light">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- No favicon by decision (2026-08-21): the lightning icon was removed
+         and nothing replaced it. The inline data: href suppresses the
+         browser's automatic /favicon.ico request (and its 404) without
+         rendering any icon. -->
+    <link rel="icon" href="data:," />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FRD to STTM — Mapping Agent</title>
+    <title>FRD to STTM Agent</title>
   </head>
   <body>
     <div id="root"></div>

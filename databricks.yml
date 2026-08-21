@@ -65,7 +65,10 @@ variables:
     description: >-
       Folder within the library that 05_sharepoint_publish writes rendered
       STTM workbooks to. The ONLY path this repo ever writes to in SharePoint
-      -- keep the app registration's write grant scoped to it.
+      -- keep the app registration's write grant scoped to it. Not referenced
+      by frd_sttm_pipeline: publishing is manual by decision (2026-08-21) --
+      the review app's confirm-gated button, or a standalone run of 05 after
+      sign-off -- never a job task downstream of render.
     default: ""
   sharepoint_tenant_id:
     description: Entra ID tenant id for the app registration (app-only auth).

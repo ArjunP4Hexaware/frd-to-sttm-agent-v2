@@ -26,6 +26,10 @@ local = [
 # review_app_react/requirements.txt, kept in sync by hand.
 ui = [
     "fastapi",
+    # FastAPI needs this at import time for the UploadFile/Form routes; it is
+    # NOT a transitive dep of fastapi, and its absence only surfaces when the
+    # app module is imported.
+    "python-multipart",
     "uvicorn[standard]",
     "databricks-sdk",
 ]

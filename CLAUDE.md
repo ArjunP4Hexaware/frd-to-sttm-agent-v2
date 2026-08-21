@@ -98,19 +98,33 @@ src/frdsttm/            models.py (FrdIngestionSpec, GatedAmbiguity,
 contracts/frd_label_contract.json   the versioned FRD label contract — now a
                         frozen input, no longer mirrored anywhere (see
                         "Upstream" above)
-tests/                  114 tests, offline (no LLM/network/Spark);
+tests/                  119 tests, offline (no LLM/network/Spark);
                         run `pytest` for the live count rather than
                         trusting a number written down here
 schema/sttm_extraction_schema.json   the extraction contract (mirrors models)
 databricks.yml + resources/frd_sttm_job.yml   asset bundle, job frd_sttm_pipeline
-review_app_react/       FastAPI + Vite/React review app + client demo
-                        (Databricks App; its root requirements.txt is the
-                        Apps deploy manifest). Three tabs: gated-ambiguity
-                        review, mock upload flow (orchestration.py,
-                        unchanged), and the client demo (backend/demo.py:
-                        live 01→04 runs with backend-generated demo_<ts>
-                        suffix insulation + zero-call replay of saved
-                        artifact sets). See review_app_react/README.md.
+review_app_react/       FastAPI + Vite/React review app (Databricks App; its
+                        root requirements.txt is the Apps deploy manifest).
+                        TWO tabs since 2026-08-21 (demo/upload framing
+                        removed): (1) gated-ambiguity review; (2) "New
+                        mapping" — the user NAMES an FRD, the app locates it
+                        in SharePoint itself (POST /api/demo/sharepoint/
+                        locate: exact match or explicit candidate pick,
+                        never fuzzy auto-pick), short-circuits to presenting
+                        the already-published STTM when `<doc_id>.sttm.xlsx`
+                        exists in the output folder (view/download only — NO
+                        publish option there), and otherwise runs the
+                        pipeline. Runs are MODE-SWITCHED on STTM_APP_MODE:
+                        local = 01→04 subprocesses with demo_<ts> env
+                        insulation; databricks (the deployed App) = trigger
+                        the bundle job via the Jobs API with the same
+                        insulation as job parameters (backend/jobs_runner.py)
+                        so artifacts land natively in UC and survive a
+                        restart. Artifact-set replay remains the shared
+                        results renderer ("Past runs"). The mock upload flow
+                        (orchestration.py) and upload/import endpoints stay
+                        in the backend, UI-less, for tests and local dev.
+                        See review_app_react/README.md.
 local_dev_fixtures/     frd_raw/, sttm_reference/ inputs; outputs land here
 demo_frd.docx / demo_sttm.xlsx   the tracked anonymized demo pair
 tools/                  anonymization mapping + applier (mandated fixture path)
@@ -120,9 +134,10 @@ tools/                  anonymization mapping + applier (mandated fixture path)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[local,dev]"        # deps from pyproject.toml
+pip install -e ".[local,dev,ui]"     # deps from pyproject.toml; ui gives the
+                                     # review-app backend its FastAPI tests
 
-pytest                               # 114 tests, offline
+pytest                               # 119 tests, offline
 
 python notebooks/01_frd_ingest.py                        # parse demo_frd
 STTM_MOCK_EXTRACTION=1 python notebooks/02_extract.py    # zero-cost mock
@@ -194,15 +209,21 @@ token lifetime and a network dependency inside the parsing stage.
   re-publish — the human gate sits between them. Running `04` must never
   push a not-yet-approved workbook to the client's library.
 
-  **DECIDED 2026-08-21, NOT YET IMPLEMENTED — the top open work item.**
-  Arjun's decision: **publishing must be a manual button the reviewer
-  presses in the review app.** Never automatic. As the bundle stands,
-  `resources/frd_sttm_job.yml` still wires `sharepoint_publish` with
-  `depends_on: render`, so a full job run *can* publish an unapproved
-  workbook. To close it: remove that task from the job, and add a
-  confirm-gated publish control to the demo tab that publishes one reviewed
-  document. The transport, config and fail-loud paths already exist — this
-  is wiring plus a button, not new plumbing.
+  **IMPLEMENTED 2026-08-21 (decided same day): publishing is manual.**
+  `resources/frd_sttm_job.yml` no longer contains a `sharepoint_publish`
+  task — the job deliberately ends at `render`, and a comment there says
+  why; do not re-wire publish into the job. The reviewer publishes ONE
+  workbook at a time via the demo tab's confirm-gated control
+  (`POST /api/demo/sharepoint/publish` in
+  `review_app_react/backend/sharepoint_routes.py`): the backend rejects any
+  request without `"confirm": true` (400), addresses the workbook through
+  the same validated `demo.workbook_path` the download endpoint uses (so
+  only demo/live_e2e artifact sets are reachable, never curated baselines),
+  and maps failures 503/502/404/413 like the picker. The frontend control
+  (`PublishControl` in `DemoResults.tsx`) is two-step — first click shows
+  the target and warning, second click publishes — and renders nothing when
+  SharePoint is unconfigured. `05_sharepoint_publish.py` remains for a
+  deliberate standalone post-sign-off run with `publish_doc_id` set.
 - **Write scope is one folder.** `sharepoint_output_folder` is the only path
   this repo ever writes to. Keep the app registration's write grant scoped
   to it.
@@ -218,18 +239,20 @@ token lifetime and a network dependency inside the parsing stage.
 ## Designed, not built (decided 2026-08-21)
 
 Carry these into the next session; none is implemented.
+(The manual publish button, formerly listed here, landed 2026-08-21 — see
+the SharePoint section above.)
 
-- **Manual publish button** — see the SharePoint section above. Highest
-  priority, smallest change.
-- **Duplicate-FRD detection.** Add `content_sha256` to `frd_documents` and
-  short-circuit when an STTM already exists for that exact content. **Key on
-  the content hash, not the filename** — FRDs get revised and
-  same-name-new-content is the normal case. And **never silently skip**:
-  surface it as a human decision ("an STTM for this exact content exists,
-  generated <date>, published <where> — reuse or regenerate?"). Near-duplicates
-  should show a diff rather than auto-skipping. Silently declining to produce
-  an STTM is exactly the failure mode the rest of this pipeline exists to
-  prevent.
+- **Duplicate-FRD detection — v1 SHIPPED 2026-08-21, name-keyed.** The
+  locate flow now short-circuits when the output folder already holds
+  `<doc_id>.sttm.xlsx`: the existing STTM is PRESENTED (download + link,
+  explicitly no publish option — decided 2026-08-21), never regenerated and
+  never silently skipped. This is keyed on the workbook naming convention
+  because SharePoint names are all the app can see pre-run. The
+  content-hash upgrade below remains the right next step — FRDs get
+  revised, and same-name-new-content currently presents the STALE workbook
+  with no warning: add `content_sha256` to `frd_documents` once UC is the
+  working store, and show a diff for near-duplicates rather than
+  auto-presenting.
 - **Unity Catalog as the working store.** Once harvested from SharePoint, FRDs
   and STTMs live in UC. SharePoint remains the system of record for hand-off.
 - **Historical corpus for quality.** Harvest ACFC's FRDs + STTMs, pair them
@@ -262,12 +285,12 @@ extraction quality.
 
 ## Known gaps / cautions
 
-- **The committed `.venv` is stale.** It was created at
-  `/Users/arjunpillai/Desktop/frd-to-sttm-agent/`, before the repo moved under
-  the `amerihealth-agents/` umbrella, so every console-script shebang
-  (including `.venv/bin/pytest`) points at a path that no longer exists.
-  `.venv/bin/python3 -m pytest` works. Recreate the venv when convenient.
-
+- **The `.venv` was recreated 2026-08-21** at the repo's current location
+  with `.[local,dev,ui]` — shebangs (including `.venv/bin/pytest`) work
+  again. The rebuild surfaced that current FastAPI needs `python-multipart`
+  at import time for the UploadFile routes; it is now in the `ui` extra AND
+  `review_app_react/requirements.txt` (without it the deployed App dies at
+  startup, not at first upload).
 - **The workbook→mapping-contract round trip has never been run.** The
   extractor exists in code-gen-agent (`codegen extract-sttm`), but
   `04_sttm_render` output has not been fed through it, and at least two
@@ -318,9 +341,25 @@ checkout; treat each as unproven until you have seen it work.
   is laptop leftovers, not an instruction). The demo tab was already safe —
   `demo.py::_subprocess_env` pops the var and pins the provider — this is
   defence in depth one layer down, for a direct notebook run in the container.
-  **Still unverified:** the storage half. Artifacts will land on the
-  container's ephemeral filesystem via the local `deltalake` path rather than
-  in Unity Catalog, and will not survive a restart.
+  **The storage half is RESOLVED BY DESIGN (2026-08-21, Arjun's call):** in
+  the deployed App the demo tab no longer runs notebooks in the container at
+  all — it triggers the bundle job via the Jobs API
+  (`backend/jobs_runner.py`), so the notebooks run as real workspace tasks
+  (`IS_DATABRICKS` True) and artifacts land natively in Unity Catalog. The
+  container's local artifact copy is a mirror/cache, rehydrated from the
+  `sttm_out_app` volume after a restart. The subprocess path remains
+  local-mode only.
+- **The Jobs-API demo path has never run against a real workspace.** Fully
+  unit-tested offline (stubbed SDK), but unproven live, and it stacks on the
+  also-unproven bundle-run/shim path below. Workspace prerequisites the
+  Monday deploy must establish, in the order they will bite: the bundle job
+  deployed with `STTM_DEMO_JOB_NAME` matching its AS-DEPLOYED name (dev-mode
+  targets prefix it, e.g. `[dev <user>] frd_sttm_pipeline` — or pin
+  `STTM_DEMO_JOB_ID`); volumes `demo_raw`, `sttm_out_app`, and
+  `sttm_reference` **containing at least one reference workbook** (04 fails
+  loudly on an empty reference dir); secret scope
+  `sttm_agent/anthropic_api_key`; the app service principal able to run the
+  job and read/write those volumes. All are listed in `app.yaml`'s comment.
 - **SharePoint has never been run against a real tenant.** The Graph
   transport is fully unit-tested against a stubbed transport (37 tests, all
   offline) and every failure path is exercised, but no live Entra ID app
@@ -331,7 +370,10 @@ checkout; treat each as unproven until you have seen it work.
   behaviour.
 - **No bundle-deployed run has exercised the `notebooks/` shims.** The shim
   path is verified *locally* end-to-end only. `%run` resolution in a real
-  workspace is the untested half.
+  workspace is the untested half. **Now on the demo critical path:** the
+  deployed App's live runs execute the bundle job, so the first
+  `databricks bundle run frd_sttm_pipeline` is the gating verification for
+  the whole Friday demo — do it before wiring anything else on Monday.
 - **The live path needs a real key in the workspace.** Databricks reads it
   from secret scope `sttm_agent/anthropic_api_key`, env var locally. Mock
   mode is gated on `not IS_DATABRICKS`, so a workspace run cannot silently

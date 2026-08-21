@@ -246,14 +246,11 @@ export const WORKBOOK_MISSING_DETAIL =
  * file, and never a measured value. Anything numeric belongs in the metric
  * row and must come from the API (see CorpusMetricRow).
  *
- * AGENT_PIPELINE_POSITION carries the demo narrative: the walkthrough goes
- * through all five agents in pipeline order, and this eyebrow is how the
- * audience knows where they are.
+ * The header carries the agent name ALONE by decision (2026-08-21): no
+ * eyebrow, no tagline, no pipeline position, no wordmark. "to", not "→",
+ * also by decision.
  */
-export const AGENT_PIPELINE_POSITION = "STEP 2 OF 4 · FRD → STTM";
-export const AGENT_NAME = "FRD → STTM Agent";
-export const AGENT_TAGLINE =
-  "Generates source-to-target mappings from an approved Functional Requirements Document.";
+export const AGENT_NAME = "FRD to STTM Agent";
 
 /**
  * Metric-row tile labels. Phrased in the same business-reader voice as the

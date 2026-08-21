@@ -21,6 +21,9 @@
 
 # --- app server -------------------------------------------------------------
 fastapi
+# Required at import time by the UploadFile/Form routes (backend/demo.py);
+# not a transitive dep of fastapi — without it the app dies at startup.
+python-multipart
 uvicorn[standard]
 pydantic>=2
 databricks-sdk
