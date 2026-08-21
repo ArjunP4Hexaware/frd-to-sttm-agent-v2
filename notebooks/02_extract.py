@@ -60,6 +60,19 @@ import os
 from pathlib import Path
 
 IS_DATABRICKS = "dbutils" in globals()
+
+# The deployed Databricks App runs these notebooks as plain SUBPROCESSES, so
+# `dbutils` is NOT in their globals() and IS_DATABRICKS is False -- even though
+# this is a real workspace run that must never silently mock. `app.yaml` sets
+# STTM_APP_MODE=databricks, so that is what distinguishes "deployed App" from
+# "someone's laptop". Without this, the "mock can never run in Databricks"
+# guarantee has a hole exactly where it matters most: a live client demo.
+IS_DATABRICKS_APP = os.environ.get("STTM_APP_MODE", "").strip().lower() == "databricks"
+
+# Mock is a laptop affordance. It is unavailable in a notebook task (dbutils
+# present) AND in the deployed App (STTM_APP_MODE set).
+MOCK_AVAILABLE = not (IS_DATABRICKS or IS_DATABRICKS_APP)
+
 LOCAL_ROOT = Path(__file__).resolve().parent.parent / "local_dev_fixtures"
 
 
@@ -94,13 +107,30 @@ EXTRACTIONS_DIR = f"{OUT_ROOT}/extractions"
 
 # Zero-cost local testing only: skips the real Anthropic call entirely and
 # returns a hand-authored FrdIngestionSpec per doc_id from
-# notebooks/_mock_extractions.py instead. Deliberately local-only (ignored
-# even if the env var is set) -- a real Databricks run should never
-# silently skip the actual extraction call. See that module's docstring and
+# notebooks/_mock_extractions.py instead. Deliberately laptop-only --
+# unavailable both in a notebook task and in the deployed App (see
+# MOCK_AVAILABLE above); a workspace run must never silently skip the
+# actual extraction call. See that module's docstring and
 # README.md's "Local mode" section: this is for exercising the pipeline's
 # plumbing and the review app, NOT a substitute for real extraction-quality
 # evaluation (docs/STANDUP_NOTES.md has those real numbers).
-MOCK_EXTRACTION = (not IS_DATABRICKS) and os.environ.get("STTM_MOCK_EXTRACTION", "") in ("1", "true", "True")
+_MOCK_REQUESTED = os.environ.get("STTM_MOCK_EXTRACTION", "") in ("1", "true", "True")
+
+# In the deployed App a mock request RAISES rather than being ignored. The
+# notebook-task branch keeps its long-standing silent-ignore behaviour (there,
+# the env var is a leftover from a laptop, not an instruction). In the App the
+# env var had to be put there deliberately, so the operator believes mock is
+# on -- and a run that looks live while returning hand-authored specs is the
+# single worst thing that can happen in front of a client.
+if _MOCK_REQUESTED and IS_DATABRICKS_APP:
+    raise ValueError(
+        "STTM_MOCK_EXTRACTION is set while STTM_APP_MODE=databricks (the deployed "
+        "Databricks App). Mock extraction is not available in a workspace run: it "
+        "would present hand-authored specs as a live extraction. Unset "
+        "STTM_MOCK_EXTRACTION in the App environment, or run on a laptop for mock."
+    )
+
+MOCK_EXTRACTION = MOCK_AVAILABLE and _MOCK_REQUESTED
 
 # --------------------------------------------------------------------------- #
 # Provider selection. The program is Anthropic-only as model vendor; the
@@ -133,7 +163,16 @@ if MOCK_EXTRACTION and LLM_PROVIDER not in ("", "mock"):
         f"guess which one you meant -- unset one of them."
     )
 
-USE_MOCK = MOCK_EXTRACTION or ((not IS_DATABRICKS) and LLM_PROVIDER == "mock")
+# Same rule for the explicit provider seam: STTM_LLM_PROVIDER=mock must not be
+# a back door into mock inside the App.
+if LLM_PROVIDER == "mock" and IS_DATABRICKS_APP:
+    raise ValueError(
+        "STTM_LLM_PROVIDER='mock' while STTM_APP_MODE=databricks (the deployed "
+        "Databricks App). Mock extraction is not available in a workspace run -- "
+        "refusing to present hand-authored specs as a live extraction."
+    )
+
+USE_MOCK = MOCK_EXTRACTION or (MOCK_AVAILABLE and LLM_PROVIDER == "mock")
 
 # Provider-accurate banner. The old form printed `MODEL` unconditionally,
 # so a mock run announced a model it never called. Resolved from the provider

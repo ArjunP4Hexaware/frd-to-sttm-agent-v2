@@ -38,9 +38,34 @@ export interface DemoDocument {
   path: string;
   name: string;
   doc_id: string;
-  source: "preloaded" | "upload";
+  source: "preloaded" | "upload" | "sharepoint";
   is_golden: boolean;
   size_bytes: number;
+}
+
+/** SharePoint picker (backend/sharepoint_routes.py). `configured` is derived
+ *  from presence only — no credential value ever crosses this boundary. */
+export interface SharePointConfig {
+  configured: boolean;
+  site: string | null;
+  library: string | null;
+  frd_folder: string | null;
+  output_folder: string | null;
+}
+
+export interface SharePointDocument {
+  item_id: string;
+  name: string;
+  size_bytes: number;
+  modified: string;
+  web_url: string;
+}
+
+export interface SharePointListing {
+  site: string;
+  library: string;
+  folder: string;
+  documents: SharePointDocument[];
 }
 
 export interface DemoStage {
@@ -170,6 +195,38 @@ export function useDemoUpload() {
       form.append("file", file);
       return fetchJson<DemoDocument>("/api/demo/uploads", { method: "POST", body: form });
     },
+  });
+}
+
+/** Never retried: an unconfigured tenant (503) or a Graph refusal (502) is a
+ *  standing condition, not a blip, and retrying just delays the message. */
+export function useSharePointConfig() {
+  return useQuery({
+    queryKey: ["demo", "sharepoint", "config"],
+    queryFn: () => fetchJson<SharePointConfig>("/api/demo/sharepoint/config"),
+    retry: false,
+  });
+}
+
+export function useSharePointDocuments(enabled: boolean) {
+  return useQuery({
+    queryKey: ["demo", "sharepoint", "documents"],
+    queryFn: () => fetchJson<SharePointListing>("/api/demo/sharepoint/documents"),
+    enabled,
+    retry: false,
+  });
+}
+
+/** Downloads one library document into the demo uploads dir and returns it in
+ *  DemoDocument shape, so the caller starts it through the existing run path. */
+export function useSharePointImport() {
+  return useMutation({
+    mutationFn: (doc: { item_id: string; name: string }) =>
+      fetchJson<DemoDocument>("/api/demo/sharepoint/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(doc),
+      }),
   });
 }
 

@@ -31,13 +31,54 @@ resources:
           default: ${var.out_volume}
         - name: contracts_table
           default: ${var.contracts_table}
+        # SharePoint knobs, shared by the fetch and publish tasks. The client
+        # SECRET is deliberately absent -- it resolves from the secret scope
+        # inside the notebook, never from a job parameter.
+        - name: sharepoint_host
+          default: ${var.sharepoint_host}
+        - name: sharepoint_site_path
+          default: ${var.sharepoint_site_path}
+        - name: sharepoint_library
+          default: ${var.sharepoint_library}
+        - name: sharepoint_frd_folder
+          default: ${var.sharepoint_frd_folder}
+        - name: sharepoint_output_folder
+          default: ${var.sharepoint_output_folder}
+        - name: sharepoint_tenant_id
+          default: ${var.sharepoint_tenant_id}
+        - name: sharepoint_client_id
+          default: ${var.sharepoint_client_id}
 
       email_notifications:
         on_failure:
           - ${var.notification_email}
 
       tasks:
+        # Stage 00 pulls approved FRDs from the SharePoint library into
+        # frd_raw. Kept a separate task, not folded into ingest, so a fetch
+        # failure is distinguishable from a parse failure in the job graph and
+        # 01-04 stay network-free. max_retries 0 matches every other task: a
+        # 401/403 from Graph is a configuration error, not a transient one.
+        - task_key: sharepoint_fetch
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/00_sharepoint_fetch.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              raw_volume: frd_raw
+              sharepoint_frd_folder: "{{job.parameters.sharepoint_frd_folder}}"
+              sharepoint_host: "{{job.parameters.sharepoint_host}}"
+              sharepoint_site_path: "{{job.parameters.sharepoint_site_path}}"
+              sharepoint_library: "{{job.parameters.sharepoint_library}}"
+              sharepoint_tenant_id: "{{job.parameters.sharepoint_tenant_id}}"
+              sharepoint_client_id: "{{job.parameters.sharepoint_client_id}}"
+              secret_scope: sttm_agent
+              sharepoint_secret_key: sharepoint_client_secret
+
         - task_key: ingest
+          depends_on:
+            - task_key: sharepoint_fetch
           max_retries: 0
           notebook_task:
             notebook_path: ../notebooks/01_frd_ingest.py
@@ -98,3 +139,33 @@ resources:
               runs_table: frd_sttm_runs
               reference_volume: sttm_reference
               out_volume: "{{job.parameters.out_volume}}"
+
+        # Stage 05 publishes rendered workbooks back to the library. This is
+        # the only task in the job that WRITES to SharePoint, and only inside
+        # sharepoint_output_folder.
+        #
+        # NOTE: wired here so a full pipeline run closes the loop end to end.
+        # If the human review gate should sit before publication -- 04 is
+        # re-run every time a reviewer resolves an ambiguity, and a re-render
+        # is not automatically a re-publish -- remove this task and run
+        # 05_sharepoint_publish on its own after sign-off. See the notebook
+        # header. That is a workflow decision, not a code change.
+        - task_key: sharepoint_publish
+          depends_on:
+            - task_key: render
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/05_sharepoint_publish.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              out_volume: "{{job.parameters.out_volume}}"
+              publish_doc_id: ""
+              sharepoint_output_folder: "{{job.parameters.sharepoint_output_folder}}"
+              sharepoint_host: "{{job.parameters.sharepoint_host}}"
+              sharepoint_site_path: "{{job.parameters.sharepoint_site_path}}"
+              sharepoint_library: "{{job.parameters.sharepoint_library}}"
+              sharepoint_tenant_id: "{{job.parameters.sharepoint_tenant_id}}"
+              sharepoint_client_id: "{{job.parameters.sharepoint_client_id}}"
+              secret_scope: sttm_agent
+              sharepoint_secret_key: sharepoint_client_secret

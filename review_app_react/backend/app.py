@@ -37,10 +37,12 @@ import ambiguity_parsing as ap
 import data_access as da
 from demo import router as demo_router
 from orchestration import router as orchestration_router
+from sharepoint_routes import router as sharepoint_router
 
 app = FastAPI(title="FRD->STTM Gated Ambiguity Review")
 app.include_router(orchestration_router)
 app.include_router(demo_router)
+app.include_router(sharepoint_router)
 
 
 # --------------------------------------------------------------------------- #

@@ -8,6 +8,9 @@ import {
   useDemoArtifactSets,
   useDemoConfig,
   useDemoDocuments,
+  useSharePointConfig,
+  useSharePointDocuments,
+  useSharePointImport,
   useDemoRunSnapshot,
   useDemoUpload,
   useStartDemoRun,
@@ -174,6 +177,94 @@ function LiveSetup({
           <AlertDescription>{(upload.error as Error).message}</AlertDescription>
         </Alert>
       )}
+      <SharePointPicker keyPresent={keyPresent} onConfirm={onConfirm} />
+    </div>
+  );
+}
+
+/**
+ * Pick an FRD straight from the SharePoint document library.
+ *
+ * The picked file is imported into the same demo-uploads directory an upload
+ * lands in and comes back as a DemoDocument, so it starts through the exact
+ * same live run path — there is no separate "run from SharePoint" flow.
+ *
+ * Renders nothing at all when SharePoint is not configured: an unwired tenant
+ * should leave the demo tab looking exactly as it did before.
+ */
+function SharePointPicker({
+  keyPresent,
+  onConfirm,
+}: {
+  keyPresent: boolean;
+  onConfirm: (doc: DemoDocument) => void;
+}) {
+  const configQuery = useSharePointConfig();
+  const configured = configQuery.data?.configured ?? false;
+  const listing = useSharePointDocuments(configured);
+  const importDoc = useSharePointImport();
+
+  if (!configured) return null;
+
+  return (
+    <div className="flex flex-col gap-2 border-t pt-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-sm font-medium">SharePoint document library</span>
+        <span className="text-xs text-muted-foreground mono-id">
+          {configQuery.data?.site}/{configQuery.data?.library}
+          {configQuery.data?.frd_folder ? `/${configQuery.data.frd_folder}` : ""}
+        </span>
+      </div>
+
+      {listing.isLoading && <p className="text-sm text-muted-foreground">Loading documents…</p>}
+
+      {listing.isError && (
+        <Alert variant="destructive">
+          <AlertDescription>{(listing.error as Error).message}</AlertDescription>
+        </Alert>
+      )}
+
+      {listing.isSuccess && listing.data.documents.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          No .docx FRDs in this folder.
+        </p>
+      )}
+
+      {listing.data?.documents.map((doc) => (
+        <Card key={doc.item_id}>
+          <CardContent className="py-2 flex items-center justify-between gap-4">
+            <div>
+              <span className="mono-id text-sm">{doc.name}</span>{" "}
+              <Badge variant="outline">sharepoint</Badge>{" "}
+              <span className="text-xs text-muted-foreground">
+                {(doc.size_bytes / 1024).toFixed(0)} KB · modified {doc.modified.slice(0, 10)}
+              </span>
+            </div>
+            <Button
+              disabled={!keyPresent || importDoc.isPending}
+              onClick={() =>
+                importDoc.mutate(
+                  { item_id: doc.item_id, name: doc.name },
+                  { onSuccess: onConfirm },
+                )
+              }
+            >
+              {importDoc.isPending ? "Fetching…" : "Run live…"}
+            </Button>
+          </CardContent>
+        </Card>
+      ))}
+
+      {importDoc.isError && (
+        <Alert variant="destructive">
+          <AlertDescription>{(importDoc.error as Error).message}</AlertDescription>
+        </Alert>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        The document is downloaded into the same gitignored uploads directory and runs through the identical
+        live pipeline. <strong>Prototype — synthetic or anonymized documents only.</strong>
+      </p>
     </div>
   );
 }

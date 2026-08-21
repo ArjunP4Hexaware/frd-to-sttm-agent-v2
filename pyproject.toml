@@ -10,14 +10,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Everything else the four notebooks need to run as plain local scripts
+# Everything else the pipeline notebooks need to run as plain local scripts
 # (docx/pdf parsing, workbook rendering, the no-Spark local Delta tables).
+# The SharePoint stages (00/05) add nothing here -- frdsttm.sharepoint is
+# standard library only.
 local = [
     "python-docx",
     "pypdf",
     "openpyxl",
     "deltalake",
-    "streamlit",
     "databricks-sdk",
 ]
 # The review app's FastAPI backend (review_app_react/backend). The deployed
