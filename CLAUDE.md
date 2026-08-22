@@ -125,8 +125,9 @@ review_app_react/       FastAPI + Vite/React review app (Databricks App; its
                         (orchestration.py) and upload/import endpoints stay
                         in the backend, UI-less, for tests and local dev.
                         See review_app_react/README.md.
-local_dev_fixtures/     frd_raw/, sttm_reference/ inputs; outputs land here
-demo_frd.docx / demo_sttm.xlsx   the tracked anonymized demo pair
+local_dev_fixtures/     gitignored, NOT in the checkout since 2026-08-22 -- frd_raw/,
+                        sttm_reference/ inputs and run outputs land here when you
+                        supply them locally; nothing FRD/STTM-shaped is tracked
 tools/                  anonymization mapping + applier (mandated fixture path)
 ```
 
@@ -273,15 +274,26 @@ All development happens on `staging`. `main` is the deployment branch;
 
 ## Fixtures & data rules
 
-Only the anonymized demo pair (`demo_frd.docx`, `demo_sttm.xlsx`) and the
-demo replay set (`local_dev_fixtures/sttm_out_live_e2e_20260807b/`, the
-post-fix live E2E run — offline replay for the demo app; see
-docs/LIVE_E2E_2026-08-07.md) are tracked. **Real client documents must NEVER enter this repo** — extractions,
-contracts, and rendered workbooks live in UC volumes (or gitignored
-`local_dev_fixtures/`). The anonymization tooling in `tools/` is the
-mandated path for any new fixture material. Mock extraction specs copy real
-facts from the demo FRD's parsed markdown — they prove plumbing, not
-extraction quality.
+**No FRD or STTM material is tracked in this repo — as of 2026-08-22.** The
+formerly tracked anonymized demo pair (`demo_frd.docx`, `demo_sttm.xlsx`),
+the `local_dev_fixtures/` inputs, and the demo replay set
+(`local_dev_fixtures/sttm_out_live_e2e_20260807b/`, the post-fix live E2E run
+described in docs/LIVE_E2E_2026-08-07.md) were deleted from the working tree
+and `git rm`'d on Arjun's instruction that no client documents — raw or
+derived — live in the repository. They remain in git history until a purge
+is decided. Consequences: a fresh clone has no preloaded FRD, no offline
+replay set and no reference workbook; the replay tests in
+`tests/test_demo_backend.py` skip (they already guarded on the set being
+present); a local run needs you to drop an FRD into
+`local_dev_fixtures/frd_raw/` yourself. **Real client documents must NEVER
+enter this repo** — extractions, contracts, and rendered workbooks live in UC
+volumes (or gitignored `local_dev_fixtures/`). The anonymization tooling in
+`tools/` is the mandated path for any new fixture material, and tracking any
+such material again is a deliberate decision, not a default (the `.gitignore`
+re-include negations were removed for that reason).
+`src/frdsttm/mock_extractions.py` still carries hand-copied facts (file
+patterns, table names, rule text) from the two source FRDs — it is source
+code, not a document, and was left in place; flagged, not silently kept.
 
 ## Known gaps / cautions
 

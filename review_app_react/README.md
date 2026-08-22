@@ -45,11 +45,15 @@ installs). Three feature areas, three tabs:
 
 ## Replay set
 
-`local_dev_fixtures/sttm_out_live_e2e_20260807b/` is tracked deliberately
-(the post-fix live E2E run — see `docs/LIVE_E2E_2026-08-07.md`), so a fresh
-clone can replay the demo offline. Future `sttm_out_demo_*` /
-`sttm_out_live_e2e_*` sets stay untracked by default; discovery scans for
-both families at runtime.
+**No replay set is tracked any more (removed 2026-08-22).**
+`local_dev_fixtures/sttm_out_live_e2e_20260807b/` (the post-fix live E2E run —
+see `docs/LIVE_E2E_2026-08-07.md`) used to be tracked so a fresh clone could
+replay the demo offline; it was deleted along with every other FRD/STTM
+artifact on the "no client documents in the repo" rule (see CLAUDE.md
+"Fixtures & data rules"). A fresh clone therefore opens with an empty "Past
+runs" list until a run completes. Discovery still scans
+`local_dev_fixtures/` for `sttm_out_demo_*` / `sttm_out_live_e2e_*` sets at
+runtime; all of them stay untracked.
 
 ## Local startup
 

@@ -34,91 +34,18 @@ review_app_react/frontend/node_modules/
 review_app_react/frontend/dist/
 
 # ---------------------------------------------------------------------------
-# Demo fixtures -- tracked deliberately, so that `git clone` alone is enough
-# to run the demo and the transfer zip stops being the delivery mechanism.
-#
-# These six files are anonymized: every client identifier was replaced and
-# the result verified per decompressed zip part. They are NOT client
-# artifacts, which is why they are exempt from the rules above.
-#
-# Scoping is deliberately narrow and the ORDER BELOW IS LOAD-BEARING. Git
-# will not descend into an excluded directory, so a parent cannot be
-# re-included by a negation further down -- each level is therefore
-# re-included, then its contents re-excluded, before the next level down.
-# The effect is that exactly six files become visible and everything else
-# under local_dev_fixtures/ (sttm_out_runs/, uploads/, warehouse/,
-# parsed_frd/, extractions/, reports/, rendered/) stays ignored.
-#
-# tools/anonymization_pii_rules_local.py is untouched by any of this and
-# remains ignored by its own rule above.
+# 2026-08-22: the anonymized demo pair (demo_frd.docx / demo_sttm.xlsx), the
+# local_dev_fixtures/ inputs, and the tracked replay set
+# (sttm_out_live_e2e_20260807b/) were REMOVED from the repo and from git's
+# index -- no FRD/STTM material of any kind is tracked any more (they remain
+# in history until a purge is decided). The `!` re-include negations that
+# used to carve those files past the rules above were deleted with them on
+# purpose: do NOT add them back. New fixture material must go through
+# tools/ anonymization AND a deliberate decision before it is tracked.
 # ---------------------------------------------------------------------------
-
-# Repo-root copies. Anchored with a leading slash so these cannot re-include
-# any other .docx/.xlsx elsewhere in the tree.
-!/demo_frd.docx
-!/demo_sttm.xlsx
-
-# Descend into local_dev_fixtures/, then re-exclude its contents.
-!local_dev_fixtures/
-local_dev_fixtures/*
-
-# Descend into the three directories that hold tracked fixtures, then
-# re-exclude their contents. sttm_out_runs/ and uploads/ are deliberately
-# absent here, so they remain excluded by the line above.
-!local_dev_fixtures/frd_raw/
-!local_dev_fixtures/sttm_reference/
-!local_dev_fixtures/sttm_out/
-local_dev_fixtures/frd_raw/*
-local_dev_fixtures/sttm_reference/*
-local_dev_fixtures/sttm_out/*
-
-# One level deeper for the contracts directory.
-!local_dev_fixtures/sttm_out/contracts/
-local_dev_fixtures/sttm_out/contracts/*
-
-# The sttm_out/ and sttm_out/contracts/ descents above no longer re-include
-# any file: the two contract JSONs that used to be negated here are now
-# deliberately untracked, so a fresh clone opens with an empty document list
-# and populates only once a run completes through render (which promotes its
-# contract into sttm_out/contracts/ -- see orchestration.py's
-# _promote_contract; local-mode run steps are in README.md).
-#
-# Those two descents are RETAINED ON PURPOSE, not left behind by oversight.
-# They match nothing today, but a negation added under sttm_out/contracts/
-# later would silently fail without them (git cannot re-include a file whose
-# parent directory is excluded). Meanwhile the `contracts/*` line above keeps
-# the directory's contents ignored, which is exactly what keeps each promoted
-# run output out of git.
-
-# Finally, the two fixture files themselves.
-!local_dev_fixtures/frd_raw/demo_frd.docx
-!local_dev_fixtures/sttm_reference/demo_sttm.xlsx
 
 # Local venv + editable-install build metadata
 .venv/
 src/*.egg-info/
 .pytest_cache/
 
-# ---------------------------------------------------------------------------
-# Tracked demo replay set -- the second live-E2E run's artifact set
-# (docs/LIVE_E2E_2026-08-07.md, post-fix re-run), promoted deliberately so a
-# fresh clone can replay the demo offline, exactly like the demo pair above.
-# Same load-bearing descend-then-re-exclude pattern as the fixtures block:
-# each level is re-included and its contents re-excluded, so exactly this
-# one set becomes visible. FUTURE sets stay untracked by default: any other
-# sttm_out_demo_* / sttm_out_live_e2e_* directory (the demo app's run
-# outputs and later E2E runs) is still caught by `local_dev_fixtures/*`
-# above, as are demo_uploads/ and demo_raw/.
-# ---------------------------------------------------------------------------
-!local_dev_fixtures/sttm_out_live_e2e_20260807b/
-local_dev_fixtures/sttm_out_live_e2e_20260807b/*
-!local_dev_fixtures/sttm_out_live_e2e_20260807b/contracts/
-!local_dev_fixtures/sttm_out_live_e2e_20260807b/contracts/*
-!local_dev_fixtures/sttm_out_live_e2e_20260807b/extractions/
-!local_dev_fixtures/sttm_out_live_e2e_20260807b/extractions/*
-!local_dev_fixtures/sttm_out_live_e2e_20260807b/parsed_frd/
-!local_dev_fixtures/sttm_out_live_e2e_20260807b/parsed_frd/*
-!local_dev_fixtures/sttm_out_live_e2e_20260807b/rendered/
-!local_dev_fixtures/sttm_out_live_e2e_20260807b/rendered/*
-!local_dev_fixtures/sttm_out_live_e2e_20260807b/reports/
-!local_dev_fixtures/sttm_out_live_e2e_20260807b/reports/*
