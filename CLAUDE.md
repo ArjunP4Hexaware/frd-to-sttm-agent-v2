@@ -1,10 +1,15 @@
 # FRD-to-STTM Agent — working notes
 
 > **Read first, every session:** read
-> `../amerihealth-project-master-context-document.md` in its entirety before
-> working in this repo. It is the program-wide master context document
-> (scope, timeline, all three agents, open gaps, and known-stale claims in
-> this file). This file remains authoritative for this repo specifically.
+> `frd-to-sttm-master-context-document.md` (repo root, tracked in git) in
+> its entirety before working in this repo — it is this agent's single
+> get-up-to-speed document (priority + Monday checklist, pipeline, template
+> architecture, proven-vs-unproven state, decisions log). When you are in
+> the original umbrella working folder, ALSO read
+> `../amerihealth-project-master-context-document.md` for program-wide
+> context (all three agents) — that file is not in any git repo and exists
+> only there. This CLAUDE.md remains authoritative for this repo where the
+> derived documents disagree with it.
 
 ## Purpose & pipeline position
 
