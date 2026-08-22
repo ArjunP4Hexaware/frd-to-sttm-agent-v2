@@ -4,12 +4,13 @@
 > `frd-to-sttm-master-context-document.md` (repo root, tracked in git) in
 > its entirety before working in this repo — it is this agent's single
 > get-up-to-speed document (priority + Monday checklist, pipeline, template
-> architecture, proven-vs-unproven state, decisions log). When you are in
-> the original umbrella working folder, ALSO read
-> `../amerihealth-project-master-context-document.md` for program-wide
-> context (all three agents) — that file is not in any git repo and exists
-> only there. This CLAUDE.md remains authoritative for this repo where the
-> derived documents disagree with it.
+> architecture, proven-vs-unproven state, decisions log). On the original
+> dev Mac, ALSO read
+> `../amerihealth-agents/amerihealth-project-master-context-document.md`
+> for program-wide context (all three agents) — that file is not in any git
+> repo; it lives in the umbrella folder, which this repo was moved OUT of on
+> 2026-08-22 (it now sits beside it, not inside it). This CLAUDE.md remains
+> authoritative for this repo where the derived documents disagree with it.
 
 ## Purpose & pipeline position
 
@@ -375,9 +376,11 @@ code, not a document, and was left in place; flagged, not silently kept.
 
 ## Known gaps / cautions
 
-- **The `.venv` was recreated 2026-08-21** at the repo's current location
-  with `.[local,dev,ui]` — shebangs (including `.venv/bin/pytest`) work
-  again. The rebuild surfaced that current FastAPI needs `python-multipart`
+- **The `.venv` was recreated 2026-08-22** (again — the repo moved from
+  `~/Desktop/amerihealth-agents/` to `~/Desktop/` and the venv bakes in
+  absolute paths; `source .venv/bin/activate` then silently pointed at the
+  old path and `pytest` resolved to a global one with 8 import errors). If
+  the folder moves, `rm -rf .venv` and reinstall `.[local,dev,ui]`. The rebuild surfaced that current FastAPI needs `python-multipart`
   at import time for the UploadFile routes; it is now in the `ui` extra AND
   `review_app_react/requirements.txt` (without it the deployed App dies at
   startup, not at first upload).

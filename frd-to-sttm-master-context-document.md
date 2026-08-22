@@ -5,8 +5,9 @@ of any session in this repo (≈8–10 minutes; §§1–3 alone are the 2-minute
 version). It is the single get-up-to-speed document for THIS agent only, and
 it is **tracked in git deliberately** so it travels with every clone — unlike
 the program-wide `amerihealth-project-master-context-document.md`, which
-lives in the (non-git) umbrella folder on the original dev Mac and must be
-copied by hand. This is a *derived* document: where it disagrees with
+lives in the (non-git) umbrella folder `../amerihealth-agents/` on the
+original dev Mac (this repo was moved out of that folder to sit beside it
+on 2026-08-22) and must be copied by hand. This is a *derived* document: where it disagrees with
 `CLAUDE.md`, a file in `docs/`, or the code, those win — but §12 lists the
 places where I verified the other docs were stale.
 
@@ -389,4 +390,4 @@ work is fully done — inflates local per-stage wall clock only.
 | Demo choreography | `docs/DEMO_RUNBOOK.md` (predates the SharePoint-first surface — verify against §5) |
 | App deploy prerequisites | `app.yaml` (repo root) comments, `CLAUDE.md` "Deploy blockers", `review_app_react/README.md` "Databricks Apps deployment" |
 | What the agent looks like to a user | `context/FRD_to_STTM_Agent_Screens.html` (every screen, 2026-08-22) and `context/FRD_to_STTM_Agent_Architecture.pptx` (the two-slide deck; `scripts/build_architecture_deck.py`) |
-| Program-wide context | `../amerihealth-project-master-context-document.md` — umbrella folder on the original Mac ONLY; not in git |
+| Program-wide context | `../amerihealth-agents/amerihealth-project-master-context-document.md` — umbrella folder on the original Mac ONLY (this repo sits beside it since 2026-08-22); not in git |
