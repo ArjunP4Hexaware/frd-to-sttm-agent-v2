@@ -114,6 +114,13 @@ src/frdsttm/            models.py (FrdIngestionSpec, GatedAmbiguity,
                         similarity.py (deterministic FRD↔STTM scoring,
                         thresholds), corpus.py (corpus_index.json),
                         exemplars.py (retrieved-exemplar prompt blocks)
+context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
+                        ACFC-style deck; built by scripts/build_architecture_deck.py
+                        from scripts/deck_assets/) and
+                        FRD_to_STTM_Agent_Screens.html (self-contained
+                        walkthrough of every review-app screen, captured
+                        2026-08-22 against a synthetic corpus). No client
+                        documents — ever.
 contracts/frd_label_contract.json   the versioned FRD label contract — now a
                         frozen input, no longer mirrored anywhere (see
                         "Upstream" above)

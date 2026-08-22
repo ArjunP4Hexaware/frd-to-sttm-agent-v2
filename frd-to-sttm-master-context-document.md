@@ -387,5 +387,6 @@ work is fully done — inflates local per-stage wall clock only.
 | From-scratch rebuild spec | `docs/NATIVE_REBUILD_SPEC.md`, `.claude/skills/frd-to-sttm-agent/SKILL.md` (self-contained; includes the DBU budget) |
 | Live-run record + transport defects | `docs/LIVE_E2E_2026-08-07.md` |
 | Demo choreography | `docs/DEMO_RUNBOOK.md` (predates the SharePoint-first surface — verify against §5) |
-| App deploy prerequisites | `app.yaml` (repo root) comments, `CLAUDE.md` "Deploy blockers" |
+| App deploy prerequisites | `app.yaml` (repo root) comments, `CLAUDE.md` "Deploy blockers", `review_app_react/README.md` "Databricks Apps deployment" |
+| What the agent looks like to a user | `context/FRD_to_STTM_Agent_Screens.html` (every screen, 2026-08-22) and `context/FRD_to_STTM_Agent_Architecture.pptx` (the two-slide deck; `scripts/build_architecture_deck.py`) |
 | Program-wide context | `../amerihealth-project-master-context-document.md` — umbrella folder on the original Mac ONLY; not in git |
