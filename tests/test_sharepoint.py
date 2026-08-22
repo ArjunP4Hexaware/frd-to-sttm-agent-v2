@@ -24,7 +24,7 @@ from frdsttm.sharepoint import (
 CFG = SharePointConfig(
     tenant_id="tid", client_id="cid", client_secret="SUPERSECRET",
     host="example.sharepoint.com", site_path="/sites/DataOffice",
-    library="Project Docs", frd_folder="FRDs", output_folder="STTMs",
+    library="Project Docs", frd_folder="FRDs", reference_folder="STTMs",
 )
 
 
@@ -62,10 +62,27 @@ def test_load_config_reads_params_and_secret():
     values = {"sharepoint_tenant_id": "t", "sharepoint_client_id": "c",
               "sharepoint_host": "h.sharepoint.com", "sharepoint_site_path": "/sites/X",
               "sharepoint_library": "Docs", "sharepoint_frd_folder": "In",
-              "sharepoint_output_folder": "Out"}
+              "sharepoint_reference_folder": "Approved"}
     cfg = load_config(lambda k, d: values.get(k, d), lambda: "shh")
     assert (cfg.tenant_id, cfg.library, cfg.frd_folder) == ("t", "Docs", "In")
+    assert cfg.reference_folder == "Approved" and cfg.sttm_folder == "Approved"
     assert cfg.client_secret == "shh"
+    assert not hasattr(cfg, "output_folder")   # no write target exists any more
+
+
+def test_sttm_folder_falls_back_to_the_frd_folder():
+    values = {"sharepoint_tenant_id": "t", "sharepoint_client_id": "c",
+              "sharepoint_host": "h.sharepoint.com", "sharepoint_site_path": "/sites/X",
+              "sharepoint_frd_folder": "Shared"}
+    cfg = load_config(lambda k, d: values.get(k, d), lambda: "shh")
+    assert cfg.reference_folder == "" and cfg.sttm_folder == "Shared"
+
+
+def test_client_has_no_write_method():
+    """Guard for the 2026-08-22 decision: the agent is read-only against
+    SharePoint by construction, so a READ grant is all it ever needs."""
+    assert not any(n.startswith(("upload", "put", "publish", "delete"))
+                   for n in dir(SharePointClient))
 
 
 @pytest.mark.parametrize("absent", ["sharepoint_tenant_id", "sharepoint_client_id",
@@ -268,24 +285,10 @@ def test_non_json_error_body_still_raises_with_an_excerpt():
         c.list_documents()
 
 
-# --------------------------------------------------------------------------- #
-# upload
-# --------------------------------------------------------------------------- #
-
-def test_upload_file_puts_to_the_output_folder(tmp_path):
-    wb = tmp_path / "demo_frd.sttm.xlsx"
-    wb.write_bytes(b"XLSX")
-    c = _client(_resolved({("PUT", "/content"): _json({"id": "NEW", "name": wb.name})}))
-    assert c.upload_file(wb)["id"] == "NEW"
-    call = c._transport.calls[-1]
-    assert call["method"] == "PUT"
-    assert "/root:/STTMs/demo_frd.sttm.xlsx:/content" in call["url"]
-    assert call["body"] == b"XLSX"
-
-
-def test_upload_file_refuses_oversized_files_rather_than_letting_graph_reject(tmp_path):
-    big = tmp_path / "big.xlsx"
-    big.write_bytes(b"0" * (4 * 1024 * 1024 + 1))
-    c = _client(_resolved({}))
-    with pytest.raises(GraphError, match="file_too_large"):
-        c.upload_file(big)
+def test_list_documents_carries_the_etag_for_change_detection():
+    c = _client(_resolved({("GET", "/children"): _json({"value": [
+        {"id": "1", "name": "a.docx", "size": 3, "lastModifiedDateTime": "m",
+         "webUrl": "w", "eTag": "\"{ABC},3\""},
+    ]})}))
+    [item] = c.list_documents()
+    assert item.etag == "\"{ABC},3\""

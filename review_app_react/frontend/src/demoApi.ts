@@ -5,6 +5,7 @@
  * review/orchestration hooks stay untouched.
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
+import type { GatedItem, ResolutionSubmission } from "./types";
 
 async function errorMessage(res: Response): Promise<string> {
   const body = await res.text().catch(() => "");
@@ -47,37 +48,16 @@ export interface DemoDocument {
   size_bytes: number;
 }
 
-/** SharePoint picker (backend/sharepoint_routes.py). `configured` is derived
- *  from presence only — no credential value ever crosses this boundary. */
+/** SharePoint tenant probe (backend/sharepoint_routes.py). `configured` is
+ *  derived from presence only — no credential value ever crosses this
+ *  boundary. `sttm_folder` is where a reviewer uploads a finished workbook:
+ *  the folder the sync watches. */
 export interface SharePointConfig {
   configured: boolean;
   site: string | null;
   library: string | null;
   frd_folder: string | null;
-  output_folder: string | null;
-}
-
-export interface SharePointDocument {
-  item_id: string;
-  name: string;
-  size_bytes: number;
-  modified: string;
-  web_url: string;
-}
-
-export interface SharePointListing {
-  site: string;
-  library: string;
-  folder: string;
-  documents: SharePointDocument[];
-}
-
-export interface SharePointPublishResult {
-  published: boolean;
-  name: string;
-  size_bytes: number;
-  web_url: string | null;
-  target: string;
+  sttm_folder: string | null;
 }
 
 export interface DemoStage {
@@ -204,35 +184,61 @@ export interface TemplateDecision {
   demoted_from?: string[];
 }
 
+/** One background sync (the SharePoint sync job, or a network-free
+ *  reindex). Exactly one runs at a time; the state survives until the next
+ *  one starts. */
+export interface CorpusSyncState {
+  state: "idle" | "running" | "done" | "failed";
+  mode: "sync" | "reindex" | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  /** Databricks mode only: the sync job-run page. */
+  run_page_url: string | null;
+  summary: Record<string, unknown> | null;
+}
+
 export interface CorpusSummary {
   built: boolean;
   generated_at: string | null;
+  /** When the volumes were last brought in step with SharePoint (null for a
+   *  reindex-only corpus, e.g. smoke fixtures). */
+  synced_at: string | null;
   n_frds: number;
   n_references: number;
   n_pairs: number;
   n_unmapped: number;
   unpaired_references: string[];
+  sync: CorpusSyncState;
 }
 
+/** One FRD as the corpus index knows it — the picker's whole world. */
 export interface CorpusFrd {
   doc_id: string;
   name: string;
   path: string | null;
   runnable: boolean;
+  content_sha256: string | null;
+  web_url: string | null;
+  modified: string | null;
   paired: boolean;
   reference: string | null;
+  matched_by: "name" | "similarity" | null;
   score: number | null;
   confidence: "high" | "low" | null;
   components: { columns: number; tables: number; tokens: number; name: number } | null;
+  reference_web_url: string | null;
+  reference_modified: string | null;
+  reference_size_bytes: number | null;
 }
 
-export interface CorpusBootstrapResult extends CorpusSummary {
+export interface CorpusConfig {
+  /** A tenant is wired, so "Sync now" can be offered. */
+  available: boolean;
   frd_folder: string | null;
   reference_folder: string | null;
-  n_frd_files: number;
-  n_reference_files: number;
-  uploaded_to_uc: number;
-  skipped: { name: string; error: string }[];
+  mode: "local" | "databricks";
+  reference_volume: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -280,92 +286,18 @@ export function useSharePointConfig() {
   });
 }
 
-export function useSharePointDocuments(enabled: boolean) {
-  return useQuery({
-    queryKey: ["demo", "sharepoint", "documents"],
-    queryFn: () => fetchJson<SharePointListing>("/api/demo/sharepoint/documents"),
-    enabled,
-    retry: false,
-  });
-}
+// ---------------------------------------------------------------------------
+// Corpus — the picker's source of truth (backend/corpus_routes.py)
+// ---------------------------------------------------------------------------
 
-/** Downloads one library document into the demo uploads dir and returns it in
- *  DemoDocument shape, so the caller starts it through the existing run path. */
-export function useSharePointImport() {
-  return useMutation({
-    mutationFn: (doc: { item_id: string; name: string }) =>
-      fetchJson<DemoDocument>("/api/demo/sharepoint/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(doc),
-      }),
-  });
-}
-
-/** One library item as the locate flow reports it. */
-export interface SharePointItemInfo {
-  item_id: string;
-  name: string;
-  size_bytes: number;
-  modified: string;
-  web_url: string;
-}
-
-/**
- * The app's primary entry point (decided 2026-08-21 — no uploads): the user
- * names an FRD and the backend finds it in the library. Exact match runs;
- * an existing published STTM short-circuits to presentation; anything
- * ambiguous comes back as candidates for an explicit human pick — never a
- * best-match auto-pick.
- */
-export type LocateResult =
-  | { status: "ready"; document: DemoDocument }
-  /** Since 2026-08-22 the existing_sttm branch ALSO imports the FRD
-   *  (`document`) so the reviewer can deliberately regenerate despite the
-   *  published workbook — the corpus/eval flow depends on exactly that. */
-  | { status: "existing_sttm"; frd: SharePointItemInfo; sttm: SharePointItemInfo; document: DemoDocument }
-  | { status: "candidates"; candidates: SharePointItemInfo[] };
-
-export function useLocateFrd() {
-  return useMutation({
-    mutationFn: (name: string) =>
-      fetchJson<LocateResult>("/api/demo/sharepoint/locate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      }),
-  });
-}
-
-/** Download URL for an EXISTING published STTM (served only for items the
- *  backend re-verifies are in the output folder). */
-export function sharePointSttmUrl(itemId: string): string {
-  return `/api/demo/sharepoint/sttm/${encodeURIComponent(itemId)}`;
-}
-
-/**
- * Publish ONE reviewed workbook to the SharePoint output folder. Publishing
- * is manual by decision (2026-08-21): the backend demands confirm:true, and
- * this hook only ever fires from the two-step publish control after the
- * reviewer's explicit second click — there is no auto-publish path anywhere.
- */
-export function useSharePointPublish() {
-  return useMutation({
-    mutationFn: (req: { set_id: string; doc_id: string }) =>
-      fetchJson<SharePointPublishResult>("/api/demo/sharepoint/publish", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...req, confirm: true }),
-      }),
-  });
-}
-
-/** Corpus state; unbuilt is a normal 200, so no retry noise. */
+/** Corpus state; unbuilt is a normal 200, so no retry noise. Polls while a
+ *  sync is running so the stats and the list refresh as it lands. */
 export function useCorpusSummary() {
   return useQuery({
     queryKey: ["demo", "corpus", "summary"],
     queryFn: () => fetchJson<CorpusSummary>("/api/demo/corpus"),
     retry: false,
+    refetchInterval: (query) => (query.state.data?.sync.state === "running" ? 2000 : false),
   });
 }
 
@@ -378,21 +310,37 @@ export function useCorpusFrds(enabled: boolean) {
   });
 }
 
+export function useCorpusConfig() {
+  return useQuery({
+    queryKey: ["demo", "corpus", "config"],
+    queryFn: () => fetchJson<CorpusConfig>("/api/demo/corpus/config"),
+    retry: false,
+  });
+}
+
 /**
- * Corpus bootstrap: downloads every FRD + reference STTM from the SharePoint
- * library and rebuilds the corpus index. Zero model calls (ingest-all is not
- * extract-all), but it writes into the reference/raw volumes, so the backend
- * demands confirm:true and this hook only fires from the two-step control.
+ * "Sync now" / "Rebuild index": starts ONE background sync (202) — the
+ * SharePoint sync job in the deployed App, the same code in-process
+ * locally — or a network-free reindex of what the volumes already hold.
+ * Zero model calls, but it rewrites the volumes and the index, so the
+ * backend demands confirm:true and this hook only fires from the two-step
+ * control. Progress comes back through useCorpusSummary's `sync` field.
  */
-export function useCorpusBootstrap() {
+export function useCorpusSync() {
   return useMutation({
-    mutationFn: () =>
-      fetchJson<CorpusBootstrapResult>("/api/demo/corpus/bootstrap", {
+    mutationFn: (mode: "sync" | "reindex") =>
+      fetchJson<CorpusSyncState>("/api/demo/corpus/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
+        body: JSON.stringify({ confirm: true, mode }),
       }),
   });
+}
+
+/** Download URL for an approved STTM in the reference volume (served only
+ *  for names the corpus index lists). */
+export function corpusReferenceUrl(name: string): string {
+  return `/api/demo/corpus/references/${encodeURIComponent(name)}`;
 }
 
 export function useStartDemoRun() {
@@ -432,6 +380,66 @@ export function useDemoResults(setId: string | null, docId: string | null) {
         `/api/demo/artifacts/${encodeURIComponent(setId as string)}/results?doc=${encodeURIComponent(docId as string)}`,
       ),
     enabled: setId !== null && docId !== null,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Human-in-the-loop on a finished run (backend/demo.py, 2026-08-22 evening)
+// ---------------------------------------------------------------------------
+export interface DemoRerenderState {
+  state: "idle" | "running" | "done" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  /** Databricks mode only: the render job-run page. */
+  run_page_url: string | null;
+}
+
+export interface DemoReview {
+  set_id: string;
+  doc_id: string;
+  items: GatedItem[];
+  n_items: number;
+  n_resolved: number;
+  rerender: DemoRerenderState;
+}
+
+/** The gated items of a finished run with their saved resolutions. Polls
+ *  while a re-render is running so the panel flips to "applied" on its own. */
+export function useDemoReview(setId: string | null, docId: string | null) {
+  return useQuery({
+    queryKey: ["demo", "review", setId, docId],
+    queryFn: () =>
+      fetchJson<DemoReview>(
+        `/api/demo/artifacts/${encodeURIComponent(setId as string)}/review?doc=${encodeURIComponent(docId as string)}`,
+      ),
+    enabled: setId !== null && docId !== null,
+    refetchInterval: (query) => (query.state.data?.rerender.state === "running" ? 2000 : false),
+  });
+}
+
+/** Save ONE resolution into the run's contract (same rule as the legacy
+ *  review flow: a candidate-having item needs a pick or none-of-these; a
+ *  candidate-less one takes free text). Nothing is re-rendered here. */
+export function useSubmitDemoResolution(setId: string, docId: string) {
+  return useMutation({
+    mutationFn: (submission: ResolutionSubmission) =>
+      fetchJson<GatedItem>(
+        `/api/demo/artifacts/${encodeURIComponent(setId)}/resolutions?doc=${encodeURIComponent(docId)}`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(submission) },
+      ),
+  });
+}
+
+/** Fold the saved resolutions into the STTM: re-run stage 04 only (no model
+ *  call, nothing billed). 202; progress via useDemoReview's `rerender`. */
+export function useDemoRerender(setId: string, docId: string) {
+  return useMutation({
+    mutationFn: () =>
+      fetchJson<DemoRerenderState>(
+        `/api/demo/artifacts/${encodeURIComponent(setId)}/rerender?doc=${encodeURIComponent(docId)}`,
+        { method: "POST" },
+      ),
   });
 }
 

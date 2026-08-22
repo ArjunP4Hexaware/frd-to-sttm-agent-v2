@@ -404,3 +404,121 @@ def test_fetch_mode_rejects_unrecognized_values():
     proc = _run_00({"SHAREPOINT_FETCH_MODE": "maybe"})
     assert proc.returncode != 0
     assert "sharepoint_fetch_mode" in proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# the SYNC job (2026-08-22): trigger, parameters, volume mirror
+# --------------------------------------------------------------------------- #
+
+class _SyncJobs:
+    def __init__(self, names):
+        self._names = names
+        self.run_now_calls = []
+
+    def list(self, name=None):
+        import types
+        return [types.SimpleNamespace(job_id=i + 100, settings=types.SimpleNamespace(name=n))
+                for i, n in enumerate(self._names) if name is None or n == name]
+
+    def run_now(self, job_id, job_parameters):
+        import types
+        self.run_now_calls.append({"job_id": job_id, "job_parameters": job_parameters})
+        return types.SimpleNamespace(run_id=777)
+
+
+class _SyncFiles:
+    """A flat fake volume tree: {dir: {name: bytes}}."""
+
+    def __init__(self, tree):
+        self.tree = tree
+
+    def list_directory_contents(self, path):
+        import types
+        if path not in self.tree:
+            raise RuntimeError(f"no such volume dir {path}")
+        for name, payload in self.tree[path].items():
+            yield types.SimpleNamespace(path=f"{path}/{name}", is_directory=payload is None)
+
+    def download(self, path):
+        import io, types
+        d, _, name = path.rpartition("/")
+        return types.SimpleNamespace(contents=io.BytesIO(self.tree[d][name]))
+
+
+def _sync_w(names=("frd_sttm_sharepoint_sync",), tree=None):
+    import types
+    return types.SimpleNamespace(jobs=_SyncJobs(list(names)), files=_SyncFiles(tree or {}))
+
+
+def test_resolve_sync_job_id_uses_its_own_name_and_env(monkeypatch):
+    monkeypatch.delenv("STTM_SYNC_JOB_ID", raising=False)
+    assert jr.resolve_sync_job_id(_sync_w()) == 100
+    monkeypatch.setenv("STTM_SYNC_JOB_ID", "4242")
+    assert jr.resolve_sync_job_id(_sync_w(names=())) == 4242
+
+
+def test_resolve_sync_job_id_missing_names_the_sync_env_vars(monkeypatch):
+    monkeypatch.delenv("STTM_SYNC_JOB_ID", raising=False)
+    with pytest.raises(jr.JobRunnerError) as info:
+        jr.resolve_sync_job_id(_sync_w(names=("frd_sttm_pipeline",)))
+    assert "STTM_SYNC_JOB_NAME" in str(info.value) and "STTM_SYNC_JOB_ID" in str(info.value)
+
+
+def test_start_sync_job_passes_only_the_mode():
+    """The sync job runs against the REAL volumes by its own defaults; the
+    app never re-points it."""
+    w = _sync_w()
+    assert jr.start_sync_job(w, 100, "sync") == 777
+    assert w.jobs.run_now_calls == [{"job_id": 100, "job_parameters": {"sync_mode": "sync"}}]
+    jr.start_sync_job(w, 100, "reindex")
+    assert w.jobs.run_now_calls[-1]["job_parameters"] == {"sync_mode": "reindex"}
+    with pytest.raises(jr.JobRunnerError):
+        jr.sync_job_parameters("maybe")
+
+
+def test_mirror_corpus_mirrors_both_volumes_and_drops_departed_files(tmp_path):
+    root = jr.volume_root()
+    tree = {
+        f"{root}/{jr.RAW_VOLUME}": {"a.docx": b"A", "sub": None},
+        f"{root}/{jr.REFERENCE_VOLUME}": {"a.sttm.xlsx": b"X", "corpus_index.json": b"{}"},
+    }
+    frd_local, ref_local = tmp_path / "frd_raw", tmp_path / "sttm_reference"
+    frd_local.mkdir()
+    (frd_local / "gone.docx").write_bytes(b"stale")   # no longer in the volume
+    counts = jr.mirror_corpus(_sync_w(tree=tree), frd_local, ref_local)
+    assert counts == {"frd": 1, "reference": 2}
+    assert (frd_local / "a.docx").read_bytes() == b"A"
+    assert not (frd_local / "gone.docx").exists()
+    assert (ref_local / "corpus_index.json").is_file()
+    assert list(frd_local.glob("*.part")) == []
+
+
+def test_mirror_corpus_unreadable_volume_raises_an_actionable_error(tmp_path):
+    with pytest.raises(jr.JobRunnerError) as info:
+        jr.mirror_corpus(_sync_w(tree={}), tmp_path / "a", tmp_path / "b")
+    assert "READ" in str(info.value)
+
+
+def test_wait_for_run_returns_on_success_and_raises_on_failure(monkeypatch):
+    import types
+    monkeypatch.setattr(jr, "POLL_SECONDS", 0)
+
+    class Jobs:
+        def __init__(self, states):
+            self.states = list(states)
+
+        def get_run(self, run_id):
+            life, result = self.states.pop(0)
+            return types.SimpleNamespace(
+                tasks=[types.SimpleNamespace(task_key="sharepoint_sync", run_id=1,
+                                             state=types.SimpleNamespace(
+                                                 life_cycle_state=life, result_state=result,
+                                                 state_message="boom"))],
+                state=types.SimpleNamespace(life_cycle_state=life, result_state=result))
+
+        def get_run_output(self, run_id):
+            return types.SimpleNamespace(error="notebook raised")
+
+    jr.wait_for_run(types.SimpleNamespace(jobs=Jobs([("RUNNING", ""), ("TERMINATED", "SUCCESS")])), 1)
+    with pytest.raises(jr.JobRunnerError, match="notebook raised"):
+        jr.wait_for_run(types.SimpleNamespace(jobs=Jobs([("TERMINATED", "FAILED")])), 1)

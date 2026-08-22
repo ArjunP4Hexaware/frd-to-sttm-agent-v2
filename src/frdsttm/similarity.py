@@ -208,26 +208,93 @@ def score_match(frd_feat: dict, wb_feat: dict) -> dict:
 # --------------------------------------------------------------------------- #
 # corpus pairing (FRD ↔ its own existing STTM)
 # --------------------------------------------------------------------------- #
-def pair_corpus(frd_feats: dict, wb_feats: dict, thresholds: dict) -> dict:
-    """Greedy one-to-one pairing, best scores first.
+# Trailing name tokens that say WHAT a file is, not WHICH document it is.
+# "Community Risk FRD.docx" and "Community Risk FRD.sttm.xlsx" — or
+# "Community Risk STTM.xlsx" — all key to "communityrisk".
+_NAME_ROLE_TOKENS = {"sttm", "frd", "mapping", "mappings"}
 
-    Returns {"pairs": {doc_id: {reference, score, confidence, components}},
-             "unmapped": [doc_id...], "unpaired_references": [name...]}.
-    Confidence is a computed verdict (code, never a model): "high" at/above
-    pair_high, else "low". Below pair_min an FRD stays unmapped — a wrong
-    pair poisons both the template library and the eval, so the gate errs
-    toward unmapped and the reviewer can see the scores.
+
+def name_key(name: str) -> str:
+    """Normalised identity of a document name for exact-name pairing.
+
+    Strips every extension (``.sttm.xlsx`` included), lower-cases, splits on
+    non-alphanumerics, and drops trailing role tokens. Empty when nothing
+    identifying is left, so it can never match another empty key.
     """
+    stem = str(name)
+    while True:
+        head, dot, tail = stem.rpartition(".")
+        if not dot or not tail or not tail.isalnum() or len(tail) > 5:
+            break
+        stem = head
+    tokens = [t for t in re.split(r"[^a-z0-9]+", stem.lower()) if t]
+    while tokens and tokens[-1] in _NAME_ROLE_TOKENS:
+        tokens.pop()
+    return "".join(tokens)
+
+
+def pair_corpus(frd_feats: dict, wb_feats: dict, thresholds: dict) -> dict:
+    """One-to-one pairing: exact NAME match first, then greedy best-score.
+
+    Returns {"pairs": {doc_id: {reference, score, confidence, components,
+                                 matched_by}},
+             "unmapped": [doc_id...], "unpaired_references": [name...]}.
+
+    Name match (``matched_by: "name"``) is definitive: an STTM whose name
+    keys to exactly one FRD — the naming convention the renderer itself
+    emits (``<doc_id>.sttm.xlsx``) and the one a reviewer follows when they
+    upload a finished workbook — is that FRD's STTM, whatever the content
+    score says; confidence is "high" and the score is still recorded for
+    display. Ambiguous keys (two FRDs or two workbooks sharing one key)
+    are NOT name-paired — they fall through to similarity, never guessed.
+
+    Similarity (``matched_by: "similarity"``): confidence is a computed
+    verdict (code, never a model): "high" at/above pair_high, else "low".
+    Below pair_min an FRD stays unmapped — a wrong pair poisons both the
+    template library and the eval, so the gate errs toward unmapped and
+    the reviewer can see the scores.
+    """
+    pairs: dict = {}
+    used_refs: set[str] = set()
+
+    # -- name match, one-to-one and unambiguous only
+    frd_by_key: dict[str, list[str]] = {}
+    for doc_id in frd_feats:
+        k = name_key(doc_id)
+        if k:
+            frd_by_key.setdefault(k, []).append(doc_id)
+    ref_by_key: dict[str, list[str]] = {}
+    for name in wb_feats:
+        k = name_key(name)
+        if k:
+            ref_by_key.setdefault(k, []).append(name)
+    for k, doc_ids in frd_by_key.items():
+        refs = ref_by_key.get(k, [])
+        if len(doc_ids) != 1 or len(refs) != 1:
+            continue
+        doc_id, name = doc_ids[0], refs[0]
+        m = score_match(frd_feats[doc_id], wb_feats[name])
+        pairs[doc_id] = {
+            "reference": name,
+            "score": m["score"],
+            "components": m["components"],
+            "confidence": "high",
+            "matched_by": "name",
+        }
+        used_refs.add(name)
+
+    # -- similarity for the rest
     scored = []
     for doc_id, ff in frd_feats.items():
+        if doc_id in pairs:
+            continue
         for name, wf in wb_feats.items():
+            if name in used_refs:
+                continue
             m = score_match(ff, wf)
             if m["score"] >= thresholds["pair_min"]:
                 scored.append((m["score"], doc_id, name, m))
     scored.sort(key=lambda t: (-t[0], t[1], t[2]))
-
-    pairs: dict = {}
-    used_refs: set[str] = set()
     for score, doc_id, name, m in scored:
         if doc_id in pairs or name in used_refs:
             continue
@@ -236,6 +303,7 @@ def pair_corpus(frd_feats: dict, wb_feats: dict, thresholds: dict) -> dict:
             "score": m["score"],
             "components": m["components"],
             "confidence": "high" if m["score"] >= thresholds["pair_high"] else "low",
+            "matched_by": "similarity",
         }
         used_refs.add(name)
 

@@ -3,40 +3,39 @@ import { Alert, AlertDescription, AlertTitle, Button, Spinner } from "@databrick
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import {
-  sharePointSttmUrl,
+  corpusReferenceUrl,
   subscribeDemoRunEvents,
   useDemoConfig,
   useDemoRunSnapshot,
-  useLocateFrd,
   useSharePointConfig,
   useStartDemoRun,
 } from "../demoApi";
-import type { DemoDocument, DemoRunEvent, DemoRunSnapshot, SharePointItemInfo } from "../demoApi";
+import type { CorpusFrd, DemoRunEvent, DemoRunSnapshot } from "../demoApi";
 import { CorpusPanel } from "./CorpusPanel";
 import { DemoResults } from "./DemoResults";
 
 /**
- * The "Select FRD" flow — the app's primary entry point (decided
- * 2026-08-21, superseding the upload/demo framing): the user NAMES an FRD,
- * the app locates it in the SharePoint library itself, and then either
+ * The "Select FRD" flow — the app's primary entry point. Since 2026-08-22
+ * the picker is the CORPUS: the list of FRDs the SharePoint sync has landed
+ * in Unity Catalog, each marked mapped or unmapped by the corpus index
+ * (exact name match first, deterministic similarity second). Nothing is
+ * looked up in SharePoint on the request path, and nothing is ever written
+ * there.
  *
- *  - presents the already-published STTM if one exists in the output folder
- *    first — and, since 2026-08-22, offers a deliberate two-step
- *    "regenerate anyway" that re-enters the billed-run gate (the
- *    corpus/eval flow depends on regenerating documents whose STTMs
- *    exist; the published workbook is only replaced by an explicit
- *    confirm-gated publish of the new render), or
- *  - runs the real pipeline on it, behind the billed-run confirmation.
- *
- * Matching is exact-or-explicit-pick: an ambiguous name renders candidates
- * for the user to choose from; nothing is ever auto-picked. The corpus
- * panel below the name entry lists every known FRD (paired + unmapped) and
- * feeds the SAME locate flow — one run path.
+ *  - an UNMAPPED FRD → "Generate STTM" → the billed-run confirmation → run
+ *    → results. The finished workbook is downloaded and, after any final
+ *    edits, uploaded to the library's STTM folder BY THE REVIEWER; the next
+ *    sync pulls it in and pairs it.
+ *  - a MAPPED FRD → its approved STTM is presented first (download from the
+ *    reference volume, link to SharePoint). A deliberate two-step
+ *    "regenerate anyway" re-enters the billed-run gate — every such run is
+ *    an automatic golden-pair eval against the existing workbook, which is
+ *    left untouched.
  */
 type Phase =
   | { kind: "setup" }
-  | { kind: "existing"; frd: SharePointItemInfo; sttm: SharePointItemInfo; doc: DemoDocument }
-  | { kind: "confirm"; doc: DemoDocument }
+  | { kind: "existing"; frd: CorpusFrd }
+  | { kind: "confirm"; frd: CorpusFrd }
   | { kind: "running"; runId: string }
   | { kind: "results"; setId: string; docId: string };
 
@@ -47,21 +46,20 @@ export function DemoFlow() {
     <div className="flex flex-col gap-6">
       {phase.kind === "setup" && (
         <MappingSetup
-          onExisting={(frd, sttm, doc) => setPhase({ kind: "existing", frd, sttm, doc })}
-          onReadyToRun={(doc) => setPhase({ kind: "confirm", doc })}
+          onExisting={(frd) => setPhase({ kind: "existing", frd })}
+          onGenerate={(frd) => setPhase({ kind: "confirm", frd })}
         />
       )}
       {phase.kind === "existing" && (
         <ExistingSttmView
           frd={phase.frd}
-          sttm={phase.sttm}
           onBack={() => setPhase({ kind: "setup" })}
-          onRegenerate={() => setPhase({ kind: "confirm", doc: phase.doc })}
+          onRegenerate={() => setPhase({ kind: "confirm", frd: phase.frd })}
         />
       )}
       {phase.kind === "confirm" && (
         <ConfirmDialog
-          doc={phase.doc}
+          frd={phase.frd}
           onCancel={() => setPhase({ kind: "setup" })}
           onStarted={(runId) => setPhase({ kind: "running", runId })}
         />
@@ -88,45 +86,31 @@ export function DemoFlow() {
 }
 
 // ---------------------------------------------------------------------------
-// Setup: name an FRD → locate in SharePoint; past runs below
+// Setup: the corpus picker (unmapped FRDs first, mapped ones below)
 // ---------------------------------------------------------------------------
 function MappingSetup({
   onExisting,
-  onReadyToRun,
+  onGenerate,
 }: {
-  onExisting: (frd: SharePointItemInfo, sttm: SharePointItemInfo, doc: DemoDocument) => void;
-  onReadyToRun: (doc: DemoDocument) => void;
+  onExisting: (frd: CorpusFrd) => void;
+  onGenerate: (frd: CorpusFrd) => void;
 }) {
   const configQuery = useDemoConfig();
   const spConfig = useSharePointConfig();
-  const locate = useLocateFrd();
-  const [name, setName] = useState("");
 
   const mode = configQuery.data?.mode ?? "local";
   const keyPresent = mode === "databricks" ? true : (configQuery.data?.api_key_present ?? false);
   const configured = spConfig.data?.configured ?? false;
 
-  function submit(candidateName?: string) {
-    const query = (candidateName ?? name).trim();
-    if (!query) return;
-    locate.mutate(query, {
-      onSuccess: (result) => {
-        if (result.status === "existing_sttm") onExisting(result.frd, result.sttm, result.document);
-        else if (result.status === "ready") onReadyToRun(result.document);
-        // "candidates" renders below from locate.data.
-      },
-    });
-  }
-
   return (
     <div className="flex flex-col gap-4">
       {!configured && spConfig.isSuccess && (
-        <Alert variant="destructive">
+        <Alert>
           <AlertTitle>SharePoint is not connected</AlertTitle>
           <AlertDescription>
-            This app locates FRDs in the SharePoint document library, which is not configured on this
-            backend (tenant, client id, host, site, and client secret). Wire the SharePoint environment
-            settings and reload.
+            No tenant is configured on this backend (tenant, client id, host, site, and client secret), so
+            the library cannot be synced from here. FRDs already in the volumes can still be listed and
+            run; the index can be rebuilt from them with “Rebuild index”.
           </AlertDescription>
         </Alert>
       )}
@@ -134,96 +118,43 @@ function MappingSetup({
         <Alert variant="destructive">
           <AlertTitle>Pipeline runs unavailable</AlertTitle>
           <AlertDescription>
-            ANTHROPIC_API_KEY is not configured on the backend (environment or repo .env), so a located FRD
-            cannot be processed. Existing STTMs and past runs remain viewable.
+            ANTHROPIC_API_KEY is not configured on the backend (environment or repo .env), so an FRD cannot
+            be processed. Existing STTMs and past runs remain viewable.
           </AlertDescription>
         </Alert>
       )}
 
       <div>
         <h2 className="eyebrow mb-2">Select FRD</h2>
-        <p className="text-sm text-muted-foreground mb-3">
-          Name the FRD and the app finds it in{" "}
-          <span className="mono-id">
-            {spConfig.data?.site ?? "SharePoint"}/{spConfig.data?.library ?? ""}
-            {spConfig.data?.frd_folder ? `/${spConfig.data.frd_folder}` : ""}
-          </span>
-          . If a mapping for it has already been published, it is presented as-is; otherwise the pipeline
-          runs on the document.
+        <p className="text-sm text-muted-foreground">
+          The list below is what the SharePoint sync has landed in Unity Catalog. Pick an FRD that has no
+          STTM yet to draft one; an FRD that already has an STTM is presented as-is.
         </p>
-        <div className="flex gap-2">
-          <input
-            className="flex-1 border border-input rounded-md px-3 py-2 text-sm bg-card"
-            placeholder="FRD document name, e.g. Community Risk FRD"
-            value={name}
-            disabled={!configured}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-            }}
-          />
-          <Button disabled={!configured || locate.isPending || !name.trim()} onClick={() => submit()}>
-            {locate.isPending ? "Locating…" : "Locate FRD"}
-          </Button>
-        </div>
       </div>
 
-      {locate.isError && (
-        <Alert variant="destructive">
-          <AlertDescription>{(locate.error as Error).message}</AlertDescription>
-        </Alert>
-      )}
-
-      {locate.data?.status === "candidates" && (
-        <div className="flex flex-col gap-2">
-          <p className="text-sm text-muted-foreground">
-            No exact match — did you mean one of these? Nothing is picked automatically.
-          </p>
-          {locate.data.candidates.map((c) => (
-            <Card key={c.item_id}>
-              <CardContent className="py-2 flex items-center justify-between gap-4">
-                <div>
-                  <span className="mono-id text-sm">{c.name}</span>{" "}
-                  <span className="text-xs text-muted-foreground">
-                    {(c.size_bytes / 1024).toFixed(0)} KB · modified {c.modified.slice(0, 10)}
-                  </span>
-                </div>
-                <Button variant="outline" onClick={() => submit(c.name)}>
-                  Use this one
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      <CorpusPanel onPick={(pickedName) => submit(pickedName)} />
-
+      <CorpusPanel onGenerate={onGenerate} onExisting={onExisting} canRun={keyPresent} />
     </div>
   );
 }
 
 /**
- * An FRD that already has a published STTM: present it FIRST — nothing is
- * regenerated on locate. Since 2026-08-22 a deliberate two-step
- * "regenerate anyway" affordance re-enters the billed-run gate (the corpus
- * flow regenerates documents whose STTMs exist, and every such run is an
- * automatic golden-pair eval). There is still NO publish control here: the
- * published workbook is only ever replaced by an explicit confirm-gated
- * publish of the NEW render, from the results view.
+ * An FRD that already has an approved STTM: present it FIRST — nothing is
+ * regenerated on selection. A deliberate two-step "regenerate anyway"
+ * re-enters the billed-run gate (every such run is an automatic golden-pair
+ * eval against the existing workbook). Nothing here writes anywhere: the
+ * existing STTM stays exactly where it is in SharePoint.
  */
 function ExistingSttmView({
   frd,
-  sttm,
   onBack,
   onRegenerate,
 }: {
-  frd: SharePointItemInfo;
-  sttm: SharePointItemInfo;
+  frd: CorpusFrd;
   onBack: () => void;
   onRegenerate: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const reference = frd.reference ?? "";
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -233,24 +164,31 @@ function ExistingSttmView({
       </div>
       <Card className="border-2">
         <CardHeader>
-          <CardTitle>This FRD already has a published STTM</CardTitle>
+          <CardTitle>This FRD already has an STTM</CardTitle>
           <CardDescription>
             <span className="mono-id">{frd.name}</span> is mapped by{" "}
-            <span className="mono-id">{sttm.name}</span>, published to the SharePoint output folder
-            (modified {sttm.modified.slice(0, 10)}, {(sttm.size_bytes / 1024).toFixed(0)} KB). It is
-            presented as-is — nothing was regenerated.
+            <span className="mono-id">{reference}</span>
+            {frd.reference_modified ? ` (modified ${frd.reference_modified.slice(0, 10)}` : ""}
+            {frd.reference_size_bytes != null
+              ? `${frd.reference_modified ? ", " : " ("}${(frd.reference_size_bytes / 1024).toFixed(0)} KB)`
+              : frd.reference_modified
+                ? ")"
+                : ""}
+            . Paired by {frd.matched_by === "name" ? "exact name" : "content similarity"}
+            {frd.score != null ? ` (${Math.round(frd.score * 100)}% match)` : ""}. It is presented as-is —
+            nothing was regenerated.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <div className="flex gap-2">
             <Button asChild>
-              <a href={sharePointSttmUrl(sttm.item_id)} download>
+              <a href={corpusReferenceUrl(reference)} download>
                 Download the STTM (.xlsx)
               </a>
             </Button>
-            {sttm.web_url && (
+            {frd.reference_web_url && (
               <Button variant="outline" asChild>
-                <a href={sttm.web_url} target="_blank" rel="noreferrer">
+                <a href={frd.reference_web_url} target="_blank" rel="noreferrer">
                   Open in SharePoint ↗
                 </a>
               </Button>
@@ -258,15 +196,15 @@ function ExistingSttmView({
           </div>
           <div className="flex items-center gap-2 pt-1 border-t">
             {!confirming ? (
-              <Button variant="outline" onClick={() => setConfirming(true)}>
+              <Button variant="outline" onClick={() => setConfirming(true)} disabled={!frd.runnable}>
                 Regenerate this mapping anyway…
               </Button>
             ) : (
               <>
                 <span className="text-sm text-muted-foreground">
-                  Runs the full pipeline on <span className="mono-id">{frd.name}</span> again. The
-                  published workbook is untouched until you explicitly publish the new result, and the
-                  new run is scored against the existing STTM.
+                  Runs the full pipeline on <span className="mono-id">{frd.name}</span> again. The existing
+                  STTM is untouched — nothing is written to SharePoint — and the new draft is scored against
+                  it.
                 </span>
                 <Button onClick={onRegenerate}>Continue</Button>
                 <Button variant="ghost" onClick={() => setConfirming(false)}>
@@ -276,8 +214,8 @@ function ExistingSttmView({
             )}
           </div>
           <p className="text-xs text-muted-foreground">
-            The published workbook stays the system of record until a new render is explicitly
-            published over it.
+            The approved workbook in SharePoint stays the system of record. If you want the new draft to
+            replace it, upload the draft there yourself after review; the next sync re-pairs it.
           </p>
         </CardContent>
       </Card>
@@ -289,11 +227,11 @@ function ExistingSttmView({
 // Confirmation — the billed-call gate
 // ---------------------------------------------------------------------------
 function ConfirmDialog({
-  doc,
+  frd,
   onCancel,
   onStarted,
 }: {
-  doc: DemoDocument;
+  frd: CorpusFrd;
   onCancel: () => void;
   onStarted: (runId: string) => void;
 }) {
@@ -309,7 +247,7 @@ function ConfirmDialog({
       <CardHeader>
         <CardTitle>Start a live, billed run?</CardTitle>
         <CardDescription>
-          <span className="mono-id">{doc.name}</span> will be processed end to end{" "}
+          <span className="mono-id">{frd.name}</span> will be processed end to end{" "}
           {isJob ? (
             <>
               as the Databricks Job <span className="mono-id">frd_sttm_pipeline</span> in this workspace
@@ -325,8 +263,15 @@ function ConfirmDialog({
           <p className="text-sm">
             Expected scale: <strong>~{est.calls} billed API call</strong> (~${est.usd.toFixed(2)}), {duration}{" "}
             end to end{isJob ? " (most of it Databricks task startup)" : ""}. Outputs are written to a
-            run-scoped location.
+            run-scoped location; nothing is written to SharePoint.
           </p>
+        )}
+        {!frd.path && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              This FRD is in the corpus index but its file is not on this backend yet — run a sync first.
+            </AlertDescription>
+          </Alert>
         )}
         {start.isError && (
           <Alert variant="destructive">
@@ -335,8 +280,8 @@ function ConfirmDialog({
         )}
         <div className="flex gap-2">
           <Button
-            disabled={start.isPending}
-            onClick={() => start.mutate(doc.path, { onSuccess: (snap) => onStarted(snap.id) })}
+            disabled={start.isPending || !frd.path}
+            onClick={() => frd.path && start.mutate(frd.path, { onSuccess: (snap) => onStarted(snap.id) })}
           >
             {start.isPending ? "Starting…" : "Run it"}
           </Button>

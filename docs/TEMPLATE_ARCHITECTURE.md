@@ -6,10 +6,13 @@ ACFC rebuilder needs; the code is the authority on details.
 
 ## The idea in one paragraph
 
-Every **approved FRD→STTM pair is a template**. On first run in an
-environment, the app ingests every FRD and STTM it can reach in SharePoint,
-pairs them deterministically, and stores the result as a corpus index in
-Unity Catalog (the reference volume). When an **unmapped** FRD is selected
+Every **approved FRD→STTM pair is a template**. The SharePoint **sync**
+(`frdsttm/sync.py`; the scheduled `frd_sttm_sharepoint_sync` job and the
+app's "Sync now") lands every FRD and STTM it can reach in SharePoint in
+the `frd_raw` / `sttm_reference` volumes — bulk on its first tick,
+incrementally after — pairs them deterministically, and stores the result
+as a corpus index in Unity Catalog (the reference volume). When an
+**unmapped** FRD is selected
 for generation, the agent retrieves the most similar approved pairs: their
 conventions feed the extraction prompt (stage 02), the best-matching
 workbook(s) drive the rendered layout and dictionary (stage 04), and the
@@ -33,8 +36,8 @@ one extraction call per document (stage 02). Everything else is plain code:
   "84% of this workbook's columns appear in the FRD". Databricks-hosted
   embeddings (in-workspace, data never leaves UC) are the designed upgrade
   path if the corpus outgrows lexical matching.
-- **Corpus bootstrap makes zero LLM calls.** Ingest-all ≠ extract-all:
-  bootstrap parses and indexes; the billed extraction runs only when a
+- **The sync makes zero LLM calls.** Ingest-all ≠ extract-all: the sync
+  downloads, parses and indexes; the billed extraction runs only when a
   generation is requested.
 - **Verdicts in code.** Template mode (single / amalgam / freeform), pair
   confidence, and every threshold are computed by code from config —
@@ -47,23 +50,45 @@ one extraction call per document (stage 02). Everything else is plain code:
 
 | Piece | Where | Role |
 |---|---|---|
-| `frdsttm/frd_parsing.py` | src (factored from 01) | ONE FRD parser for pipeline + bootstrap |
+| `frdsttm/frd_parsing.py` | src (factored from 01) | ONE FRD parser for pipeline + sync |
 | `frdsttm/reference_workbooks.py` | src (factored from 04) | ONE workbook-dictionary parser, both dialects |
 | `frdsttm/similarity.py` | src | features, scores, pairing, template decision, thresholds |
-| `frdsttm/corpus.py` | src | `corpus_index.json` build/load, pairs, unmapped |
+| `frdsttm/corpus.py` | src | `corpus_index.json` (v2) build/load, pairs, unmapped, `content_sha256` per document |
+| `frdsttm/sync.py` | src | SharePoint → volumes → index: incremental download (eTag/modified/size via `sync_manifest.json`), departed-file removal, `reindex()` |
+| `notebooks/00_sharepoint_sync.py` + `resources/frd_sttm_sync_job.yml` | job | the scheduled sync (cron `sync_cron`, default 15 min); `sync_mode=sync|reindex` |
 | `frdsttm/exemplars.py` | src | retrieved-exemplar prompt block + provenance |
 | 02 `sttm_exemplars` | notebook | exemplar block into the live prompt; sidecar `<doc>.exemplars.json` |
 | 04 template decision | notebook | mode → dictionary → render; cross eval; `_provenance.template_decision` |
-| `backend/corpus_routes.py` | review app | bootstrap, corpus listing, reference import |
-| Corpus panel + regenerate | frontend | unmapped list, template evidence, regenerate-despite-existing |
+| `backend/corpus_routes.py` | review app | the picker's source of truth (`/corpus/frds`), "Sync now"/"Rebuild index" (background, 202 + polled state), reference-workbook download, config probe |
+| Corpus panel + regenerate | frontend | the picker: unmapped FRDs → generate; mapped FRDs → present STTM + regenerate-despite-existing; sync controls |
 
-**Storage.** `corpus_index.json` lives **in the reference volume** next to
-the workbooks it indexes (`sttm_reference` in UC; `local_dev_fixtures/
-sttm_reference/` locally) — notebooks read it from the same `/Volumes` path
-they already read references from, and it travels with them. FRDs land in
-`frd_raw`, reference STTMs in `sttm_reference`, exactly the volumes the
-pipeline already scans. No new tables: the index is one JSON artifact,
-rebuilt idempotently by bootstrap.
+**Storage.** `corpus_index.json` (and the sync's `sync_manifest.json`) live
+**in the reference volume** next to the workbooks they index
+(`sttm_reference` in UC; `local_dev_fixtures/sttm_reference/` locally) —
+notebooks read them from the same `/Volumes` path they already read
+references from, and they travel with them. FRDs land in `frd_raw`,
+reference STTMs in `sttm_reference`, exactly the volumes the pipeline
+already scans. No new tables: the index is one JSON artifact, rebuilt
+idempotently on every sync tick. In the deployed App the container keeps a
+mirror of both volumes for listing/staging, refreshed after "Sync now" and
+lazily (`STTM_CORPUS_REFRESH_SECONDS`) so scheduled ticks show up.
+
+**Pairing (2026-08-22 evening).** `similarity.pair_corpus` pairs by exact
+**name** first — `name_key()` strips extensions (`.sttm.xlsx` included)
+and trailing role tokens (`sttm`, `frd`, `mapping`), so `Community Risk
+FRD.docx` ↔ `Community Risk FRD.sttm.xlsx` ↔ `community-risk STTM.xlsx`
+all key to `communityrisk`; an unambiguous one-to-one key match is
+definitive (`matched_by: "name"`, confidence high), because that is the
+renderer's own naming convention and the one a reviewer follows when they
+upload a finished workbook. Ambiguous keys (two FRDs or two workbooks on
+one key) are never name-paired — they fall through to similarity
+(`matched_by: "similarity"`, gated by `pair_min`/`pair_high`). The
+reviewer-upload loop therefore closes on the next sync without anyone
+touching thresholds.
+
+**Read-only.** The sync only ever READS SharePoint; nothing in the repo
+writes there (see CLAUDE.md § SharePoint). A finished STTM reaches the
+library because the reviewer uploads it; the sync pulls it back.
 
 ## The three template modes (exact vocabulary)
 
@@ -122,8 +147,8 @@ deliberately and say so in the demo, or the run is freeform.
   metadata and rules but empty mapping sheets. Column-level freeform needs
   record-layout tables lifted from the FRD itself — designed, not built.
 - **Pairing quality gates the whole idea**: a wrong FRD↔STTM pair poisons
-  both templates and eval. Bootstrap errs toward `unmapped` (below
+  both templates and eval. Pairing errs toward `unmapped` (below
   `pair_min`), and low-confidence pairs are labeled; SME confirmation UI is
   the designed follow-up.
-- The corpus index is rebuilt whole on each bootstrap (idempotent, cheap at
+- The corpus index is rebuilt whole on each sync tick (idempotent, cheap at
   this scale); incremental refresh is deliberately out of scope.

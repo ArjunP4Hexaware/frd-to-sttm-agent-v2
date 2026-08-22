@@ -5,11 +5,20 @@ library that is the program's system of record for FRDs and STTMs.
 Position in the pipeline. This module is a *transport seam*, deliberately
 not part of stages 01-04. `01_frd_ingest` scans a directory (`RAW_DIR`) and
 parses whatever supported files it finds; `04_sttm_render` writes a workbook
-into an output volume. SharePoint therefore attaches at the edges:
+into an output volume. SharePoint therefore attaches at the edge — and ONLY
+as a source:
 
-    SharePoint library  --fetch-->  frd_raw/  -> 01 -> 02 -> 03 -> 04 -> rendered/
-                                                                          |
-    SharePoint library  <--publish--------------------------------------- +
+    SharePoint FRD folder  --sync-->  frd_raw/        -> 01 -> 02 -> 03 -> 04 -> rendered/
+    SharePoint STTM folder --sync-->  sttm_reference/ -> (templates, pairing, eval)
+
+READ-ONLY BY CONSTRUCTION (decided 2026-08-22). This client has no write
+method: the agent never publishes to the library. A finished STTM reaches
+SharePoint because a PERSON uploads it after review; the next sync
+(frdsttm.sync — scheduled job + the app's "Sync now") pulls it into the
+reference volume and pairs it with its FRD. Consequence for the Entra ID
+app registration: a READ grant is sufficient (`Sites.Selected` read on the
+one site). Do not add an upload method back "for convenience" — the
+no-write property is what the slides, the docs and the grant all rely on.
 
 Stages 01-04 are untouched by this file and stay network-free, so the test
 suite keeps running offline with zero credentials. Do NOT "simplify" this by
@@ -27,7 +36,8 @@ tenant id + client id + client secret, exchanged for an app token with the
 `.default` scope. The secret comes from the Databricks secret scope (or an
 env var locally) and is NEVER logged, echoed, returned, or embedded in an
 error message. Required Graph application permission: `Sites.Selected`
-(preferred, grant per-site) or `Files.ReadWrite.All`, with admin consent.
+(preferred; a per-site READ grant is enough) or `Files.Read.All`, with
+admin consent.
 
 Fail-loud posture, matching the rest of the repo. Missing configuration
 raises and names both remedies (env var and secret scope). A non-2xx Graph
@@ -55,11 +65,6 @@ from pathlib import Path
 GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
 LOGIN_ROOT = "https://login.microsoftonline.com"
 GRAPH_SCOPE = "https://graph.microsoft.com/.default"
-
-# Graph's simple PUT upload is documented for files up to 4 MiB; anything
-# larger needs a resumable upload session. We fail loudly rather than
-# silently truncating -- see upload_file().
-SIMPLE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024
 
 
 class SharePointConfigError(RuntimeError):
@@ -91,16 +96,23 @@ class SharePointConfig:
     host: str            # e.g. contoso.sharepoint.com
     site_path: str       # e.g. /sites/DataOffice
     library: str         # document library (drive) display name
-    frd_folder: str      # folder holding input FRDs; "" = library root
-    output_folder: str   # folder rendered STTMs are published to
+    frd_folder: str      # folder holding approved FRDs; "" = library root
+    reference_folder: str  # folder holding approved STTMs (reviewers upload
+    #                        finished workbooks here; the sync watches it);
+    #                        "" = same folder as the FRDs
 
     def __repr__(self) -> str:  # never let the secret reach a log or traceback
         return (
             f"SharePointConfig(tenant_id={self.tenant_id!r}, client_id={self.client_id!r}, "
             f"client_secret=<redacted>, host={self.host!r}, site_path={self.site_path!r}, "
             f"library={self.library!r}, frd_folder={self.frd_folder!r}, "
-            f"output_folder={self.output_folder!r})"
+            f"reference_folder={self.reference_folder!r})"
         )
+
+    @property
+    def sttm_folder(self) -> str:
+        """Where approved STTMs live: the reference folder, else the FRD folder."""
+        return self.reference_folder or self.frd_folder
 
 
 @dataclass(frozen=True)
@@ -113,6 +125,8 @@ class SharePointItem:
     size: int
     modified: str
     web_url: str
+    etag: str = ""   # Graph eTag — changes on every content edit; the sync's
+    #                  cheapest "has this file changed" signal
 
 
 def load_config(param, secret) -> SharePointConfig:
@@ -131,7 +145,7 @@ def load_config(param, secret) -> SharePointConfig:
         "site_path": param("sharepoint_site_path", ""),
         "library": param("sharepoint_library", "Documents"),
         "frd_folder": param("sharepoint_frd_folder", ""),
-        "output_folder": param("sharepoint_output_folder", ""),
+        "reference_folder": param("sharepoint_reference_folder", ""),
     }
     client_secret = secret() or ""
 
@@ -274,9 +288,8 @@ class SharePointClient:
                        folder: str | None = None) -> list[SharePointItem]:
         """List files in one library folder (library root when blank).
 
-        `folder` defaults to the configured FRD folder. (This override was
-        removed once as YAGNI; re-added 2026-08-21 with a real caller — the
-        review app's existing-STTM check lists `cfg.output_folder`.)
+        `folder` defaults to the configured FRD folder; the sync passes the
+        STTM folder explicitly (`cfg.sttm_folder`).
 
         Folders are skipped. When `suffixes` is given, only matching files are
         returned — the caller passes 01's SUPPORTED_SUFFIXES so the picker can
@@ -303,6 +316,7 @@ class SharePointClient:
                     size=int(entry.get("size", 0)),
                     modified=entry.get("lastModifiedDateTime", ""),
                     web_url=entry.get("webUrl", ""),
+                    etag=entry.get("eTag", "") or "",
                 ))
             url = page.get("@odata.nextLink")
         return sorted(items, key=lambda i: i.name.lower())
@@ -332,32 +346,6 @@ class SharePointClient:
             tmp.replace(dest / item.name)
             fetched.append(item)
         return fetched
-
-    # -- write ------------------------------------------------------------- #
-
-    def upload_file(self, local_path: str | Path) -> dict:
-        """Publish one file to the configured output folder, replacing any
-        same-named item.
-
-        Simple PUT upload only. Graph documents that path for files up to
-        4 MiB; larger files need a resumable upload session. A rendered STTM
-        workbook is ~100 KB, so the simple path is right — but we raise rather
-        than let Graph reject a large file with a confusing error, and that
-        raise is the marker for where the upload-session path goes if an
-        oversized artifact ever appears.
-        """
-        src = Path(local_path)
-        payload = src.read_bytes()
-        if len(payload) > SIMPLE_UPLOAD_MAX_BYTES:
-            raise GraphError(
-                413, str(src), "file_too_large",
-                f"{src.name} is {len(payload)} bytes; the simple upload path is capped at "
-                f"{SIMPLE_UPLOAD_MAX_BYTES}. Implement a resumable upload session here.", None)
-
-        path = self._encode_path(self.cfg.output_folder, src.name)
-        url = f"{GRAPH_ROOT}/drives/{self.drive_id()}/root:/{path}:/content"
-        return self._call("PUT", url, body=payload,
-                          content_type="application/octet-stream")
 
 
 def build_client(cfg: SharePointConfig, transport=_urlopen_transport) -> SharePointClient:

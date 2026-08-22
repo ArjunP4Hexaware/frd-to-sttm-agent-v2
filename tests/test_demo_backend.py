@@ -5,6 +5,7 @@ network), replay assertions against the tracked _live_e2e_20260807b set."""
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 import time
@@ -190,12 +191,17 @@ def test_frd_path_containment(client, live_dirs, tmp_path):
     assert "must be inside" in res.json()["detail"]
 
 
-def test_frd_must_be_docx(client, live_dirs):
-    bad = demo.PRELOADED_DIR / "notes.txt"
+def test_frd_must_be_a_type_01_can_parse(client, live_dirs):
+    """Runs accept every type 01_frd_ingest parses (the corpus carries
+    whatever SharePoint holds), and nothing else."""
+    bad = demo.PRELOADED_DIR / "notes.xlsx"
     bad.write_text("hi")
     res = client.post("/api/demo/runs", json={"frd": str(bad)})
     assert res.status_code == 400
-    assert ".docx" in res.json()["detail"]
+    assert ".docx" in res.json()["detail"] and ".txt" in res.json()["detail"]
+    ok = demo.PRELOADED_DIR / "notes.txt"
+    ok.write_text("hi")
+    assert demo._validate_frd(str(ok)) == ok.resolve()
 
 
 # --------------------------------------------------------------------------- #
@@ -349,3 +355,136 @@ def test_replay_payload_serves_repaired_quote(client):
     notes = res.json()["gate"]["auto_confirmed_notes"]
     assert notes and all("reje'" not in n for n in notes)
     assert any("reject table from the below files." in n for n in notes)
+
+
+# --------------------------------------------------------------------------- #
+# Human-in-the-loop on a finished run (2026-08-22 evening)
+# --------------------------------------------------------------------------- #
+
+def _gated_set(root: Path, set_id="sttm_out_demo_20260822_180000", doc_id="syn_doc") -> Path:
+    """A finished run whose v1 contract carries one candidate-having
+    ambiguity and one advisory (candidate-less) one — synthetic."""
+    d = root / set_id
+    (d / "extractions").mkdir(parents=True)
+    (d / "contracts").mkdir()
+    (d / "extractions" / f"{doc_id}.json").write_text(json.dumps({"feeds": []}))
+    contract = {
+        "status": "PASS_WITH_FLAGS", "feeds": [],
+        "_provenance": {
+            "ambiguities": [{
+                "id": "amb-1", "kind": "attribution", "has_candidates": True,
+                "candidates": ["FEED_A", "FEED_B"],
+                "text": "Rule 'reject when NULL' appears on FEED_A and FEED_B",
+                "context": {"rule": "reject when NULL"},
+            }],
+            "grounding": {"advisory_flagged": [{
+                "id": "adv-1", "kind": "advisory_grounding", "has_candidates": False,
+                "candidates": [], "text": "retention prose drifted", "context": {},
+            }]},
+        },
+    }
+    (d / "contracts" / f"{doc_id}.contract.json").write_text(json.dumps(contract))
+    return d
+
+
+def test_review_lists_gated_items_with_no_resolutions(client, live_dirs):
+    _gated_set(live_dirs)
+    r = client.get("/api/demo/artifacts/sttm_out_demo_20260822_180000/review?doc=syn_doc")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["n_items"] == 2 and body["n_resolved"] == 0
+    assert {i["id"] for i in body["items"]} == {"amb-1", "adv-1"}
+    assert body["items"][0]["resolution"] is None
+    assert body["rerender"]["state"] == "idle"
+
+
+def test_review_404_without_a_contract_and_400_for_a_curated_set(client, live_dirs):
+    assert client.get("/api/demo/artifacts/sttm_out_demo_20260822_180000/review?doc=x").status_code == 404
+    assert client.get("/api/demo/artifacts/sttm_out/review?doc=x").status_code == 400
+
+
+def test_resolution_is_validated_and_persisted_into_the_v1_contract(client, live_dirs):
+    d = _gated_set(live_dirs)
+    url = "/api/demo/artifacts/sttm_out_demo_20260822_180000/resolutions?doc=syn_doc"
+    # structural pick required: a free-text answer on a candidate item is refused
+    r = client.post(url, json={"ambiguity_id": "amb-1", "kind": "attribution",
+                               "resolution_type": "free_text", "rationale": "FEED_A"})
+    assert r.status_code == 400
+    # a pick outside the candidates is refused
+    r = client.post(url, json={"ambiguity_id": "amb-1", "kind": "attribution",
+                               "resolution_type": "candidate_pick", "chosen_candidate": "FEED_Z"})
+    assert r.status_code == 400
+    # unknown id / unknown type
+    assert client.post(url, json={"ambiguity_id": "nope", "kind": "x",
+                                  "resolution_type": "none_of_these"}).status_code == 400
+    assert client.post(url, json={"ambiguity_id": "amb-1", "kind": "attribution",
+                                  "resolution_type": "maybe"}).status_code == 400
+    # a real pick lands in _provenance.human_resolutions and comes back on the item
+    r = client.post(url, json={"ambiguity_id": "amb-1", "kind": "attribution",
+                               "resolution_type": "candidate_pick", "chosen_candidate": "FEED_A",
+                               "rationale": "FEED_A owns the rule"})
+    assert r.status_code == 200, r.text
+    assert r.json()["resolution"]["chosen_candidate"] == "FEED_A"
+    saved = json.loads((d / "contracts" / "syn_doc.contract.json").read_text())
+    hr = saved["_provenance"]["human_resolutions"]
+    assert len(hr) == 1 and hr[0]["ambiguity_id"] == "amb-1"
+    assert hr[0]["candidates_snapshot"] == ["FEED_A", "FEED_B"]
+    # free text is the only answer a candidate-less item takes
+    r = client.post(url, json={"ambiguity_id": "adv-1", "kind": "advisory_grounding",
+                               "resolution_type": "free_text", "rationale": "keep 7 years"})
+    assert r.status_code == 200
+    assert client.get("/api/demo/artifacts/sttm_out_demo_20260822_180000/review?doc=syn_doc").json()["n_resolved"] == 2
+    assert list((d / "contracts").glob("*.part")) == []
+
+
+def test_rerender_runs_only_stage_04_with_the_runs_insulation(client, live_dirs, monkeypatch):
+    _gated_set(live_dirs)
+    launched = []
+
+    class _Proc(_FakeProc):
+        def __init__(self, cmd, **kwargs):
+            launched.append((cmd, kwargs.get("env", {})))
+            super().__init__(cmd, **kwargs)
+
+    monkeypatch.setattr(demo.subprocess, "Popen", _Proc)
+    demo._rerenders.clear()
+    r = client.post("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender?doc=syn_doc")
+    assert r.status_code == 202, r.text
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        st = client.get("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender").json()
+        if st["state"] in ("done", "failed"):
+            break
+        time.sleep(0.05)
+    assert st["state"] == "done", st
+    assert len(launched) == 1
+    cmd, env = launched[0]
+    assert Path(cmd[-1]).name == "04_sttm_render.py"          # ONLY the render stage
+    assert env["SCHEMA"] == "sttm_agent_demo_20260822_180000"  # the run's own insulation
+    assert env["OUT_VOLUME"] == "sttm_out_demo_20260822_180000"
+    assert "STTM_MOCK_EXTRACTION" not in env
+    # the review payload reports it, and a second one while running is a 409
+    assert client.get("/api/demo/artifacts/sttm_out_demo_20260822_180000/review?doc=syn_doc").json()["rerender"]["state"] == "done"
+    demo._rerenders["sttm_out_demo_20260822_180000"]["state"] = "running"
+    assert client.post("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender?doc=syn_doc").status_code == 409
+    demo._rerenders.clear()
+
+
+def test_rerender_failure_is_surfaced_not_stuck(client, live_dirs, monkeypatch):
+    _gated_set(live_dirs)
+
+    class _Failing(_FakeProc):
+        def wait(self, timeout=None):
+            return 3
+
+    monkeypatch.setattr(demo.subprocess, "Popen", _Failing)
+    demo._rerenders.clear()
+    client.post("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender?doc=syn_doc")
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        st = client.get("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender").json()
+        if st["state"] in ("done", "failed"):
+            break
+        time.sleep(0.05)
+    assert st["state"] == "failed" and "04_sttm_render.py exited with code 3" in st["error"]
+    demo._rerenders.clear()

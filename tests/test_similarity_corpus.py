@@ -157,9 +157,51 @@ def test_corpus_pairs_and_unmapped(reference_dir, frd_entries):
     assert own_reference_for(index, "claim_intake_frd") == "claim_intake_sttm.xlsx"
     assert index["unmapped"] == ["totally_novel_frd"]
     assert index["unpaired_references"] == []
-    # every pair carries the display-facing evidence
+    # every pair carries the display-facing evidence + how it was decided
     for pair in index["pairs"].values():
-        assert {"reference", "score", "confidence", "components"} <= set(pair)
+        assert {"reference", "score", "confidence", "components", "matched_by"} <= set(pair)
+    # member_risk_frd / member_risk_sttm.xlsx key to the same name -> definitive
+    assert index["pairs"]["member_risk_frd"]["matched_by"] == "name"
+    assert index["pairs"]["member_risk_frd"]["confidence"] == "high"
+    # every document carries a content fingerprint (2026-08-22, index v2)
+    for entry in list(index["frds"].values()) + list(index["references"].values()):
+        assert len(entry["content_sha256"]) == 64
+
+
+def test_similarity_pairs_when_names_do_not_match(tmp_path, frd_entries):
+    """Reference workbooks named nothing like their FRDs still pair — by
+    content — and say so (`matched_by: similarity`); the novel FRD stays
+    unmapped below pair_min."""
+    d = tmp_path / "refs"
+    d.mkdir()
+    make_workbook(d / "workbook_A.xlsx", "member_risk", MEMBER_COLS,
+                  ["member identifier", "member postal code", "risk score",
+                   "effective date", "line of business"])
+    make_workbook(d / "workbook_B.xlsx", "claim_intake", CLAIM_COLS,
+                  ["claim number", "provider npi", "paid amount",
+                   "service code", "adjudication flag"])
+    index = build_corpus_index(frd_entries, d, _thresholds(), generated_at="t")
+    assert index["pairs"]["member_risk_frd"]["reference"] == "workbook_A.xlsx"
+    assert index["pairs"]["member_risk_frd"]["matched_by"] == "similarity"
+    assert index["pairs"]["claim_intake_frd"]["reference"] == "workbook_B.xlsx"
+    assert index["unmapped"] == ["totally_novel_frd"]
+
+
+def test_ambiguous_name_keys_fall_through_to_similarity(tmp_path, frd_entries):
+    """Two workbooks keying to the same name are never name-paired (no
+    guessing); similarity decides, and the loser stays unpaired."""
+    d = tmp_path / "refs"
+    d.mkdir()
+    make_workbook(d / "member_risk_sttm.xlsx", "member_risk", MEMBER_COLS,
+                  ["member identifier", "member postal code", "risk score",
+                   "effective date", "line of business"])
+    make_workbook(d / "member-risk STTM.xlsx", "member_risk", MEMBER_COLS,
+                  ["member identifier", "member postal code", "risk score",
+                   "effective date", "line of business"])
+    index = build_corpus_index(frd_entries[:1], d, _thresholds(), generated_at="t")
+    pair = index["pairs"]["member_risk_frd"]
+    assert pair["matched_by"] == "similarity"
+    assert len(index["unpaired_references"]) == 1
 
 
 def test_corpus_round_trip(tmp_path, reference_dir, frd_entries):

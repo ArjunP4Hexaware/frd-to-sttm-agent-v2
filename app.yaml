@@ -1,0 +1,83 @@
+# Databricks App manifest, per Databricks' documented app.yaml schema (command + env: docs.databricks.com/aws/en/
+# dev-tools/databricks-apps/app-runtime) but a custom Python command, since
+# this app is a FastAPI process (not one of the built-in Streamlit/Dash/
+# Gradio Python app types) that also serves the frontend's built static
+# assets -- see review_app_react/backend/app.py's StaticFiles mount.
+# DATABRICKS_APP_PORT is injected by the platform at runtime; app.py reads it.
+#
+# LIVES AT THE REPO ROOT ON PURPOSE (moved 2026-08-22 evening): the App is
+# deployed with `--source-code-path <workspace copy of THIS REPO>`, because
+# the backend reaches outside review_app_react/ at startup (src/frdsttm via
+# sharepoint_routes' sys.path bootstrap, notebooks/, local_dev_fixtures/).
+# Apps installs the root requirements.txt, which includes
+# review_app_react/requirements.txt -- that file stays the single manifest.
+#
+# Deploy prerequisite: `cd review_app_react/frontend && npm install && npm
+# run build` first, so frontend/dist/ exists for app.py to serve. See
+# review_app_react/README.md "Databricks Apps deployment".
+command: ["python", "review_app_react/backend/app.py"]
+
+# Live-run execution in this mode goes through the Jobs API (see
+# review_app_react/backend/jobs_runner.py): the app triggers the bundle-deployed
+# frd_sttm_pipeline job, so artifacts land natively in Unity Catalog and
+# survive an App restart. "Sync now" triggers the bundle-deployed
+# frd_sttm_sharepoint_sync job the same way (its schedule runs without the
+# app). Workspace prerequisites the deploy must verify:
+#   - the three bundle jobs are deployed, and STTM_DEMO_JOB_NAME /
+#     STTM_SYNC_JOB_NAME / STTM_RENDER_JOB_NAME below match their names AS
+#     DEPLOYED (a dev-mode bundle target prefixes them, e.g.
+#     "[dev <user>] frd_sttm_pipeline") -- or set the *_JOB_ID vars instead.
+#     frd_sttm_render is the human-in-the-loop re-render (stage 04 only).
+#   - volumes exist in CATALOG.SCHEMA: frd_raw + sttm_reference (the sync
+#     maintains them; the app mirrors them down), demo_raw (per-run FRD
+#     staging), sttm_out_app (per-run artifact sets)
+#   - secret scopes sttm_agent/anthropic_api_key and
+#     sttm_agent/sharepoint_client_secret are populated
+#   - the app's service principal can run both jobs, READ frd_raw and
+#     sttm_reference, and read/write demo_raw and sttm_out_app
+env:
+  - name: "STTM_APP_MODE"
+    value: "databricks"
+  - name: "CATALOG"
+    value: "soham_workspace"
+  - name: "SCHEMA"
+    value: "sttm_agent"
+  - name: "OUT_VOLUME"
+    value: "sttm_out"
+  - name: "STTM_DEMO_JOB_NAME"
+    value: "frd_sttm_pipeline"
+  - name: "STTM_SYNC_JOB_NAME"
+    value: "frd_sttm_sharepoint_sync"
+  - name: "STTM_RENDER_JOB_NAME"
+    value: "frd_sttm_render"
+  - name: "STTM_DEMO_APP_OUT_VOLUME"
+    value: "sttm_out_app"
+  # --- SharePoint (uncomment and fill once the Entra ID app registration
+  # exists; until then the app shows "SharePoint is not connected").
+  # The CLIENT SECRET must NOT be listed here as a value: map it from the
+  # secret scope the notebooks already use (sttm_agent/sharepoint_client_secret)
+  # via an Apps secret resource, e.g.:
+  #   - name: "SHAREPOINT_CLIENT_SECRET"
+  #     valueFrom: "sharepoint-client-secret"
+  # - name: "SHAREPOINT_TENANT_ID"
+  #   value: "<Entra directory (tenant) id>"
+  # - name: "SHAREPOINT_CLIENT_ID"
+  #   value: "<Entra application (client) id>"
+  # - name: "SHAREPOINT_HOST"
+  #   value: "<tenant>.sharepoint.com"
+  # - name: "SHAREPOINT_SITE_PATH"
+  #   value: "/sites/<SiteName>"          # must start with '/'
+  # - name: "SHAREPOINT_LIBRARY"
+  #   value: "Documents"                  # library DISPLAY name
+  # - name: "SHAREPOINT_FRD_FOLDER"
+  #   value: "FRDs"                       # "" = library root
+  # Approved-STTM folder: the template library the sync pulls into
+  # sttm_reference, and where a reviewer uploads a finished STTM. Defaults
+  # to the FRD folder. There is no output folder: this app never writes to
+  # SharePoint (2026-08-22).
+  # - name: "SHAREPOINT_REFERENCE_FOLDER"
+  #   value: "STTMs"
+  # UC volume holding reference workbooks + corpus_index.json (default
+  # sttm_reference — must match the jobs' reference_volume widget).
+  # - name: "STTM_REFERENCE_VOLUME"
+  #   value: "sttm_reference"

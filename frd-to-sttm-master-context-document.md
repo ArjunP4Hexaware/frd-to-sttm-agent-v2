@@ -1,6 +1,6 @@
 # FRD-to-STTM Agent — Master Context Document
 
-**Last verified: 2026-08-22, end of day.** Read this end to end at the start
+**Last verified: 2026-08-22, late evening — after the sync / read-only / corpus-picker reshape and the HITL panel + repo-root App manifest (§12 top entry).** Read this end to end at the start
 of any session in this repo (≈8–10 minutes; §§1–3 alone are the 2-minute
 version). It is the single get-up-to-speed document for THIS agent only, and
 it is **tracked in git deliberately** so it travels with every clone — unlike
@@ -50,22 +50,30 @@ presentation of both agents still stands after it). Everything needed is on
 
 1. Clone/pull `staging`. `python -m venv .venv && pip install -e
    ".[local,dev,ui]"`; `cd review_app_react/frontend && npm install && npm
-   run build`. Fill `.env` from `.env.example`: the 8 `SHAREPOINT_*` vars,
-   `SHAREPOINT_REFERENCE_FOLDER`, `ANTHROPIC_API_KEY`.
+   run build`. Fill `.env` from `.env.example`: the `SHAREPOINT_*` vars
+   (tenant, client id/secret, host, site path, library, FRD folder,
+   reference/STTM folder — there is no output folder), `ANTHROPIC_API_KEY`.
 2. Offline sanity with zero client content:
    `python tools/make_synthetic_smoke_fixture.py`, then run notebooks
    01 → 03 → 04 (02 is skipped by design — §10).
-3. **Corpus bootstrap** against the 2 real SharePoint FRD/STTM pairs (app →
-   Reference corpus → Sync). Zero model calls. Verify both pairs paired.
+3. **First SharePoint sync** against the 2 real FRD/STTM pairs (app →
+   "Sync from SharePoint now…", or `databricks bundle run
+   frd_sttm_sharepoint_sync`). Zero model calls. Verify both pairs paired
+   (by name if the STTMs follow `<FRD name>.sttm.xlsx` / `… STTM.xlsx`,
+   else by similarity). With no tenant yet, "Rebuild index…" indexes
+   whatever was hand-placed in the volumes.
 4. **Calibrate `TEMPLATE_SINGLE_MIN`** — with a 2-document corpus and
    exclude-own on, each FRD has exactly ONE eligible template, so this one
    threshold decides single-vs-freeform. Record the outcome in
    `docs/TEMPLATE_ARCHITECTURE.md`.
-5. First live regeneration of an FRD whose STTM exists (locate → regenerate
-   → billed confirm). This is the demo's money shot: template decision +
-   automatic golden-pair eval against the client's real STTM.
+5. First live regeneration of an FRD whose STTM exists ("FRDs already
+   mapped" → View STTM → regenerate → billed confirm). This is the demo's
+   money shot: template decision + automatic golden-pair eval against the
+   client's real STTM.
 6. `databricks bundle run frd_sttm_pipeline` — the gating check for the
-   Apps deploy (§11) — then `databricks apps deploy`.
+   Apps deploy (§11) — and `databricks bundle run frd_sttm_sharepoint_sync`
+   (the scheduled sync job; unpause its schedule in the demo target) — then
+   `databricks apps deploy`.
 7. In parallel from step 1: chase the **Entra ID app registration**
    (`Sites.Selected` application permission, admin consent, per-site
    grant). External, blocking, and the long pole for everything SharePoint.
@@ -77,7 +85,13 @@ Databricks notebook tasks — `IS_DATABRICKS = "dbutils" in globals()` decides
 widgets-vs-env-vars and Spark-vs-`deltalake`):
 
 ```
-00_sharepoint_fetch   library → frd_raw volume            (network at the edge)
+00_sharepoint_sync    SharePoint FRD + STTM folders → frd_raw + sttm_reference
+                      volumes → corpus_index.json. SCHEDULED job
+                      (frd_sttm_sharepoint_sync, cron `sync_cron`); incremental
+                      (eTag/modified/size via sync_manifest.json); also what
+                      the app's "Sync now" triggers. READ only. (2026-08-22)
+00_sharepoint_fetch   library → frd_raw volume            (network at the edge;
+                      the pipeline job's own fetch for a stand-alone run)
 01_frd_ingest         docx/pdf/md/txt → markdown → frd_documents Delta   (deterministic)
 02_extract            THE one model call per doc → extractions/<doc>.json
                       + retrieved-exemplar block in the prompt when the
@@ -90,9 +104,9 @@ widgets-vs-env-vars and Spark-vs-`deltalake`):
                       dictionary cross-check → derive mappings → render
                       workbook → eval vs the doc's OWN reference (§4) →
                       contract.v2.json + phase5 report + frd_sttm_runs row
-05_sharepoint_publish standalone deliberate publish; NOT in the job — the
-                      job ends at render, publishing is the app's
-                      confirm-gated button (decided 2026-08-21)
+(no 05)               there is NO publish stage anywhere (2026-08-22): the
+                      repo never writes to SharePoint — the reviewer uploads
+                      the finished STTM; the sync pulls it back in and pairs it
 ```
 
 Human review attaches between 03 and 04: gated ambiguities
@@ -116,9 +130,12 @@ with the app's corpus code, no drift.
 
 Full rationale: `docs/TEMPLATE_ARCHITECTURE.md`. The one-paragraph version:
 
-**Every approved FRD→STTM pair is a template.** The app's corpus bootstrap
-crawls SharePoint (FRDs + a reference-STTM folder), pairs them
-deterministically, and writes `corpus_index.json` into the reference volume.
+**Every approved FRD→STTM pair is a template.** The SharePoint sync
+(`frdsttm/sync.py`, scheduled job + app "Sync now") lands the library's
+FRDs + STTMs in the volumes, pairs them deterministically (exact name match
+first, similarity second — `matched_by` on every pair), and writes
+`corpus_index.json` (v2, `content_sha256` per document) into the reference
+volume.
 Generating an STTM retrieves the most similar approved pairs: their
 conventions enter the extraction prompt as exemplars (02), and the
 best-matching workbook(s) drive the rendered layout and dictionary (04) in
@@ -140,7 +157,7 @@ at this corpus size, identifier-overlap + token cosine
 to SMEs ("84% of this workbook's columns appear in the FRD"). Exemplars
 cannot inject facts: 03's grounding audit requires every strict field
 verbatim in the *target* FRD, so exemplar-copied facts fail exactly like
-invented ones. Bootstrap makes **zero model calls** — ingest-all ≠
+invented ones. The sync makes **zero model calls** — ingest-all ≠
 extract-all; extraction is billed only when a generation is requested.
 
 Thresholds (`similarity.THRESHOLD_DEFAULTS`, resolved via
@@ -154,16 +171,25 @@ synthetic fixtures, not calibrated** — §2 step 4.
 FastAPI backend + Vite/React frontend, Databricks-Apps-shaped (`app.yaml`;
 the Apps deploy installs `review_app_react/requirements.txt`, NOT
 `pyproject.toml` — keep them in parity, verified three rounds now, latest
-adding `pyarrow`). **ONE surface** since 2026-08-21: the "Select FRD" flow —
-name an FRD → the app locates it in the library (exact match or explicit
-candidate pick, never fuzzy auto-pick) → if `<doc_id>.sttm.xlsx` already
-exists in the output folder, the existing STTM is PRESENTED first
-(download/link; since 2026-08-22 also a two-step **regenerate-anyway** into
-the billed-run gate) → otherwise confirm-gated run → results (extraction
-summary, gate, verdict, eval, template decision, mappings, publish control).
-Below the name entry sits the **corpus panel** (2026-08-22): confirm-gated
-bootstrap + the paired/unmapped FRD list, whose Select/Generate buttons feed
-the SAME locate flow — one run path, nothing to keep in sync.
+adding `pyarrow`). **ONE surface** since 2026-08-21, **reshaped 2026-08-22
+(evening)**: the "Select FRD" flow reads the **corpus index** (what the sync
+keeps in Unity Catalog) — "FRDs without an STTM" → Generate STTM →
+confirm-gated billed run → results (extraction summary, gate, verdict,
+eval, template decision, mappings, download + a hand-off note saying where
+to upload); "FRDs already mapped" → View STTM (the approved workbook from
+the reference volume + its SharePoint link) → two-step
+**regenerate-anyway** into the same gate (golden-pair eval against the
+existing STTM, which is never touched). No SharePoint lookup on the request
+path; NO publish control — the reviewer uploads the finished workbook to
+the library's STTM folder and the next sync pairs it. The corpus panel also
+carries "Sync from SharePoint now…" / "Rebuild index…" (background, 202 +
+polled state, one at a time) and the pairing stats. **The human-in-the-loop
+step is IN the results view** (2026-08-22 evening, previously no rendered
+UI after the review tab was removed): every gated item as a GatedItemCard
+→ resolutions merged into the run's v1 contract (same format as the legacy
+flow) → "Apply resolutions & re-render" re-runs stage 04 only (subprocess
+locally; the `frd_sttm_render` job in databricks mode) and refreshes the
+view. Nothing is re-extracted; nothing billed.
 
 Runs are mode-switched on `STTM_APP_MODE`:
 
@@ -174,20 +200,21 @@ Runs are mode-switched on `STTM_APP_MODE`:
   runs trigger the bundle job `frd_sttm_pipeline` via the Jobs API
   (`backend/jobs_runner.py`) with the same insulation as job parameters;
   artifacts land natively in UC (`sttm_out_app/<suffix>`) and are mirrored
-  to container disk as a rehydratable cache. Corpus bootstrap additionally
-  uploads reference workbooks + `corpus_index.json` to the UC reference
-  volume so the job's 02/04 can read them from `/Volumes`.
+  to container disk as a rehydratable cache. "Sync now" triggers the
+  bundle-deployed **sync job** the same way, waits, then mirrors `frd_raw`
+  + `sttm_reference` down to the container; reads re-mirror lazily after
+  `STTM_CORPUS_REFRESH_SECONDS` so the scheduled ticks show up.
 
-Publishing is manual by decision (2026-08-21): `POST
-/api/demo/sharepoint/publish` demands `"confirm": true`, one document per
-call, addressed only through validated demo/live_e2e artifact sets; the
-upload replaces a same-named workbook (which is exactly how a regenerated
-STTM supersedes the old one — deliberately, on the second click).
+There is no publish path (2026-08-22, supersedes the 2026-08-21 manual
+button): the app never writes to SharePoint. The reviewer downloads the
+draft, edits/approves, uploads it to the STTM folder; the sync pairs it by
+name (`<doc_id>.sttm.xlsx`) on the next tick.
 
 Backend route families: `demo.py` (`/api/demo/...` config, documents,
-uploads, runs + SSE, artifacts), `sharepoint_routes.py` (config, documents,
-import, locate, sttm/{id}, publish), `corpus_routes.py` (corpus summary,
-frds, bootstrap, config), `orchestration.py`/`app.py` (legacy review +
+uploads, runs + SSE, artifacts), `sharepoint_routes.py` (config probe +
+shared client factory only), `corpus_routes.py` (corpus summary + sync
+state, frds, sync/reindex, references/{name}, config),
+`orchestration.py`/`app.py` (legacy review +
 upload machinery, UI-less but tested). Import-order note: the deployed App
 does not pip-install `frdsttm`; `sharepoint_routes` bootstraps `src/` onto
 `sys.path` and `corpus_routes`' import order depends on it (marked
@@ -197,22 +224,23 @@ load-bearing in the file).
 
 `src/frdsttm/sharepoint.py` is the whole transport: app-only client
 credentials, **standard library only** (`urllib` — zero Apps-manifest
-footprint), attached at the edges (00/05 + the app), never inside 01–04.
-Config fails loudly naming both remedies (widget/env var AND the secret
-scope `sttm_agent/sharepoint_client_secret`); the secret never reaches
-`__repr__`/logs. Required Graph APPLICATION permission: `Sites.Selected`
-with admin consent + per-site grant (preferred over tenant-wide). Write
-scope is the output folder only. The corpus bootstrap reads reference STTMs
-from `SHAREPOINT_REFERENCE_FOLDER` (default: the FRD folder) — deliberately
-NOT the output folder, so published output can never feed back in as
-reference input. **Never run against a real tenant** — §11.
+footprint), attached at the edge (00 + the app's "Sync now"), never inside
+01–04. **READ-ONLY by construction (2026-08-22):** the client has no upload
+method, there is no output folder, and nothing in the repo writes to the
+library — so the Entra ID grant only needs `Sites.Selected` READ on the one
+site. `src/frdsttm/sync.py` keeps `frd_raw` (FRD folder) and
+`sttm_reference` (`SHAREPOINT_REFERENCE_FOLDER`, default = the FRD folder;
+also where reviewers upload finished STTMs) in step incrementally. Config
+fails loudly naming both remedies (widget/env var AND the secret scope
+`sttm_agent/sharepoint_client_secret`); the secret never reaches
+`__repr__`/logs. **Never run against a real tenant** — §11.
 
 ## 7. Storage
 
 | Where | What |
 |---|---|
-| UC volume `frd_raw` | source FRDs (bootstrap + 00 land here) |
-| UC volume `sttm_reference` | reference STTM workbooks **+ `corpus_index.json`** |
+| UC volume `frd_raw` | source FRDs (the sync lands them here; 00_fetch too) |
+| UC volume `sttm_reference` | approved STTM workbooks **+ `corpus_index.json` + `sync_manifest.json`** |
 | UC volume `sttm_out` (job: `sttm_out_app/<suffix>`) | extractions/, contracts/, rendered/, reports/ |
 | Delta `frd_documents`, `frd_contracts`, `frd_sttm_runs` | stage summaries (04 reads contract JSONs, NOT the Delta — the JSON carries human resolutions, the table predates them) |
 | `local_dev_fixtures/` (gitignored) | the local mirror of all of the above; nothing document-shaped is ever tracked |
@@ -315,8 +343,26 @@ work is fully done — inflates local per-stage wall clock only.
 
 ## 12. Decisions log (newest first; reasons matter more than dates)
 
+- **2026-08-22 evening (Arjun):** make the code match the two-slide
+  architecture deck — (a) **automatic SharePoint sync** as a scheduled
+  bundle job (`frd_sttm_sharepoint_sync`, `00_sharepoint_sync`,
+  `frdsttm/sync.py`; incremental; also the app's "Sync now"); (b) **every
+  write path to SharePoint removed** (05 notebook, publish endpoint + UI,
+  `upload_file`, output folder) — the reviewer uploads the finished STTM
+  themselves, the sync pulls it back and pairs it by name; READ grant only;
+  (c) the **picker is the corpus index** (unmapped → generate; mapped →
+  present + regenerate-anyway), `content_sha256` per document, `matched_by`
+  per pair. Chosen over "keep the slides as target state" — Arjun's call.
+  Later the same evening: (d) the **human-in-the-loop review panel** wired
+  into the results view + render-only job `frd_sttm_render` (the slides'
+  step 3 had no rendered UI); (e) `app.yaml` + Apps `requirements.txt`
+  moved to the repo root (deploy from the repo root — the backend imports
+  `src/frdsttm`); (f) runs accept every FRD type 01 parses, not only
+  `.docx`; (g) the py3.14 interpreter-exit deadlock in 01–04 worked around
+  with a guarded local-mode `os._exit(0)`; review_app_react/README.md
+  rewritten. Suite 178 passed / 4 skipped.
 - **2026-08-22 (Arjun):** template architecture built (§4) — reference
-  STTMs imported via app bootstrap; own-STTM excluded from candidacy, used
+  STTMs imported via the sync; own-STTM excluded from candidacy, used
   for eval; deterministic retrieval, no embeddings vendor;
   regenerate-despite-existing shipped. Monday 2026-08-24 restated as an
   executive demo from the Hexaware environment, full feature set.
@@ -341,5 +387,5 @@ work is fully done — inflates local per-stage wall clock only.
 | From-scratch rebuild spec | `docs/NATIVE_REBUILD_SPEC.md`, `.claude/skills/frd-to-sttm-agent/SKILL.md` (self-contained; includes the DBU budget) |
 | Live-run record + transport defects | `docs/LIVE_E2E_2026-08-07.md` |
 | Demo choreography | `docs/DEMO_RUNBOOK.md` (predates the SharePoint-first surface — verify against §5) |
-| App deploy prerequisites | `review_app_react/app.yaml` comments, `CLAUDE.md` "Deploy blockers" |
+| App deploy prerequisites | `app.yaml` (repo root) comments, `CLAUDE.md` "Deploy blockers" |
 | Program-wide context | `../amerihealth-project-master-context-document.md` — umbrella folder on the original Mac ONLY; not in git |

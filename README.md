@@ -241,14 +241,15 @@ Open the URL Vite prints (typically `http://localhost:5173`).
 To switch the backend to `databricks` mode locally (e.g. to test against a
 live workspace once one is reachable), set `STTM_APP_MODE=databricks` plus
 `CATALOG`/`SCHEMA`/`OUT_VOLUME` before starting uvicorn, or deploy it as a
-Databricks App — `review_app_react/app.yaml` already pins
+Databricks App — the repo-root `app.yaml` already pins
 `STTM_APP_MODE: databricks` for that deployed context.
 
 Before deploying as a Databricks App, build the frontend once
-(`cd frontend && npm run build`) so `backend/app.py` has a `frontend/dist/`
-to serve as static assets; `review_app_react/app.yaml` then runs
-`python backend/app.py` as a single process serving both the API and the
-built frontend. Not deployed this session — the workspace account used for
+(`cd review_app_react/frontend && npm run build`) so `backend/app.py` has a
+`frontend/dist/` to serve as static assets; the repo-root `app.yaml` then
+runs `python review_app_react/backend/app.py` as a single process serving
+both the API and the built frontend — deploy from the REPO ROOT (see
+`review_app_react/README.md`). Not deployed this session — the workspace account used for
 `databricks apps deploy` is still inactive (403 org-cancelled error); this
 app has only been run and verified locally.
 

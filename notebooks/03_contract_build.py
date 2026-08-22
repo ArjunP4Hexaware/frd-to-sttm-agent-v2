@@ -232,3 +232,21 @@ else:
 # MAGIC review queue. **Next (Phase 5):** the STTM renderer (contract → client
 # MAGIC workbook via openpyxl) and the source-dictionary cross-check that resolves
 # MAGIC attribution ambiguities deterministically.
+
+
+# COMMAND ----------
+
+if not IS_DATABRICKS:
+    # Local-mode exit guard (2026-08-22). On the py3.14 venv the interpreter can
+    # deadlock at SHUTDOWN in C finalizers (deltalake/pyarrow) after every line
+    # above has run and every artifact is written and closed — observed on 03
+    # as a >13-minute hang at 0% CPU, while the same file exits instantly under
+    # runpy. The review app's local-mode runner waits on process exit, so a
+    # hang here is a failed demo run. Exit explicitly: nothing in these stages
+    # relies on atexit handlers. Never reached in Databricks (no process to
+    # exit — the notebook task returns normally).
+    import os as _os
+    import sys as _sys
+    _sys.stdout.flush()
+    _sys.stderr.flush()
+    _os._exit(0)

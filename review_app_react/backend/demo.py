@@ -65,6 +65,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+import ambiguity_parsing as ap
 import eval_report as er
 import jobs_runner
 
@@ -94,6 +95,13 @@ CATALOG = os.environ.get("CATALOG", "soham_workspace")
 STAGE_TIMEOUT_SECONDS = int(os.environ.get("STTM_DEMO_STAGE_TIMEOUT_SECONDS", "900"))
 UPLOAD_MAX_BYTES = int(os.environ.get("STTM_DEMO_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))
 UPLOAD_ALLOWED_EXTENSIONS = (".docx",)
+# What a RUN accepts from the corpus (frd_raw): every type 01_frd_ingest can
+# parse — mirrors frdsttm.frd_parsing.SUPPORTED_SUFFIXES (this module imports
+# no frdsttm code; 00_sharepoint_fetch mirrors the same set for the same
+# reason). The upload route stays .docx-only on purpose: uploads were a demo
+# convenience; the corpus is the real source and carries whatever SharePoint
+# holds.
+RUN_ALLOWED_EXTENSIONS = (".docx", ".pdf", ".md", ".markdown", ".txt")
 
 # Shown in the confirmation dialog before a billed run — calls/cost measured
 # on the two live E2E runs of 2026-08-07 (docs/LIVE_E2E_2026-08-07.md). The
@@ -281,8 +289,8 @@ def _new_suffix() -> str:
 
 
 def _validate_frd(frd_rel: str) -> Path:
-    """The FRD must be an existing .docx inside the preloaded dir or the
-    demo uploads dir — resolved and containment-checked so a crafted path
+    """The FRD must be an existing parseable document inside the preloaded
+    (corpus) dir or the demo uploads dir — resolved and containment-checked so a crafted path
     can never reach outside them (and never into fixtures/ or curated
     locations)."""
     candidate = (ROOT / frd_rel).resolve()
@@ -291,8 +299,9 @@ def _validate_frd(frd_rel: str) -> Path:
         raise RunPreflightError(
             "FRD path must be inside the preloaded documents or demo uploads directory"
         )
-    if candidate.suffix.lower() not in UPLOAD_ALLOWED_EXTENSIONS:
-        raise RunPreflightError("FRD must be a .docx file")
+    if candidate.suffix.lower() not in RUN_ALLOWED_EXTENSIONS:
+        raise RunPreflightError(
+            f"FRD must be one of {', '.join(RUN_ALLOWED_EXTENSIONS)} (what 01_frd_ingest parses)")
     if not candidate.is_file():
         raise RunPreflightError(f"FRD file not found: {frd_rel}")
     return candidate
@@ -687,6 +696,95 @@ def workbook_path(set_id: str, doc_id: str) -> Path:
 
 
 # --------------------------------------------------------------------------- #
+# Human-in-the-loop on a finished run (2026-08-22 evening)
+# --------------------------------------------------------------------------- #
+# The slides' step 3: after the agent runs, a person resolves what the gate
+# could not settle, and the STTM is re-rendered with those decisions folded
+# in. Mechanism — identical to the legacy review flow (orchestration.py), so
+# there is ONE persistence format: a resolution is merged into the run's v1
+# contract JSON (`_provenance.human_resolutions`, keyed by the stable
+# ambiguity id) and a RE-RENDER re-runs stage 04 only, which applies them
+# (`apply_human_resolutions`) ahead of every automatic path and rewrites the
+# v2 contract + workbook + report. No re-extraction, hence no second billed
+# call. Local mode: 04 as a subprocess with the run's own insulation env.
+# Databricks mode: the edited contract is uploaded to the run's UC out dir
+# and the render-only bundle job `frd_sttm_render` runs against the same
+# suffix (resources/frd_sttm_render_job.yml); artifacts are mirrored back.
+
+def _contract_v1_path(set_id: str, doc_id: str) -> Path:
+    return _check_set_id(set_id) / "contracts" / f"{_check_doc_id(doc_id)}.contract.json"
+
+
+def _review_items(set_id: str, doc_id: str) -> tuple[dict, list[dict]]:
+    path = _contract_v1_path(set_id, doc_id)
+    contract = _load_json(path)
+    if contract is None:
+        raise FileNotFoundError(f"no contract JSON for {doc_id!r} in {set_id}")
+    return contract, [ap.to_gated_item_dict(contract, it) for it in ap.gated_items(contract)]
+
+
+_rerender_lock = threading.Lock()
+_rerenders: dict[str, dict] = {}   # set_id -> state
+
+
+def _rerender_state(set_id: str) -> dict:
+    with _rerender_lock:
+        return dict(_rerenders.get(set_id) or {
+            "state": "idle", "started_at": None, "finished_at": None,
+            "error": None, "run_page_url": None})
+
+
+def _set_rerender(set_id: str, **fields) -> None:
+    with _rerender_lock:
+        _rerenders.setdefault(set_id, {"state": "idle", "started_at": None,
+                                       "finished_at": None, "error": None,
+                                       "run_page_url": None}).update(fields)
+
+
+def _suffix_of(set_id: str) -> str:
+    return set_id[len("sttm_out_"):]
+
+
+def _rerender_worker(set_id: str, doc_id: str) -> None:
+    suffix = _suffix_of(set_id)
+    try:
+        if IS_DATABRICKS_APP:
+            w = jobs_runner._workspace_client()
+            jobs_runner.upload_contract(w, suffix, doc_id,
+                                        _contract_v1_path(set_id, doc_id).read_bytes())
+            job_id = jobs_runner.resolve_render_job_id(w)
+            run_id = jobs_runner.start_render_job(w, job_id, suffix)
+            try:
+                url = w.jobs.get_run(run_id).run_page_url
+            except Exception:  # noqa: BLE001 — the link is a convenience
+                url = None
+            _set_rerender(set_id, run_page_url=url)
+            jobs_runner.wait_for_run(w, run_id)
+            jobs_runner.download_run_artifacts(w, suffix, LOCAL_ROOT / set_id)
+        else:
+            env = _subprocess_env(suffix, f"{RAW_STAGING_VOLUME}/{suffix}")
+            log_path = LOGS_DIR / f"{suffix}.rerender.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as log:
+                proc = subprocess.Popen(
+                    [sys.executable, str(ROOT / "notebooks" / "04_sttm_render.py")],
+                    cwd=str(ROOT), env=env,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                )
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    log.write(line)
+                returncode = proc.wait(timeout=STAGE_TIMEOUT_SECONDS)
+            if returncode != 0:
+                raise RuntimeError(
+                    f"04_sttm_render.py exited with code {returncode} — see {_rel(log_path)}")
+        _set_rerender(set_id, state="done", finished_at=_now())
+    except Exception as exc:  # noqa: BLE001 — a stuck 'running' is the one outcome to prevent
+        _set_rerender(set_id, state="failed", finished_at=_now(),
+                      error=f"{type(exc).__name__}: {exc}")
+
+
+# --------------------------------------------------------------------------- #
 # Routes
 # --------------------------------------------------------------------------- #
 @router.get("/api/demo/config")
@@ -875,3 +973,113 @@ def demo_artifact_workbook(set_id: str, doc: str) -> FileResponse:
         filename=f"{doc}.sttm.xlsx",
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+# --------------------------------------------------------------------------- #
+# Routes — human-in-the-loop review of a finished run
+# --------------------------------------------------------------------------- #
+@router.get("/api/demo/artifacts/{set_id}/review")
+def demo_review(set_id: str, doc: str) -> dict:
+    """Every gated item of this run with its existing resolution (if any),
+    plus the re-render state — the review panel's whole world."""
+    try:
+        _contract, items = _review_items(set_id, doc)
+    except ArtifactRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "set_id": set_id, "doc_id": doc, "items": items,
+        "n_items": len(items),
+        "n_resolved": sum(1 for it in items if it["resolution"]),
+        "rerender": _rerender_state(set_id),
+    }
+
+
+class DemoResolution(BaseModel):
+    ambiguity_id: str
+    kind: str
+    resolution_type: str
+    chosen_candidate: str | None = None
+    rationale: str | None = None
+    candidates_snapshot: list[str] = []
+
+
+@router.post("/api/demo/artifacts/{set_id}/resolutions")
+def demo_submit_resolution(set_id: str, doc: str, body: DemoResolution) -> dict:
+    """Record ONE human resolution into the run's v1 contract — same
+    validation and persistence as orchestration.py's run-scoped route, so
+    04 applies it identically. Nothing is re-rendered here; that is the
+    reviewer's explicit next click."""
+    try:
+        contract, items = _review_items(set_id, doc)
+    except ArtifactRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    by_id = {it["id"]: it for it in ap.gated_items(contract)}
+    ambiguity = by_id.get(body.ambiguity_id)
+    if ambiguity is None:
+        raise HTTPException(status_code=400,
+                            detail="ambiguity_id does not match any gated item in this run")
+    if body.resolution_type not in ("candidate_pick", "free_text", "none_of_these"):
+        raise HTTPException(status_code=400, detail=f"unknown resolution_type {body.resolution_type!r}")
+    error = ap.validate_resolution_submission(
+        ambiguity, body.resolution_type, body.chosen_candidate, body.rationale)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    if body.resolution_type == "free_text" and ambiguity["has_candidates"]:
+        # The pick is structural, not a convention: 04 never applies free
+        # text to a candidate-having ambiguity, so accepting it here would
+        # record a "resolution" that changes nothing. Client and server agree.
+        raise HTTPException(
+            status_code=400,
+            detail="this ambiguity has candidates — pick one or choose none_of_these "
+                   "(free text is recorded as rationale only, never applied)")
+    with _rerender_lock:
+        if (_rerenders.get(set_id) or {}).get("state") == "running":
+            raise HTTPException(status_code=409, detail="a re-render is in progress — wait for it")
+    record = {
+        "ambiguity_id": body.ambiguity_id,
+        "kind": body.kind,
+        "resolution_type": body.resolution_type,
+        "chosen_candidate": body.chosen_candidate,
+        "rationale": body.rationale,
+        "candidates_snapshot": body.candidates_snapshot or ambiguity["candidates"],
+        "resolved_at": _now(),
+        "resolved_by": None,
+    }
+    ap.merge_resolution(contract, record)
+    path = _contract_v1_path(set_id, doc)
+    tmp = path.with_suffix(path.suffix + ".part")
+    tmp.write_text(json.dumps(contract, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    return ap.to_gated_item_dict(contract, ambiguity)
+
+
+@router.post("/api/demo/artifacts/{set_id}/rerender", status_code=202)
+def demo_rerender(set_id: str, doc: str) -> dict:
+    """Fold the recorded resolutions into the STTM: re-run stage 04 only
+    (no model call, nothing billed) and return 202; poll GET .../review."""
+    try:
+        _contract, _items = _review_items(set_id, doc)
+    except ArtifactRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    with _rerender_lock:
+        if (_rerenders.get(set_id) or {}).get("state") == "running":
+            raise HTTPException(status_code=409, detail="a re-render is already running")
+        _rerenders[set_id] = {"state": "running", "started_at": _now(), "finished_at": None,
+                              "error": None, "run_page_url": None}
+    threading.Thread(target=_rerender_worker, args=(set_id, doc), daemon=True).start()
+    return _rerender_state(set_id)
+
+
+@router.get("/api/demo/artifacts/{set_id}/rerender")
+def demo_rerender_state(set_id: str) -> dict:
+    try:
+        _check_set_id(set_id)
+    except ArtifactRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _rerender_state(set_id)

@@ -46,9 +46,9 @@ resources:
           default: fetch
         # SharePoint knobs for the fetch task. The client SECRET is
         # deliberately absent -- it resolves from the secret scope inside the
-        # notebook, never from a job parameter. There is no
-        # sharepoint_output_folder parameter because this job never publishes
-        # (see the note above the render task).
+        # notebook, never from a job parameter. There is no output-folder
+        # parameter because nothing in this repo writes to SharePoint (see
+        # the note above the render task).
         - name: sharepoint_host
           default: ${var.sharepoint_host}
         - name: sharepoint_site_path
@@ -140,15 +140,15 @@ resources:
               contracts_table: "{{job.parameters.contracts_table}}"
               out_volume: "{{job.parameters.out_volume}}"
 
-        # The job ends at render, DELIBERATELY (decided 2026-08-21).
-        # 05_sharepoint_publish is NOT a task here: 04 re-runs every time a
-        # reviewer resolves an ambiguity, and a re-render is not automatically
-        # a re-publish -- wiring publish after render would let a full job run
-        # push a not-yet-approved workbook to the client's library. Publishing
-        # is a manual, confirm-gated action: the reviewer's publish button in
-        # the review app's demo tab (POST /api/demo/sharepoint/publish), or a
-        # deliberate standalone run of notebooks/05_sharepoint_publish.py with
-        # publish_doc_id set, after sign-off. Do not re-wire it into this job.
+        # The job ends at render, DELIBERATELY. There is no publish task and
+        # no publish code anywhere in the repo (2026-08-22; the former
+        # 05_sharepoint_publish and the app's publish control were removed):
+        # 04 re-runs every time a reviewer resolves an ambiguity, and a
+        # rendered workbook is a DRAFT until a person has reviewed it. The
+        # hand-off to SharePoint is that person uploading the finished
+        # workbook to the library's STTM folder themselves; the scheduled
+        # frd_sttm_sharepoint_sync job then pulls it into sttm_reference and
+        # pairs it with its FRD. Do not add a publish task here.
         - task_key: render
           depends_on:
             - task_key: contract_build

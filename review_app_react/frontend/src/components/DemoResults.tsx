@@ -1,15 +1,26 @@
-import { useState } from "react";
-import { Alert, AlertDescription, AlertTitle, Button } from "@databricks/appkit-ui/react";
+import { useEffect, useState } from "react";
+import { Alert, AlertDescription, AlertTitle, Button, Spinner } from "@databricks/appkit-ui/react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
-import { demoWorkbookUrl, useDemoResults, useSharePointConfig, useSharePointPublish } from "../demoApi";
+import {
+  demoWorkbookUrl,
+  useDemoRerender,
+  useDemoResults,
+  useDemoReview,
+  useSharePointConfig,
+  useSubmitDemoResolution,
+} from "../demoApi";
+import type { ResolutionSubmission } from "../types";
+import { GatedItemCard } from "./GatedItemCard";
 
 /**
  * The unified results view — rendered identically for a finished live run
  * and a replayed artifact set (both are just an artifact set on disk by the
  * time this mounts). Section order IS the demo story: extraction summary →
- * the stage-03 gate moment (the HITL centerpiece) → stage-04 verdict →
- * eval-vs-golden → rendered STTM mappings + workbook download.
+ * the stage-03 gate moment → the human-in-the-loop review panel (resolve
+ * what the gate could not, then re-render — 2026-08-22 evening) → stage-04
+ * verdict → eval-vs-golden → rendered STTM mappings + workbook download.
  */
 export function DemoResults({ setId, docId }: { setId: string; docId: string }) {
   const resultsQuery = useDemoResults(setId, docId);
@@ -31,6 +42,7 @@ export function DemoResults({ setId, docId }: { setId: string; docId: string }) 
       <ExtractionSummary r={r} />
       <TemplatePanel r={r} />
       <GateStrip r={r} />
+      <ReviewPanel setId={setId} docId={docId} />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <VerdictTile r={r} />
         <EvalPanel r={r} />
@@ -129,6 +141,117 @@ function GateStrip({ r }: { r: R }) {
               ))}
             </ul>
           )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * The human-in-the-loop step (slide 2, step 3). Every gated item of this
+ * run as a GatedItemCard (the SAME card the legacy review flow used —
+ * structural pick / none-of-these / free text), saved one at a time into
+ * the run's contract; then one explicit "Apply & re-render" that re-runs
+ * stage 04 only (no model call, nothing billed) and refreshes the results
+ * above and below. Renders nothing when the run has no gated items.
+ */
+function ReviewPanel({ setId, docId }: { setId: string; docId: string }) {
+  const review = useDemoReview(setId, docId);
+  const submit = useSubmitDemoResolution(setId, docId);
+  const rerender = useDemoRerender(setId, docId);
+  const queryClient = useQueryClient();
+  const state = review.data?.rerender.state;
+
+  // When a re-render lands, every section of the results view is stale.
+  useEffect(() => {
+    if (state === "done" || state === "failed") {
+      queryClient.invalidateQueries({ queryKey: ["demo", "results", setId, docId] });
+    }
+  }, [state, review.data?.rerender.finished_at, queryClient, setId, docId]);
+
+  const d = review.data;
+  if (!d || d.items.length === 0) return null;
+  const allResolved = d.n_resolved === d.n_items;
+  const running = state === "running";
+
+  return (
+    <div>
+      <h2 className="eyebrow mb-2">Human-in-the-loop review</h2>
+      <Card className="border-2">
+        <CardHeader>
+          <CardTitle className="text-base">
+            {d.n_resolved} of {d.n_items} gated question{d.n_items === 1 ? "" : "s"} resolved
+          </CardTitle>
+          <CardDescription>
+            The agent could not settle these from the document alone. Pick a candidate, “None of these”,
+            or type an answer; each decision is saved to this run and remembered. Then apply them — the
+            workbook is re-rendered without another model call.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {d.items.map((item) => (
+            <GatedItemCard
+              key={`${setId}::${docId}::${item.id}`}
+              item={item}
+              onSubmit={(payload) => {
+                const submission: ResolutionSubmission = {
+                  ambiguity_id: item.id,
+                  kind: item.kind,
+                  candidates_snapshot: item.candidates,
+                  ...payload,
+                };
+                return submit.mutateAsync(submission).then((saved) => {
+                  queryClient.invalidateQueries({ queryKey: ["demo", "review", setId, docId] });
+                  return saved;
+                });
+              }}
+            />
+          ))}
+          {d.rerender.state === "failed" && (
+            <Alert variant="destructive">
+              <AlertTitle>Re-render failed</AlertTitle>
+              <AlertDescription>{d.rerender.error}</AlertDescription>
+            </Alert>
+          )}
+          {rerender.isError && (
+            <Alert variant="destructive">
+              <AlertDescription>{(rerender.error as Error).message}</AlertDescription>
+            </Alert>
+          )}
+          <div className="flex items-center gap-3 pt-2 border-t">
+            <Button
+              disabled={running || rerender.isPending || d.n_resolved === 0}
+              onClick={() =>
+                rerender.mutate(undefined, {
+                  onSuccess: () =>
+                    queryClient.invalidateQueries({ queryKey: ["demo", "review", setId, docId] }),
+                })
+              }
+            >
+              {running ? (
+                <>
+                  <Spinner /> Re-rendering…
+                </>
+              ) : (
+                "Apply resolutions & re-render the STTM"
+              )}
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              {d.n_resolved === 0
+                ? "Save at least one decision first."
+                : allResolved
+                  ? "All questions answered."
+                  : `${d.n_items - d.n_resolved} still unanswered — unanswered items stay flagged in the workbook.`}
+              {d.rerender.state === "done" && d.rerender.finished_at
+                ? ` Last applied ${d.rerender.finished_at.slice(0, 16).replace("T", " ")}.`
+                : ""}
+            </span>
+            {d.rerender.run_page_url && (
+              <a href={d.rerender.run_page_url} target="_blank" rel="noreferrer" className="text-sm underline">
+                View render job ↗
+              </a>
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -263,7 +386,7 @@ function MappingsSection({ r }: { r: R }) {
           </Button>
         )}
       </div>
-      {r.workbook_available && <PublishControl setId={r.set_id} docId={r.doc_id} />}
+      {r.workbook_available && <HandOffNote docId={r.doc_id} />}
       <div className="flex flex-col gap-3">
         {r.mappings.map((m) => (
           <MappingTable key={m.feed_name ?? "?"} feedName={m.feed_name} rows={m.rows} />
@@ -277,81 +400,30 @@ function MappingsSection({ r }: { r: R }) {
 }
 
 /**
- * The manual SharePoint publish gate (decided 2026-08-21). Publishing a
- * workbook to the client's library is a reviewer's deliberate act, per
- * document, after looking at the result — never a side effect of a run.
- * Hence the two-step shape mirroring the billed-run ConfirmDialog: the first
- * click only reveals the target and the warning; only the second click sends
- * confirm:true. Renders nothing when SharePoint is unconfigured, same as the
- * document picker.
+ * The hand-off (decided 2026-08-22): the app never writes to SharePoint.
+ * The reviewer downloads the draft, makes any final edits, and uploads it
+ * to the library's STTM folder THEMSELVES; the scheduled sync then pulls it
+ * into Unity Catalog and pairs it with its FRD. This note says exactly
+ * where. Renders a generic version when SharePoint is unconfigured.
  */
-function PublishControl({ setId, docId }: { setId: string; docId: string }) {
+function HandOffNote({ docId }: { docId: string }) {
   const configQuery = useSharePointConfig();
-  const publish = useSharePointPublish();
-  const [confirming, setConfirming] = useState(false);
-
   const cfg = configQuery.data;
-  if (!cfg?.configured) return null;
-
-  if (publish.isSuccess) {
-    const p = publish.data;
-    return (
-      <Alert className="mb-3">
-        <AlertTitle>Published to SharePoint</AlertTitle>
-        <AlertDescription>
-          <span className="mono-id">{p.name}</span> is now in <span className="mono-id">{p.target}</span>.{" "}
-          {p.web_url && (
-            <a href={p.web_url} target="_blank" rel="noreferrer" className="underline">
-              Open in SharePoint
-            </a>
-          )}
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  if (!confirming) {
-    return (
-      <div className="flex justify-end mb-3">
-        <Button variant="outline" onClick={() => setConfirming(true)}>
-          Publish to SharePoint…
-        </Button>
-      </div>
-    );
-  }
-
+  const target = cfg?.configured
+    ? `${cfg.site}/${cfg.library}${cfg.sttm_folder ? `/${cfg.sttm_folder}` : ""}`
+    : null;
   return (
-    <Card className="border-2 mb-3">
+    <Card className="mb-3">
       <CardHeader>
-        <CardTitle className="text-base">Publish this workbook to the client's library?</CardTitle>
+        <CardTitle className="text-base">Next step — yours, not the agent's</CardTitle>
         <CardDescription>
-          <span className="mono-id">{docId}.sttm.xlsx</span> will be uploaded to{" "}
-          <span className="mono-id">
-            {cfg.site}/{cfg.library}
-            {cfg.output_folder ? `/${cfg.output_folder}` : ""}
-          </span>
-          , replacing any same-named workbook. This is the hand-off of record — publish only after the mapping
-          has been reviewed.
+          <span className="mono-id">{docId}.sttm.xlsx</span> is a draft until you say otherwise. Download
+          it, make any final edits in Excel, and when you are satisfied upload it to{" "}
+          {target ? <span className="mono-id">{target}</span> : "the SharePoint STTM folder"} yourself. The
+          app does not publish anything; the next sync pulls your upload into Databricks and pairs it with
+          this FRD, and it becomes a template for future mappings.
         </CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {publish.isError && (
-          <Alert variant="destructive">
-            <AlertDescription>{(publish.error as Error).message}</AlertDescription>
-          </Alert>
-        )}
-        <div className="flex gap-2">
-          <Button
-            disabled={publish.isPending}
-            onClick={() => publish.mutate({ set_id: setId, doc_id: docId })}
-          >
-            {publish.isPending ? "Publishing…" : "Publish it"}
-          </Button>
-          <Button variant="ghost" onClick={() => setConfirming(false)} disabled={publish.isPending}>
-            Cancel
-          </Button>
-        </div>
-      </CardContent>
     </Card>
   );
 }

@@ -4,9 +4,10 @@ bundle:
 include:
   - resources/*.yml
 
-# Variables shared across the four pipeline notebooks. Defaults match the
-# widget defaults hardcoded in notebooks/01_frd_ingest.py .. 04_sttm_render.py
-# today (soham_workspace.sttm_agent). See resources/frd_sttm_job.yml for how
+# Variables shared across the pipeline notebooks and the sync job
+# (resources/frd_sttm_sync_job.yml). Defaults match the widget defaults
+# hardcoded in notebooks/01_frd_ingest.py .. 04_sttm_render.py today
+# (soham_workspace.sttm_agent). See resources/frd_sttm_job.yml for how
 # each variable maps onto each notebook's actual widget names -- they don't
 # all agree (e.g. 01_frd_ingest calls the shared documents table "table",
 # while 02_extract/03_contract_build call it "docs_table").
@@ -44,7 +45,7 @@ variables:
   sharepoint_host:
     description: >-
       SharePoint hostname, e.g. contoso.sharepoint.com. Widget name
-      "sharepoint_host" in 00_sharepoint_fetch and 05_sharepoint_publish.
+      "sharepoint_host" in 00_sharepoint_sync and 00_sharepoint_fetch.
       NO DEFAULT: a blank tenant must fail loudly at load_config rather than
       reach Graph and return an opaque 400.
     default: ""
@@ -58,18 +59,33 @@ variables:
     default: Documents
   sharepoint_frd_folder:
     description: >-
-      Folder within the library that 00_sharepoint_fetch reads FRDs from.
-      Blank means the library root.
+      Folder within the library holding approved FRDs (read by
+      00_sharepoint_sync and 00_sharepoint_fetch). Blank means the library
+      root.
     default: ""
-  sharepoint_output_folder:
+  sharepoint_reference_folder:
     description: >-
-      Folder within the library that 05_sharepoint_publish writes rendered
-      STTM workbooks to. The ONLY path this repo ever writes to in SharePoint
-      -- keep the app registration's write grant scoped to it. Not referenced
-      by frd_sttm_pipeline: publishing is manual by decision (2026-08-21) --
-      the review app's confirm-gated button, or a standalone run of 05 after
-      sign-off -- never a job task downstream of render.
+      Folder within the library holding approved STTM workbooks -- the
+      template library the sync pulls into sttm_reference, and the folder a
+      reviewer uploads a finished STTM to (the next sync pairs it with its
+      FRD). Blank means the same folder as the FRDs. There is NO output
+      folder any more: this repo never writes to SharePoint (decided
+      2026-08-22; the former 05_sharepoint_publish is gone), so the app
+      registration needs a READ grant only.
     default: ""
+  sync_cron:
+    description: >-
+      Quartz cron (UTC) for frd_sttm_sharepoint_sync -- how often the
+      volumes are brought in step with SharePoint and the corpus re-paired.
+      Every 15 minutes by default; a tick with nothing new downloads
+      nothing (eTag/modified/size change detection).
+    default: "0 0/15 * * * ?"
+  sync_schedule_pause_status:
+    description: >-
+      UNPAUSED in a workspace with a wired tenant; PAUSED where there is
+      none (the dev target overrides this), so an unconfigured sync does not
+      fail every tick and mail the notification address.
+    default: UNPAUSED
   sharepoint_tenant_id:
     description: Entra ID tenant id for the app registration (app-only auth).
     default: ""
@@ -90,3 +106,7 @@ targets:
   dev:
     mode: development
     default: true
+    variables:
+      # No tenant is wired in the dev workspace; trigger the sync by hand
+      # (databricks bundle run frd_sttm_sharepoint_sync) or from the app.
+      sync_schedule_pause_status: PAUSED

@@ -1,0 +1,51 @@
+# The RENDER-ONLY job (2026-08-22 evening): stage 04 over an EXISTING run.
+#
+# Why it exists: the human-in-the-loop step. A reviewer resolves the gated
+# ambiguities of a finished app run in the review app; the resolutions are
+# merged into that run's v1 contract JSON in its UC out dir; then the STTM
+# must be re-rendered with them applied. Re-running frd_sttm_pipeline would
+# re-extract (a second billed model call) for no reason — 04 is the only
+# stage that changes. The deployed App triggers THIS job with the original
+# run's insulated parameters (backend/jobs_runner.start_render_job), so the
+# v2 contract, workbook and report are rewritten in place under
+# sttm_out_app/<suffix>/ and mirrored back. Local mode does the same with a
+# subprocess; the notebook is identical.
+#
+# Parameters are the pipeline job's render-relevant subset, with the SAME
+# defaults (a bare run re-renders the curated sttm_out — harmless, 04 is
+# idempotent). No SharePoint, no secret, no model. Serverless (no
+# job_cluster), like the others.
+
+resources:
+  jobs:
+    frd_sttm_render:
+      name: frd_sttm_render
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: contracts_table
+          default: ${var.contracts_table}
+        - name: runs_table
+          default: frd_sttm_runs
+        - name: out_volume
+          default: ${var.out_volume}
+
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+
+      tasks:
+        - task_key: render
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/04_sttm_render.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              contracts_table: "{{job.parameters.contracts_table}}"
+              runs_table: "{{job.parameters.runs_table}}"
+              reference_volume: sttm_reference
+              out_volume: "{{job.parameters.out_volume}}"

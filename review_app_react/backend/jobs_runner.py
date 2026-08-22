@@ -16,6 +16,15 @@ data_access.py already switches on. This module is the whole
 databricks-mode implementation; demo.py owns the Run lifecycle and calls
 the functions here from its worker thread.
 
+Since 2026-08-22 the same module also drives the SharePoint SYNC job
+(`frd_sttm_sharepoint_sync`, resources/frd_sttm_sync_job.yml): the Corpus
+panel's "Sync now" triggers it, waits for it, then mirrors the frd_raw and
+sttm_reference volumes down to the container (`mirror_corpus`) so the
+picker lists exactly what Unity Catalog holds and runs can stage from a
+local copy. The scheduled ticks of that job need no app involvement; the
+app re-mirrors lazily whenever its local index is missing or older than
+the volume's (corpus_routes._index_or_none).
+
 Run insulation, mirrored from the local mode's env-var scheme: every
 job parameter that names an output gets the run suffix —
 `raw_volume=demo_raw/<suffix>`, `out_volume=<app-out-volume>/<suffix>`
@@ -60,8 +69,13 @@ RAW_STAGING_VOLUME = os.environ.get("STTM_DEMO_RAW_STAGING_VOLUME", "demo_raw")
 # The volume that holds one sub-directory per app-triggered run. Deliberately
 # NOT `sttm_out` (the curated volume the review tab reads): app runs stay
 # insulated, and promotion into the curated store remains a separate,
-# deliberate act — same philosophy as the manual SharePoint publish.
+# deliberate act — same philosophy as the reviewer's own SharePoint upload.
 APP_OUT_VOLUME = os.environ.get("STTM_DEMO_APP_OUT_VOLUME", "sttm_out_app")
+
+# The two volumes the SYNC job maintains (same env names demo.py /
+# corpus_routes.py use for their local mirrors).
+RAW_VOLUME = os.environ.get("STTM_DEMO_PRELOADED_VOLUME", "frd_raw")
+REFERENCE_VOLUME = os.environ.get("STTM_REFERENCE_VOLUME", "sttm_reference")
 
 # Job identity: an explicit numeric id wins; otherwise the name is resolved
 # via the Jobs API and must match EXACTLY ONE job. Note that a bundle target
@@ -70,6 +84,13 @@ APP_OUT_VOLUME = os.environ.get("STTM_DEMO_APP_OUT_VOLUME", "sttm_out_app")
 # it actually appears in the workspace.
 JOB_ID_ENV = "STTM_DEMO_JOB_ID"
 JOB_NAME = os.environ.get("STTM_DEMO_JOB_NAME", "frd_sttm_pipeline")
+SYNC_JOB_ID_ENV = "STTM_SYNC_JOB_ID"
+SYNC_JOB_NAME = os.environ.get("STTM_SYNC_JOB_NAME", "frd_sttm_sharepoint_sync")
+# The render-only job (resources/frd_sttm_render_job.yml): stage 04 over an
+# EXISTING run's suffix, used by the human-in-the-loop re-render — no
+# re-extraction, nothing billed.
+RENDER_JOB_ID_ENV = "STTM_RENDER_JOB_ID"
+RENDER_JOB_NAME = os.environ.get("STTM_RENDER_JOB_NAME", "frd_sttm_render")
 
 POLL_SECONDS = float(os.environ.get("STTM_DEMO_JOB_POLL_SECONDS", "5"))
 RUN_TIMEOUT_SECONDS = int(os.environ.get("STTM_DEMO_JOB_TIMEOUT_SECONDS", "1800"))
@@ -121,36 +142,48 @@ def out_dir_for(suffix: str) -> str:
     return f"{volume_root()}/{APP_OUT_VOLUME}/{suffix}"
 
 
-def resolve_job_id(w) -> int:
-    """STTM_DEMO_JOB_ID if set; else exactly one Jobs-API name match.
+def resolve_job_id(w, job_name: str | None = None, id_env: str | None = None,
+                   name_env: str = "STTM_DEMO_JOB_NAME") -> int:
+    """The pinned id env var if set; else exactly one Jobs-API name match.
 
-    Zero or multiple matches raise naming both remedies — a run must never
-    be sent to a guessed job.
+    Defaults address the pipeline job; the sync job passes its own name /
+    env names (see resolve_sync_job_id). Zero or multiple matches raise
+    naming both remedies — a run must never be sent to a guessed job.
     """
-    explicit = os.environ.get(JOB_ID_ENV, "").strip()
+    job_name = JOB_NAME if job_name is None else job_name
+    id_env = JOB_ID_ENV if id_env is None else id_env
+    explicit = os.environ.get(id_env, "").strip()
     if explicit:
         try:
             return int(explicit)
         except ValueError as exc:
-            raise JobRunnerError(f"{JOB_ID_ENV} must be a numeric job id, got {explicit!r}") from exc
+            raise JobRunnerError(f"{id_env} must be a numeric job id, got {explicit!r}") from exc
 
-    matches = [j for j in w.jobs.list(name=JOB_NAME)
-               if getattr(getattr(j, "settings", None), "name", None) == JOB_NAME]
+    matches = [j for j in w.jobs.list(name=job_name)
+               if getattr(getattr(j, "settings", None), "name", None) == job_name]
     if len(matches) == 1:
         return matches[0].job_id
     if not matches:
         raise JobRunnerError(
-            f"No job named {JOB_NAME!r} in this workspace. Deploy the bundle "
-            f"(databricks bundle deploy), then set STTM_DEMO_JOB_NAME to the "
+            f"No job named {job_name!r} in this workspace. Deploy the bundle "
+            f"(databricks bundle deploy), then set {name_env} to the "
             f"job's name AS DEPLOYED (a dev-mode target prefixes it, e.g. "
-            f"'[dev <user>] frd_sttm_pipeline') — or set {JOB_ID_ENV} to the "
+            f"'[dev <user>] {job_name}') — or set {id_env} to the "
             f"numeric job id."
         )
     ids = ", ".join(str(j.job_id) for j in matches)
     raise JobRunnerError(
-        f"{len(matches)} jobs named {JOB_NAME!r} (ids: {ids}). Set {JOB_ID_ENV} "
+        f"{len(matches)} jobs named {job_name!r} (ids: {ids}). Set {id_env} "
         f"to the one this app should run — refusing to guess."
     )
+
+
+def resolve_sync_job_id(w) -> int:
+    return resolve_job_id(w, SYNC_JOB_NAME, SYNC_JOB_ID_ENV, "STTM_SYNC_JOB_NAME")
+
+
+def resolve_render_job_id(w) -> int:
+    return resolve_job_id(w, RENDER_JOB_NAME, RENDER_JOB_ID_ENV, "STTM_RENDER_JOB_NAME")
 
 
 def job_parameters(suffix: str) -> dict[str, str]:
@@ -189,7 +222,47 @@ def stage_frd(w, suffix: str, frd_path: Path) -> str:
 
 def start_job_run(w, job_id: int, suffix: str) -> int:
     """run_now with the insulated parameters; returns the run id."""
-    waiter = w.jobs.run_now(job_id=job_id, job_parameters=job_parameters(suffix))
+    return _run_now(w, job_id, job_parameters(suffix))
+
+
+def sync_job_parameters(mode: str) -> dict[str, str]:
+    """The sync job runs against the REAL volumes (its own defaults); the
+    only knob the app passes is the mode — 'sync' or 'reindex', validated
+    against the closed set the notebook itself enforces."""
+    if mode not in ("sync", "reindex"):
+        raise JobRunnerError(f"sync mode must be 'sync' or 'reindex', got {mode!r}")
+    return {"sync_mode": mode}
+
+
+def start_sync_job(w, job_id: int, mode: str = "sync") -> int:
+    return _run_now(w, job_id, sync_job_parameters(mode))
+
+
+RENDER_JOB_PARAMETERS = ("catalog", "schema", "contracts_table", "runs_table", "out_volume")
+
+
+def render_job_parameters(suffix: str) -> dict[str, str]:
+    """The SAME insulated values as the pipeline run, restricted to the
+    parameters the render-only job declares (the Jobs API rejects unknown
+    job parameters)."""
+    full = job_parameters(suffix)
+    return {k: full[k] for k in RENDER_JOB_PARAMETERS}
+
+
+def start_render_job(w, job_id: int, suffix: str) -> int:
+    return _run_now(w, job_id, render_job_parameters(suffix))
+
+
+def upload_contract(w, suffix: str, doc_id: str, payload: bytes) -> str:
+    """Put the reviewer-edited v1 contract back into the run's UC out dir so
+    the render job's 04 reads the resolutions from /Volumes."""
+    dest = f"{out_dir_for(suffix)}/contracts/{doc_id}.contract.json"
+    w.files.upload(dest, payload, overwrite=True)
+    return dest
+
+
+def _run_now(w, job_id: int, params: dict[str, str]) -> int:
+    waiter = w.jobs.run_now(job_id=job_id, job_parameters=params)
     run_id = getattr(waiter, "run_id", None)
     if run_id is None:
         run_id = waiter.response.run_id
@@ -236,9 +309,7 @@ def poll_job_run(w, run, run_id: int) -> None:
     """Poll the run to a terminal state, mirroring task states onto
     `run.stages` and emitting console events on every transition. Raises
     JobRunnerError on failure or timeout; returns on SUCCESS."""
-    deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
-    while True:
-        jr = w.jobs.get_run(run_id)
+    def on_tasks(jr):
         for task in jr.tasks or []:
             state = getattr(task, "state", None)
             run._set_stage(task.task_key, _task_status(
@@ -246,11 +317,24 @@ def poll_job_run(w, run, run_id: int) -> None:
                 _enum_str(getattr(state, "result_state", None)),
             ))
 
+    wait_for_run(w, run_id, on_tasks=on_tasks)
+    run._emit("console", f"job run {run_id} finished: SUCCESS")
+
+
+def wait_for_run(w, run_id: int, on_tasks=None) -> None:
+    """Poll any job run to a terminal state. `on_tasks(jr)` (optional) is
+    called with each fresh run object so a caller can mirror task states.
+    Raises JobRunnerError on failure or timeout; returns on SUCCESS."""
+    deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
+    while True:
+        jr = w.jobs.get_run(run_id)
+        if on_tasks is not None:
+            on_tasks(jr)
+
         life = _enum_str(getattr(getattr(jr, "state", None), "life_cycle_state", None))
         result = _enum_str(getattr(getattr(jr, "state", None), "result_state", None))
         if life in ("TERMINATED", "INTERNAL_ERROR", "SKIPPED"):
             if result == "SUCCESS":
-                run._emit("console", f"job run {run_id} finished: SUCCESS")
                 return
             raise JobRunnerError(_failed_task_detail(w, jr))
 
@@ -281,8 +365,8 @@ def download_run_artifacts(w, suffix: str, dest_dir: Path) -> int:
 
     The UC volume is the durable store; this local copy only exists so the
     ENTIRE existing results machinery (load_results, workbook download,
-    SharePoint publish, replay discovery) works unchanged on a directory
-    shaped exactly like a local run's. Cheap: a full set is ~1 MB.
+    replay discovery) works unchanged on a directory shaped exactly like a
+    local run's. Cheap: a full set is ~1 MB.
     """
     count = 0
     for volume_path, rel in _walk_files(w, out_dir_for(suffix)):
@@ -327,3 +411,47 @@ def rehydrate_artifact_sets(local_root: Path) -> list[str]:
         download_run_artifacts(w, name, dest)
         fetched.append(name)
     return fetched
+
+
+def mirror_volume_dir(w, remote_dir: str, local_dir: Path) -> int:
+    """Mirror the FILES directly under one volume directory into `local_dir`
+    (sub-directories are not descended — frd_raw and sttm_reference are
+    flat by construction). Local files that no longer exist remotely are
+    removed, so the local picker never lists a document the sync has
+    already dropped. Returns the number of files mirrored."""
+    entries = list(w.files.list_directory_contents(remote_dir))
+    local_dir.mkdir(parents=True, exist_ok=True)
+    remote_names = set()
+    count = 0
+    for entry in entries:
+        if entry.is_directory:
+            continue
+        name = Path(entry.path).name
+        remote_names.add(name)
+        payload = w.files.download(entry.path).contents.read()
+        target = local_dir / name
+        tmp = target.with_suffix(target.suffix + ".part")
+        tmp.write_bytes(payload)
+        tmp.replace(target)
+        count += 1
+    for stale in local_dir.iterdir():
+        if stale.is_file() and stale.name not in remote_names:
+            stale.unlink()
+    return count
+
+
+def mirror_corpus(w, frd_local: Path, reference_local: Path) -> dict:
+    """Bring the container's copies of frd_raw + sttm_reference in step with
+    Unity Catalog (the sync job's output). Raises JobRunnerError if a volume
+    is unreadable — an unreadable store must never masquerade as empty."""
+    out = {}
+    for key, remote, local in (("frd", f"{volume_root()}/{RAW_VOLUME}", frd_local),
+                               ("reference", f"{volume_root()}/{REFERENCE_VOLUME}", reference_local)):
+        try:
+            out[key] = mirror_volume_dir(w, remote, local)
+        except Exception as exc:  # noqa: BLE001 — mapped to one operator-facing error
+            raise JobRunnerError(
+                f"Cannot mirror {remote} ({type(exc).__name__}: {exc}). Create the "
+                f"volume and grant the app's service principal READ on it."
+            ) from exc
+    return out

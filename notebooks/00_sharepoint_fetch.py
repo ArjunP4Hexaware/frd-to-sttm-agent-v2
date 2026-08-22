@@ -14,8 +14,16 @@
 # MAGIC re-run of the pipeline after a parse fix does not re-download anything.
 # MAGIC
 # MAGIC **Files are fetched by Graph item id from one named library** — the
-# MAGIC site is never crawled. Read scope is all this stage needs; the publish
-# MAGIC side lives in `05_sharepoint_publish`.
+# MAGIC site is never crawled. Read scope is all this stage needs — and all
+# MAGIC the repo ever needs: nothing here writes to SharePoint (the former
+# MAGIC `05_sharepoint_publish` was removed 2026-08-22; a finished STTM is
+# MAGIC uploaded by a person and pulled back in by `00_sharepoint_sync`).
+# MAGIC
+# MAGIC **Relationship to `00_sharepoint_sync`.** The scheduled sync keeps
+# MAGIC `frd_raw` current continuously; this task is the pipeline job's own
+# MAGIC fetch for a stand-alone full run. The review app's job-triggered runs
+# MAGIC pass `sharepoint_fetch_mode=skip` because they stage the one chosen FRD
+# MAGIC into a run-scoped directory themselves.
 # MAGIC
 # MAGIC **Fail-loud.** Missing configuration raises and names both remedies
 # MAGIC (widget/env var, and the secret scope). A truncated download raises

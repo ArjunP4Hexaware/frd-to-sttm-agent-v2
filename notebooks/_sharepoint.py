@@ -4,9 +4,10 @@
 # MAGIC
 # MAGIC Re-exports `frdsttm.sharepoint` so both consumption paths keep working:
 # MAGIC
-# MAGIC - Databricks: `00_sharepoint_fetch` / `05_sharepoint_publish` execute
+# MAGIC - Databricks: `00_sharepoint_sync` / `00_sharepoint_fetch` execute
 # MAGIC   `%run ./_sharepoint`, which runs this file's cells in the calling
-# MAGIC   notebook's globals.
+# MAGIC   notebook's globals (and put `src/` on sys.path, so `frdsttm.sync`
+# MAGIC   imports afterwards).
 # MAGIC - Local scripts: `from _sharepoint import ...` resolves here because
 # MAGIC   `python notebooks/0N_*.py` puts `notebooks/` on `sys.path`.
 # MAGIC

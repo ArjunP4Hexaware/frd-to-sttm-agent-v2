@@ -5,8 +5,9 @@ One JSON artifact, ``corpus_index.json``, living IN THE REFERENCE VOLUME
 (`sttm_reference` in Unity Catalog; `local_dev_fixtures/sttm_reference/`
 locally) next to the workbooks it indexes — so the notebooks read it from
 the same /Volumes path they already read references from, and it travels
-with them. Built by the review app's corpus bootstrap (or any caller with
-parsed FRDs + a reference dir); consumed by:
+with them. Built by the SharePoint sync (frdsttm.sync — the scheduled
+`frd_sttm_sharepoint_sync` job and the review app's "Sync now"), or by any
+caller with parsed FRDs + a reference dir; consumed by:
 
 - stage 02 (retrieved exemplars for the extraction prompt),
 - stage 04 (template decision + exclude-own-reference eval),
@@ -16,12 +17,13 @@ Everything here is deterministic code over parsed artifacts — no model
 calls, no network. Absence of the index is a legitimate state everywhere:
 each consumer falls back to its pre-corpus behavior (02: no exemplar
 block; 04: legacy filename-token reference pick; app: corpus panel shows
-"not built yet"). A corrupt index, by contrast, raises — a half-readable
+"not synced yet"). A corrupt index, by contrast, raises — a half-readable
 index must never silently degrade a run (see docs/TEMPLATE_ARCHITECTURE.md).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -35,7 +37,8 @@ from frdsttm.similarity import (
 )
 
 CORPUS_INDEX_NAME = "corpus_index.json"
-CORPUS_INDEX_VERSION = 1
+# 2 (2026-08-22): entries carry content_sha256; pairs carry matched_by.
+CORPUS_INDEX_VERSION = 2
 
 
 class CorpusIndexError(RuntimeError):
@@ -59,10 +62,14 @@ def build_corpus_index(frd_entries, reference_dir: str | Path,
 
     ``frd_entries``: iterable of {"doc_id", "source_file", "content"} — the
     stage-01 shape (`frd_documents` rows locally or in UC), so the features
-    are computed over exactly the text extraction sees.
+    are computed over exactly the text extraction sees. An optional
+    ``content_sha256`` (fingerprint of the SOURCE FILE bytes, as the sync
+    records it) is carried through; absent, the fingerprint is taken over
+    the parsed text so every entry still has one.
     ``generated_at``: caller-supplied ISO timestamp (kept out of this module
     so index construction stays a pure function of its inputs).
     """
+    reference_dir = Path(reference_dir)
     dictionaries = parse_reference_dir(reference_dir)
 
     frd_feats, frds = {}, {}
@@ -73,6 +80,8 @@ def build_corpus_index(frd_entries, reference_dir: str | Path,
         frds[doc_id] = {
             "source_file": e.get("source_file", ""),
             "n_chars": len(e["content"]),
+            "content_sha256": e.get("content_sha256")
+            or hashlib.sha256(e["content"].encode("utf-8")).hexdigest(),
             "features": serialize_features(feat),
         }
 
@@ -85,6 +94,8 @@ def build_corpus_index(frd_entries, reference_dir: str | Path,
             "n_feeds": len(dictionary.get("feeds", {})),
             "n_columns": sum(len(f.get("fields", []))
                              for f in dictionary.get("feeds", {}).values()),
+            "content_sha256": hashlib.sha256(
+                (reference_dir / name).read_bytes()).hexdigest(),
             "features": serialize_features(feat),
         }
 
@@ -119,14 +130,15 @@ def load_corpus_index(reference_dir: str | Path) -> dict | None:
     except (OSError, json.JSONDecodeError) as exc:
         raise CorpusIndexError(
             f"corpus index at {path} exists but is unreadable "
-            f"({exc.__class__.__name__}: {exc}) — rebuild it via the app's "
-            f"corpus bootstrap; refusing to run as if no corpus existed"
+            f"({exc.__class__.__name__}: {exc}) — rebuild it (run the "
+            f"SharePoint sync, or a reindex); refusing to run as if no corpus "
+            f"existed"
         ) from exc
     if index.get("version") != CORPUS_INDEX_VERSION:
         raise CorpusIndexError(
             f"corpus index at {path} has version {index.get('version')!r}, "
-            f"this code expects {CORPUS_INDEX_VERSION} — rebuild it via the "
-            f"app's corpus bootstrap"
+            f"this code expects {CORPUS_INDEX_VERSION} — rebuild it (run the "
+            f"SharePoint sync, or a reindex)"
         )
     return index
 
