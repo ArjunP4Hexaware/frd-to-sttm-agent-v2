@@ -104,23 +104,26 @@ src/frdsttm/            models.py (FrdIngestionSpec, GatedAmbiguity,
 contracts/frd_label_contract.json   the versioned FRD label contract — now a
                         frozen input, no longer mirrored anywhere (see
                         "Upstream" above)
-tests/                  119 tests, offline (no LLM/network/Spark);
-                        run `pytest` for the live count rather than
-                        trusting a number written down here
+tests/                  offline (no LLM/network/Spark); 158 as of
+                        2026-08-22 — run `pytest` for the live count rather
+                        than trusting a number written down here
 schema/sttm_extraction_schema.json   the extraction contract (mirrors models)
 databricks.yml + resources/frd_sttm_job.yml   asset bundle, job frd_sttm_pipeline
 review_app_react/       FastAPI + Vite/React review app (Databricks App; its
                         root requirements.txt is the Apps deploy manifest).
-                        TWO tabs since 2026-08-21 (demo/upload framing
-                        removed): (1) gated-ambiguity review; (2) "New
-                        mapping" — the user NAMES an FRD, the app locates it
-                        in SharePoint itself (POST /api/demo/sharepoint/
-                        locate: exact match or explicit candidate pick,
-                        never fuzzy auto-pick), short-circuits to presenting
-                        the already-published STTM when `<doc_id>.sttm.xlsx`
-                        exists in the output folder (view/download only — NO
-                        publish option there), and otherwise runs the
-                        pipeline. Runs are MODE-SWITCHED on STTM_APP_MODE:
+                        ONE surface since 2026-08-21 (the earlier tab
+                        layouts, incl. the rendered gated-ambiguity review
+                        tab, were removed; those components remain in the
+                        tree unrendered and their backend stays for tests):
+                        the "Select FRD" flow — the user NAMES an FRD, the
+                        app locates it in SharePoint itself
+                        (POST /api/demo/sharepoint/locate: exact match or
+                        explicit candidate pick, never fuzzy auto-pick),
+                        short-circuits to presenting the already-published
+                        STTM when `<doc_id>.sttm.xlsx` exists in the output
+                        folder (view/download; since 2026-08-22 also a
+                        two-step regenerate-anyway into the billed-run
+                        gate), and otherwise runs the pipeline. Runs are MODE-SWITCHED on STTM_APP_MODE:
                         local = 01→04 subprocesses with demo_<ts> env
                         insulation; databricks (the deployed App) = trigger
                         the bundle job via the Jobs API with the same
@@ -246,11 +249,13 @@ token lifetime and a network dependency inside the parsing stage.
   request, 413 over the demo cap. The picker renders nothing when
   unconfigured.
 
-## Designed, not built (decided 2026-08-21)
+## Designed, not built (decided 2026-08-21; largely BUILT since)
 
-Carry these into the next session; none is implemented.
-(The manual publish button, formerly listed here, landed 2026-08-21 — see
-the SharePoint section above.)
+This list has mostly landed — the manual publish button 2026-08-21 (see the
+SharePoint section above), the historical corpus + duplicate-FRD regenerate
+2026-08-22 (entries below record what shipped and what remains). Still
+genuinely not built: the content-hash duplicate upgrade, and UC-as-working-
+store beyond the corpus/reference volumes.
 
 - **Duplicate-FRD detection — v1 SHIPPED 2026-08-21, name-keyed;
   regenerate-despite-existing added 2026-08-22.** The locate flow
@@ -337,6 +342,11 @@ code, not a document, and was left in place; flagged, not silently kept.
   `from _models import ...` (local) both resolve through the shims in
   `notebooks/` — edit `src/frdsttm/`, never the shims.
 
+- **Mock extraction is keyed to the REMOVED demo documents (2026-08-22).**
+  `mock_extractions.py`'s specs match only the old demo_frd/CAQH doc ids and
+  content; on any other corpus a mock 02 run raises rather than inventing a
+  spec (correct — fail loud), which is why the synthetic offline smoke
+  skips 02 by pre-writing extraction JSONs. Live extraction is unaffected.
 - **Template thresholds are seeded, not calibrated (2026-08-22).**
   `similarity.THRESHOLD_DEFAULTS` were set against the synthetic smoke
   fixture. With a 2-document corpus and exclude-own on, each FRD has ONE
@@ -368,7 +378,8 @@ checkout; treat each as unproven until you have seen it work.
   container, where `dbutils` is not a global, so `IS_DATABRICKS` is False and
   they take the LOCAL storage path. Those are now listed and parity with
   `pyproject.toml` (core + local + ui, minus streamlit) is exact in both
-  directions. The deploy itself is still unproven.
+  directions; a third round (2026-08-22) added `pyarrow` to both — deltalake
+  1.x dropped it while `frdsttm.local_tables` still imports it directly. The deploy itself is still unproven.
 - **`IS_DATABRICKS` reads False inside the Apps container.** A spawned
   subprocess has no `dbutils` global. **The mock half is fixed (2026-08-21):**
   `02_extract` now also derives `IS_DATABRICKS_APP` from
@@ -397,8 +408,10 @@ checkout; treat each as unproven until you have seen it work.
   deployed with `STTM_DEMO_JOB_NAME` matching its AS-DEPLOYED name (dev-mode
   targets prefix it, e.g. `[dev <user>] frd_sttm_pipeline` — or pin
   `STTM_DEMO_JOB_ID`); volumes `demo_raw`, `sttm_out_app`, and
-  `sttm_reference` **containing at least one reference workbook** (04 fails
-  loudly on an empty reference dir); secret scope
+  `sttm_reference` — since 2026-08-22 an empty reference dir is a WARNED
+  freeform render rather than 04's old hard failure, but the demo needs the
+  app's corpus bootstrap to have populated it (2 real reference STTMs +
+  `corpus_index.json`, uploaded to the volume in databricks mode); secret scope
   `sttm_agent/anthropic_api_key`; the app service principal able to run the
   job and read/write those volumes. All are listed in `app.yaml`'s comment.
 - **SharePoint has never been run against a real tenant.** The Graph
