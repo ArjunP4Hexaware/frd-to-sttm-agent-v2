@@ -22,7 +22,11 @@
 # MAGIC membership (zip_code/member_id) and dictionary recycle markers;
 # MAGIC **(c)** derive stage/standard mappings (1:1 names, String at stage,
 # MAGIC segment-suffix table routing HDR/DTL/TRL); **(d)** render the STTM
-# MAGIC workbook in the matching client dialect (sheet-per-table or single-sheet);
+# MAGIC workbook in the matching client dialect (sheet-per-table or single-sheet),
+# MAGIC placing every FRD-stated validation/recycle rule on the row whose
+# MAGIC column it names (Comment / Recycle Flag / Business Rule) or, when it
+# MAGIC names none, in a feed-level cell — recorded in
+# MAGIC `_provenance.rule_placement`, never dropped (2026-08-22);
 # MAGIC **(e)** cell-level eval against the reference workbook.
 
 # COMMAND ----------
@@ -563,25 +567,116 @@ def derive_field_mappings(contract, dictionary, feed_match):
         table chosen by record segment suffix (HDR/DTL/TRL) when present.
       - standard: same 1:1 name; schema/catalog from contract when stated,
         else null (the FRD may genuinely not state it); String datatype.
+      - AUDIT rows (source "NA", `audit: True` from the dictionary parser,
+        2026-08-22): the template's ETL audit columns — a workbook
+        convention, not an FRD fact, so there is no 1:1 source name to
+        derive from. Their column name and datatype are taken from the
+        template's own stage/standard targets (the one deliberate use of a
+        reference's target side as input: with exclude-own on, that template
+        is a DIFFERENT pair, so this copies the client convention, never the
+        ground truth). Without this the rendered workbook carried audit rows
+        whose stage ColumnName was "NA" — unrecoverable downstream
+        (CodeGen's `extract-sttm` rejects them). Tables still come from the
+        contract's own targets.
     """
     for i, key in feed_match.items():
         feed = contract["feeds"][i]
         stg = feed.get("stage_target") or {}
         std = feed.get("standard_target") or {}
+        ref_feed = dictionary["feeds"][key]
         derived = []
-        for f in dictionary["feeds"][key]["fields"]:
+        for f, rt in zip(ref_feed["fields"], ref_feed.get("ref_targets") or
+                         [{"stage": {}, "standard": {}}] * len(ref_feed["fields"])):
+            stage_tbl = _table_for_segment(stg.get("tables", []), f.get("segment"))
+            std_tbl = (_table_for_segment(std.get("tables", []), f.get("segment"))
+                       or stage_tbl)
+            if f.get("audit"):
+                stage_col = rt["stage"].get("column") or rt["standard"].get("column") or f["source_column"]
+                std_col = rt["standard"].get("column") or stage_col
+                stage_dt = rt["stage"].get("datatype") or rt["standard"].get("datatype") or "String"
+                std_dt = rt["standard"].get("datatype") or stage_dt
+            else:
+                stage_col = std_col = f["source_column"]
+                stage_dt = std_dt = "String"
             derived.append({
                 **f,
                 "stage": {"catalog": stg.get("catalog"), "schema": stg.get("schema"),
-                          "table": _table_for_segment(stg.get("tables", []), f.get("segment")),
-                          "column": f["source_column"], "datatype": "String"},
+                          "table": stage_tbl, "column": stage_col, "datatype": stage_dt},
                 "standard": {"catalog": std.get("catalog"), "schema": std.get("schema"),
-                             "table": _table_for_segment(std.get("tables", []), f.get("segment"))
-                                      or _table_for_segment(stg.get("tables", []), f.get("segment")),
-                             "column": f["source_column"], "datatype": "String"},
+                             "table": std_tbl, "column": std_col, "datatype": std_dt},
             })
         feed["fields"] = derived
     return contract
+
+
+# --------------------------------------------------------------------------- #
+# rule placement — where the FRD's stated rules land in the workbook
+# --------------------------------------------------------------------------- #
+# Until 2026-08-22 neither renderer wrote `validation_rules` / `recycle_rule`
+# anywhere: the rules survived in the contract JSON but the .xlsx a reviewer
+# approves (and the workbook CodeGen's `extract-sttm` reads — its Layer-2
+# input is the verbatim rule text) carried none of them. Silent loss.
+#
+# Placement is deterministic and explainable, never a guess:
+#   - a rule is attributed to every rendered field whose source column name
+#     appears as a whole word in the rule text  → that row's Comment cell
+#     (per-table dialect: CodeGen maps the `Comment` header to `value_spec`)
+#     or Business Rule cell (single-sheet dialect);
+#   - the recycle rule is attributed to the longest such column name
+#     → per-table dialect: that row's `Recycle Flag` cell as `Y ( <verbatim> )`,
+#     the shape CodeGen's parse_recycle_text digests (applies_to = that row);
+#   - anything that names no rendered column is NOT pinned to an arbitrary
+#     row (a wrong applies_to generates wrong code downstream) — it goes to a
+#     feed-level, human-visible cell: FILE_DETAILS › File Description
+#     (per-table) or the metadata block (single-sheet).
+# Every placement is recorded in `_provenance.rule_placement` and the
+# phase5 report, so an unattributed rule is visible, not silent.
+
+
+def _column_mentions(text, columns):
+    """Rendered source columns (original spelling) mentioned as whole words
+    in `text`, longest first. Case-insensitive; `_` is a word character so
+    MEMBER_ID does not match inside MEMBER_ID_2."""
+    hits = []
+    for col in columns:
+        if col and re.search(rf"(?<![A-Za-z0-9_]){re.escape(col)}(?![A-Za-z0-9_])", text, re.I):
+            hits.append(col)
+    return sorted(hits, key=len, reverse=True)
+
+
+def place_feed_rules(feed):
+    """Decide where one feed's FRD-stated rules land. Pure: reads
+    `feed["fields"]` (derived), `validation_rules`, `recycle_rule`.
+    Returns {"by_column": {source_column: [rule, ...]},   # rendered order
+             "recycle": {"text", "column" | None} | None,
+             "unattributed": [rule, ...]}"""
+    # audit rows (source "NA") are never rule targets
+    columns = [f["source_column"] for f in (feed.get("fields") or []) if not f.get("audit")]
+    by_column = {c: [] for c in columns}
+    unattributed = []
+    for rule in feed.get("validation_rules") or []:
+        cols = _column_mentions(rule, columns)
+        if cols:
+            for c in cols:
+                by_column[c].append(rule)
+        else:
+            unattributed.append(rule)
+    recycle = None
+    if feed.get("recycle_rule"):
+        cols = _column_mentions(feed["recycle_rule"], columns)
+        recycle = {"text": feed["recycle_rule"], "column": cols[0] if cols else None}
+    return {"by_column": {c: r for c, r in by_column.items() if r},
+            "recycle": recycle, "unattributed": unattributed}
+
+
+def _feed_level_rule_text(placement):
+    """The human-visible feed-level cell: unattributed rules, plus the
+    recycle rule when it could not be pinned to a row."""
+    parts = list(placement["unattributed"])
+    rec = placement["recycle"]
+    if rec and rec["column"] is None:
+        parts.append(f"Recycle rule: {rec['text']}")
+    return "\n".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -600,17 +695,33 @@ def _style_row(ws, r, n_cols, fill):
         cell.alignment = Alignment(wrap_text=True, vertical="top")
 
 
-def render_sheet_per_table(contract, out_path):
-    """Demo (CV) dialect: FILE_DETAILS + VERSION_HISTORY + one MAPPING-* sheet per feed."""
+# Row-2 source-band headers. Every one of these MUST be a header CodeGen's
+# `extract-sttm` knows (its config `header_synonyms`, normalized): that
+# extractor raises on an unknown source-band header, and `Comment` is the one
+# it maps to `value_spec` (the per-field Layer-2 input). Pinned by
+# tests/test_render_rules.py. The Recycle Flag column sits BEYOND the
+# standard band (as the golden workbook parks it) so it is outside every band.
+_PER_TABLE_SRC_HEADERS = ["Database column Name", "NULL CHECK", "Description", "Sample Value",
+                          "DataType", "PHI Field", "Mandatory Field", "Comment"]
+_PER_TABLE_TGT_HEADERS = ["Schema", "TableName", "ColumnName", "DataType"]
+_RECYCLE_HEADER = "Recycle Flag"
+
+
+def render_sheet_per_table(contract, out_path, placements=None):
+    """Demo (CV) dialect: FILE_DETAILS + VERSION_HISTORY + one MAPPING-* sheet per feed.
+    `placements` — one `place_feed_rules()` result per feed (computed when None)."""
+    if placements is None:
+        placements = [place_feed_rules(feed) for feed in contract["feeds"]]
     wb = Workbook()
     ws = wb.active
     ws.title = "FILE_DETAILS"
     ws.append(["Vendor", "FileName", "File Description", "Location", "Frequency"])
     _style_row(ws, 1, 5, _HDR_FILL)
-    for feed in contract["feeds"]:
+    for feed, placement in zip(contract["feeds"], placements):
         ws.append([feed.get("source_system") or "",
                    "; ".join(feed.get("file_name_patterns", [])),
-                   "", feed.get("landing_location") or "", feed.get("frequency") or ""])
+                   _feed_level_rule_text(placement),
+                   feed.get("landing_location") or "", feed.get("frequency") or ""])
 
     vh = wb.create_sheet("VERSION_HISTORY")
     vh.append(["Version", "Date", "Author", "Change Description"])
@@ -618,33 +729,44 @@ def render_sheet_per_table(contract, out_path):
     vh.append(["0.1", datetime.now(timezone.utc).date().isoformat(), GENERATOR,
                f"Auto-generated from {contract.get('generated_from_frd', 'FRD')}"])
 
-    src_headers = ["Database column Name", "NULL CHECK", "Description", "Sample Value",
-                   "DataType", "PHI Field", "Mandatory Field"]
-    tgt_headers = ["Schema", "TableName", "ColumnName", "DataType"]
-    for feed in contract["feeds"]:
+    src_headers, tgt_headers = _PER_TABLE_SRC_HEADERS, _PER_TABLE_TGT_HEADERS
+    n_src, n_tgt = len(src_headers), len(tgt_headers)
+    for feed, placement in zip(contract["feeds"], placements):
         fields = feed.get("fields") or []
         if not fields:
             continue
         table = (feed.get("stage_target") or {}).get("tables", [feed["feed_name"]])[0]
         ws = wb.create_sheet(f"MAPPING-{table.upper()}"[:31])
-        n_cols = 7 + 4 + 1 + 4
+        recycle = placement["recycle"]
+        recycle_col = n_src + n_tgt + 1 + n_tgt + 1 if recycle else None
+        n_cols = recycle_col or (n_src + n_tgt + 1 + n_tgt)
         ws.cell(1, 1, "Source File Layout")
-        ws.cell(1, 8, "Stage Layer")
-        ws.cell(1, 13, "Standard Layer")
+        ws.cell(1, n_src + 1, "Stage Layer")
+        ws.cell(1, n_src + n_tgt + 2, "Standard Layer")
         _style_row(ws, 1, n_cols, _SEC_FILL)
-        for c, h in enumerate(src_headers + tgt_headers + [""] + tgt_headers, 1):
+        headers = src_headers + tgt_headers + [""] + tgt_headers
+        if recycle:
+            headers = headers + [_RECYCLE_HEADER]
+        for c, h in enumerate(headers, 1):
             ws.cell(2, c, h)
         _style_row(ws, 2, n_cols, _HDR_FILL)
         for f in fields:
-            ws.append([
+            comment = "\n".join(placement["by_column"].get(f["source_column"], [])
+                                + ([f["comment"]] if f.get("comment") else []))
+            row = [
                 f["source_column"],
                 "Not NULL" if not f["nullable"] else "NULL",
                 f.get("description", ""), f.get("sample", ""), f.get("datatype", "String"),
                 "Yes" if f["phi"] else "No", "Yes" if f["mandatory"] else "No",
+                comment,
                 f["stage"]["schema"], f["stage"]["table"], f["stage"]["column"], f["stage"]["datatype"],
                 "",
                 f["standard"]["schema"], f["standard"]["table"], f["standard"]["column"], f["standard"]["datatype"],
-            ])
+            ]
+            if recycle:
+                row.append(f"Y ( {recycle['text']} )"
+                           if recycle["column"] == f["source_column"] else "")
+            ws.append(row)
         ws.freeze_panes = "A3"
         for c in range(1, n_cols + 1):
             ws.column_dimensions[get_column_letter(c)].width = 22
@@ -652,10 +774,15 @@ def render_sheet_per_table(contract, out_path):
     return out_path
 
 
-def render_single_sheet(contract, out_path, sheet_name="mapping"):
-    """CAQH dialect: metadata block + one wide sheet (source | stage | standard)."""
+def render_single_sheet(contract, out_path, sheet_name="mapping", placements=None):
+    """CAQH dialect: metadata block + one wide sheet (source | stage | standard).
+    `placements` — one `place_feed_rules()` result per feed (computed when None);
+    only the first feed is rendered in this dialect."""
+    if placements is None:
+        placements = [place_feed_rules(feed) for feed in contract["feeds"]]
     wb = Workbook()
     feed = contract["feeds"][0]
+    placement = placements[0]
     ws = wb.active
     ws.title = sheet_name[:31]
     meta_rows = [
@@ -669,6 +796,13 @@ def render_single_sheet(contract, out_path, sheet_name="mapping"):
         ("File type", f"{feed.get('file_format') or ''}"
                       + (f" ({feed.get('delimiter')} delimited)" if feed.get("delimiter") else "")),
     ]
+    # Feed-level rules this dialect has no column for: the recycle rule
+    # (always — there is no Recycle Flag column here) and every rule that
+    # names no rendered column. Human-visible in the metadata block.
+    if placement["recycle"]:
+        meta_rows.append(("Recycle rule", placement["recycle"]["text"]))
+    if placement["unattributed"]:
+        meta_rows.append(("Validation rules (feed-level)", "\n".join(placement["unattributed"])))
     for k, v in meta_rows:
         ws.append([k, v])
         ws.cell(ws.max_row, 1).font = _BOLD
@@ -692,10 +826,12 @@ def render_single_sheet(contract, out_path, sheet_name="mapping"):
             return [t.get("catalog") or "", t.get("schema") or "", t.get("table") or "",
                     t.get("column") or "", t.get("datatype") or "String",
                     "Yes" if f["mandatory"] else "", "", f.get("description", "")]
+        business_rule = "\n".join(placement["by_column"].get(f["source_column"], [])
+                                  + ([f["business_rule"]] if f.get("business_rule") else []))
         ws.append([idx, f["source_column"], f.get("datatype", ""), f.get("length", ""),
                    f.get("fixed_length", ""), f.get("fixed_start", ""), f.get("fixed_end", ""),
                    f.get("segment", ""), "Yes" if f["phi"] else "", f.get("comment", ""),
-                   f.get("business_rule", "")]
+                   business_rule]
                   + tgt(f["stage"]) + tgt(f["standard"]))
     ws.freeze_panes = ws.cell(label_r + 2, 1).coordinate
     for c in range(1, n_cols + 1):
@@ -705,10 +841,21 @@ def render_single_sheet(contract, out_path, sheet_name="mapping"):
 
 
 def render_contract(contract, dictionary, out_path):
+    """Render in the dictionary's dialect and record, per feed, where every
+    FRD-stated rule landed (`_provenance.rule_placement`) — so an
+    unattributed rule is visible in the contract and report, never silent."""
+    placements = [place_feed_rules(feed) for feed in contract["feeds"]]
+    contract.setdefault("_provenance", {})["rule_placement"] = [
+        {"feed": feed.get("feed_name"),
+         "dialect": dictionary["dialect"],
+         "by_column": p["by_column"],
+         "recycle": p["recycle"],
+         "unattributed": p["unattributed"]}
+        for feed, p in zip(contract["feeds"], placements)]
     if dictionary["dialect"] == "sheet_per_table":
-        return render_sheet_per_table(contract, out_path)
+        return render_sheet_per_table(contract, out_path, placements=placements)
     sheet = next(iter(dictionary["feeds"].values()))["sheet"]
-    return render_single_sheet(contract, out_path, sheet_name=sheet)
+    return render_single_sheet(contract, out_path, sheet_name=sheet, placements=placements)
 
 
 # --------------------------------------------------------------------------- #
@@ -753,14 +900,23 @@ def evaluate_cross_reference(contract, own_dictionary, feed_match_own):
     produced counts as unmatched cells, not as ignored.
     """
     report = {"feeds": [], "totals": {"cells": 0, "match": 0}}
+
+    def _key(source_column, audit, stage_column):
+        # Audit rows all share source "NA" — align them by target column
+        # instead, or every audit row would collide on one key.
+        base = _nl(source_column)
+        return f"{base}:{_nl(stage_column)}" if audit else base
+
     for i, key in feed_match_own.items():
         feed = contract["feeds"][i]
-        derived_by_col = {_nl(f.get("source_column")): f
+        derived_by_col = {_key(f.get("source_column"), f.get("audit"),
+                               (f.get("stage") or {}).get("column")): f
                           for f in (feed.get("fields") or [])}
         ref_feed = own_dictionary["feeds"][key]
         diffs, cells, match = [], 0, 0
         for src_f, rt in zip(ref_feed["fields"], ref_feed["ref_targets"]):
-            col = _nl(src_f.get("source_column"))
+            col = _key(src_f.get("source_column"), src_f.get("audit"),
+                       rt["stage"].get("column"))
             derived = derived_by_col.get(col)
             for layer in ("stage", "standard"):
                 for attr in ("schema", "table", "column", "datatype"):
@@ -988,6 +1144,26 @@ for doc_id, contract in contracts.items():
     if resolutions:
         lines += ["## Attribution resolutions (dictionary cross-check, automatic)"] + \
                  [f"- {r}" for r in resolutions] + [""]
+    placements = contract["_provenance"].get("rule_placement") or []
+    if any(p["by_column"] or p["recycle"] or p["unattributed"] for p in placements):
+        lines += ["## Rule placement (where the FRD's rules landed in the workbook)"]
+        for p in placements:
+            for col, rules in p["by_column"].items():
+                for r in rules:
+                    lines.append(f"- **{p['feed']}** › row {col}: {_quote_rule(r, 120)!r}")
+            rec = p["recycle"]
+            if rec:
+                lines.append(f"- **{p['feed']}** › recycle rule "
+                             + (f"→ row {rec['column']} (Recycle Flag cell)"
+                                if rec["column"] and p["dialect"] == "sheet_per_table" else
+                                f"→ metadata block" if p["dialect"] != "sheet_per_table" else
+                                "→ NOT attributed to a column — FILE_DETAILS › File Description only; "
+                                "CodeGen will see no recycle spec for this feed")
+                             + f": {_quote_rule(rec['text'], 120)!r}")
+            for r in p["unattributed"]:
+                lines.append(f"- **{p['feed']}** › NOT attributed (names no rendered column) → "
+                             f"feed-level cell only: {_quote_rule(r, 120)!r}")
+        lines += [""]
     if ev:
         lines += ["## Per-feed eval"]
         for f in ev["feeds"]:

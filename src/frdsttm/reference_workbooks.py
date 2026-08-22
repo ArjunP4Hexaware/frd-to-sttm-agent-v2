@@ -52,6 +52,10 @@ def _not_null(s) -> bool:
 # --------------------------------------------------------------------------- #
 # source-dictionary parsing
 # --------------------------------------------------------------------------- #
+# Source-side cell (normalized) that marks a trailing audit-column row.
+# Mirrors CodeGen's `extractor.audit_source_markers: ["na"]`.
+AUDIT_SOURCE_MARKER = "na"
+
 _HEADER_ALIASES = {
     "source_column": ["database column name", "database name",
                       "client data table column name", "field name"],
@@ -114,6 +118,14 @@ def parse_reference_workbook(path):
 
     feed_dict: {"sheet", "fields": [source-field dicts],
                 "ref_targets": [{stage:{...}, standard:{...}} per field]}  # eval only
+
+    Trailing rows whose source column is the audit marker "NA" are kept as
+    fields (positional eval and similarity stay unchanged) but flagged
+    `audit: True` (2026-08-22): they are the client's ETL audit columns
+    (load timestamps, source file name, ...) — a workbook convention, not an
+    FRD fact — and 04 derives their target identity from the template's own
+    targets instead of the 1:1 source-name rule. CodeGen's `extract-sttm`
+    requires at least one such row per mapping sheet.
     """
     wb = load_workbook(path, read_only=True)
     if any(s.startswith("MAPPING-") for s in wb.sheetnames):
@@ -164,6 +176,7 @@ def _parse_sheet_per_table(wb):
                 "comment": get(smap, "comment"),
                 "segment": "",
                 "business_rule": "",
+                "audit": _nl(col) == AUDIT_SOURCE_MARKER,
             })
             ref_targets.append({
                 "stage": {k: get(gmap, k) for k in _TARGET_ALIASES},
@@ -228,6 +241,7 @@ def _parse_single_sheet(wb):
                 "fixed_end": get(smap, "fixed_end"),
                 "segment": get(smap, "segment"),
                 "business_rule": get(smap, "business_rule"),
+                "audit": _nl(col) == AUDIT_SOURCE_MARKER,
             })
             ref_targets.append({
                 "stage": {k: get(gmap, k) for k in _TARGET_ALIASES},

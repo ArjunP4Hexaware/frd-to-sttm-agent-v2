@@ -44,6 +44,9 @@ LOCAL_ROOT = REPO / "local_dev_fixtures"
 
 SRC_HDRS = ["Database Column Name", "Description", "Datatype", "Null Check", "Comment"]
 TGT_HDRS = ["Catalog", "Schema", "TableName", "ColumnName", "Datatype"]
+# (column, datatype) — synthetic names; datatypes are the two CodeGen accepts
+# for audit columns ("string" / "timestamp").
+AUDIT_ROWS = [("SYN_SRC_FILE", "string"), ("SYN_LOAD_TS", "timestamp")]
 
 DOCS = {
     "synthetic_member_risk": {
@@ -68,6 +71,7 @@ def frd_text(doc_id: str, d: dict) -> str:
     return f"""# Functional Requirements Document — {doc_id} (SYNTHETIC)
 
 Project ID: {d['project_id']}
+Project Name: {project_name(doc_id)}
 
 ## Business Context
 
@@ -76,10 +80,10 @@ Every fact below is fabricated.
 
 ## Data Ingestion Requirements
 
-The Synthetic Vendor delivers the file {d['pattern']} weekly to
-/synthetic/landing/{doc_id}. The feed loads the columns {cols}
-into the stage table syn_cat.syn_stg.{d['table']} and is promoted to
-syn_cat.syn_std.{d['table']}.
+The Synthetic Vendor delivers the pipe (|) delimited text file {d['pattern']}
+weekly to /synthetic/landing/{doc_id}. The feed loads the columns {cols}
+into the stage table syn_cat.syn_stg.{d['table']} (Truncate and Load) and is
+promoted to syn_cat.syn_std.{d['table']} (Truncate and Load).
 
 **REQ-001** {d['rule']}
 
@@ -89,22 +93,31 @@ syn_cat.syn_std.{d['table']}.
 """
 
 
+def project_name(doc_id: str) -> str:
+    return f"Synthetic {doc_id.replace('synthetic_', '').replace('_', ' ').title()} Ingestion"
+
+
 def spec_for(doc_id: str, d: dict) -> FrdIngestionSpec:
+    # project_name (strict-grounded), delimiter and load_strategy are stated
+    # in frd_text() above so the contract round-trips through CodeGen's
+    # `extract-sttm` unpatched — its FrdContract requires all three
+    # (non-null name, a delimiter for 'txt', a load_strategy literal).
     return FrdIngestionSpec(
         project=Project(project_id=d["project_id"],
-                        project_name=None,
+                        project_name=project_name(doc_id),
                         business_context_summary=None),
         feeds=[Feed(
             feed_name=f"{doc_id} feed",
             source_system="Synthetic Vendor",
             file_name_patterns=[d["pattern"]],
             file_format="txt",
+            delimiter="|",
             frequency="weekly",
             landing_location=f"/synthetic/landing/{doc_id}",
             stage_target=TableTarget(catalog="syn_cat", schema="syn_stg",
-                                     tables=[d["table"]]),
+                                     tables=[d["table"]], load_strategy="Truncate and Load"),
             standard_target=TableTarget(catalog="syn_cat", schema="syn_std",
-                                        tables=[d["table"]]),
+                                        tables=[d["table"]], load_strategy="Truncate and Load"),
             validation_rules=[d["rule"]],
             requirement_ids=["REQ-001"],
         )],
@@ -124,6 +137,14 @@ def workbook_for(path: Path, d: dict) -> None:
                    "Not Null", ""]
                   + ["syn_cat", "syn_stg", d["table"], col, "String"]
                   + ["syn_cat", "syn_std", d["table"], col, "String"])
+    # Trailing audit rows, as every client workbook in this dialect carries
+    # them: source "NA", the ETL audit column named only on the target side.
+    # 04 derives these from the template (not 1:1), and CodeGen's
+    # `extract-sttm` requires at least one per mapping sheet.
+    for col, dtype in AUDIT_ROWS:
+        ws.append(["NA", f"synthetic audit column {col.lower()}", dtype, "", ""]
+                  + ["syn_cat", "syn_stg", d["table"], col, dtype]
+                  + ["syn_cat", "syn_std", d["table"], col, dtype])
     wb.save(path)
 
 

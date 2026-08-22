@@ -1,6 +1,6 @@
 # FRD-to-STTM Agent — Master Context Document
 
-**Last verified: 2026-08-22, late evening — after the sync / read-only / corpus-picker reshape and the HITL panel + repo-root App manifest (§12 top entry).** Read this end to end at the start
+**Last verified: 2026-08-22, late evening — after the rule-placement / audit-row fix in 04 and the first successful CodeGen round trip on synthetic documents (§12 top entry).** Read this end to end at the start
 of any session in this repo (≈8–10 minutes; §§1–3 alone are the 2-minute
 version). It is the single get-up-to-speed document for THIS agent only, and
 it is **tracked in git deliberately** so it travels with every clone — unlike
@@ -102,9 +102,13 @@ widgets-vs-env-vars and Spark-vs-`deltalake`):
                       ambiguity gating → contracts/<doc>.contract.json
                       status ∈ {PASS, PASS_WITH_FLAGS, FAIL} — computed in code
 04_sttm_render        TEMPLATE DECISION (single/amalgam/freeform, §4) →
-                      dictionary cross-check → derive mappings → render
-                      workbook → eval vs the doc's OWN reference (§4) →
-                      contract.v2.json + phase5 report + frd_sttm_runs row
+                      dictionary cross-check → derive mappings (audit rows
+                      from the template) → render workbook with every FRD
+                      rule placed on the row it names (Comment / Recycle
+                      Flag / Business Rule; else a feed-level cell —
+                      `_provenance.rule_placement`, 2026-08-22) → eval vs
+                      the doc's OWN reference (§4) → contract.v2.json +
+                      phase5 report + frd_sttm_runs row
 (no 05)               there is NO publish stage anywhere (2026-08-22): the
                       repo never writes to SharePoint — the reviewer uploads
                       the finished STTM; the sync pulls it back in and pairs it
@@ -309,8 +313,12 @@ Replacements that keep development possible with zero client content:
 
 **Proven:**
 
-- Offline suite: **158 passed / 4 skipped**, zero network/credentials
-  (2026-08-22 — run `pytest` for the live count, never trust a written one).
+- Offline suite: **195 passed / 4 skipped**, zero network/credentials
+  (2026-08-22 late evening — run `pytest` for the live count, never trust a
+  written one).
+- **04 → `codegen extract-sttm` round trip on the synthetic smoke (both
+  documents, template mode), unpatched** — 2026-08-22 late evening; §11
+  "unproven" item 4 for what is still open.
 - Live E2E 2026-08-07 (`docs/LIVE_E2E_2026-08-07.md`, `claude-opus-4-8`):
   1 billed call ≈ $0.15, ~33.5s pipeline, gate PASS, strict grounding
   45/45, 0/50 hallucination sweep, eval 94.1% (3094/3288 cells) — the
@@ -330,11 +338,18 @@ Replacements that keep development possible with zero client content:
    gates everything.
 3. **The template architecture on real documents** + threshold calibration
    (§2 steps 3–5).
-4. **The downstream round trip**: CodeGen's `codegen extract-sttm` has
-   never consumed a `04_sttm_render` workbook, and 04 emits no `Comment`
-   or `Recycle Flag` column — the verbatim rule text (CodeGen's entire
-   Layer-2 input) would be dropped SILENTLY; the CAQH single-sheet dialect
-   is incompatible outright. Do not call this hand-off working.
+4. **The downstream round trip on REAL documents.** On the two synthetic
+   smoke documents it now WORKS (2026-08-22 late evening — moved up from
+   "never run"): 01→03→04 (template mode) → `codegen extract-sttm` →
+   mapping contract, `value_spec` carrying the FRD rule on the row it
+   names, audit columns peeled. 04 now emits `Comment` + `Recycle Flag`
+   (rule placement recorded in `_provenance.rule_placement`) and derives
+   audit rows from the template. Unproven on a real pair; CodeGen's
+   `FrdContract` is stricter than ours (non-null `project_name`,
+   `load_strategy` literal, delimiter for `txt`) and fails loudly when a
+   real FRD omits one. The CAQH single-sheet dialect remains incompatible
+   with the FLAT-only extractor (rules land in `Business Rule` + metadata
+   for humans).
 5. Bundle defaults are dev-only; the job's failure-notification email is a
    placeholder.
 
@@ -344,6 +359,21 @@ work is fully done — inflates local per-stage wall clock only.
 
 ## 12. Decisions log (newest first; reasons matter more than dates)
 
+- **2026-08-22 late evening (Arjun, pre-hand-off review):** the rendered
+  workbook dropped every FRD-stated validation/recycle rule (they lived
+  only in the contract JSON — silent loss for the reviewer AND for CodeGen,
+  whose Layer-2 input is that text). Fixed in 04: rules are placed on the
+  row whose column they name (`Comment` → CodeGen `value_spec`; recycle →
+  `Recycle Flag` `Y ( verbatim )`; single-sheet → `Business Rule`), and a
+  rule naming no rendered column goes to a feed-level human-visible cell
+  rather than a guessed row; every placement in `_provenance.rule_placement`
+  + the phase5 report. Trailing `NA` audit rows are now flagged by the
+  dictionary parser and derived from the TEMPLATE's targets (the one
+  deliberate use of a reference's target side: a client convention, not an
+  FRD fact). Result: first-ever successful `04 → codegen extract-sttm`
+  round trip, on the synthetic smoke (both docs). Also: repo moved out of
+  the umbrella folder (venv rebuilt; umbrella path fixed in CLAUDE.md);
+  suite 195 passed / 4 skipped.
 - **2026-08-22 evening (Arjun):** make the code match the two-slide
   architecture deck — (a) **automatic SharePoint sync** as a scheduled
   bundle job (`frd_sttm_sharepoint_sync`, `00_sharepoint_sync`,

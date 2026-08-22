@@ -59,29 +59,40 @@ Two hand-off contracts matter:
   it only when a real input document stops matching it, bump `version`
   when you do, and re-verify against `local_dev_fixtures/frd_raw/` rather
   than against another repo.
-- **Downstream (tool now exists; round trip UNVALIDATED):**
-  `03_contract_build` emits `<doc_id>.contract.json`, which the CodeGen
-  agent consumes as its FRD feed contract — that half works. CodeGen ALSO
-  requires a workbook-derived **STTM mapping contract JSON**. As of
-  2026-08-21 a committed tool does produce it —
+- **Downstream (round trip RUN on synthetic documents 2026-08-22 — works
+  in the sheet-per-table dialect):** `03_contract_build` emits
+  `<doc_id>.contract.json`, which the CodeGen agent consumes as its FRD
+  feed contract. CodeGen ALSO requires a workbook-derived **STTM mapping
+  contract JSON**, produced by
   `codegen extract-sttm --workbook X.xlsx --frd-contract Y.json --out Z.json`
-  in the code-gen-agent repo. (An earlier claim here that "no committed
-  tool anywhere in the program produces it" was correct when written and
-  is now stale.)
+  in the code-gen-agent repo.
 
-  **But nobody has run `04_sttm_render` output through that extractor**,
-  and the shapes do not fully line up. `render_sheet_per_table` matches
-  the extractor's sheet names (`FILE_DETAILS` / `VERSION_HISTORY` /
-  `MAPPING-*`), row-1 band labels and row-2 header synonyms — clearly
-  designed to. It emits **no `Comment` column** (→ `value_spec` empty) and
-  **no `Recycle Flag` column** (→ the verbatim validation text is
-  dropped), and that text is CodeGen's entire Layer-2 input, so a naive
-  round trip loses the rules *silently*. `render_single_sheet` (CAQH
-  dialect) is incompatible outright: no `MAPPING-` prefix, band label
-  `Source Layout` vs the expected `Source File Layout`, different header
-  dialect (`Field Name` / `Comments` / `Business Rule` / `Catalog`). The
-  extractor is FLAT-only. Do not describe this hand-off as working until
-  someone runs it end to end.
+  **Round trip as of 2026-08-22 (evening):** both synthetic smoke documents
+  went 01→03→04 (template mode, `EXCLUDE_OWN_REFERENCE=0`) and then through
+  `codegen extract-sttm` unpatched → `EXTRACTED … 1 feed(s) (5 fields)`,
+  with `value_spec` carrying the FRD rule on the row it names and the audit
+  columns peeled. What made it work, all in 04 + `reference_workbooks`:
+  (a) `render_sheet_per_table` now emits a **`Comment`** column (→ CodeGen
+  `value_spec`) carrying each validation rule on the row(s) whose source
+  column the rule names, and a **`Recycle Flag`** column beyond the standard
+  band with the recycle rule as `Y ( <verbatim> )` on the row it names; a
+  rule naming no rendered column goes to FILE_DETAILS › File Description
+  (human-visible) and is never pinned to a guessed row — placement is
+  recorded in `_provenance.rule_placement` + the phase5 report;
+  (b) trailing **audit rows** (source `NA`) are flagged by the dictionary
+  parser and derived from the TEMPLATE's target column/datatype instead of
+  the 1:1 rule (a client convention, not an FRD fact; the old render wrote
+  stage ColumnName `NA`, which CodeGen rejects). The synthetic fixture
+  carries audit rows + states project name / delimiter / load strategy so
+  the round trip needs no patching.
+  Still true: `render_single_sheet` (CAQH dialect) is incompatible with the
+  FLAT-only extractor outright (different band/header dialect); the rules
+  now land in its `Business Rule` column + metadata block for humans.
+  Still UNPROVEN on real documents — and CodeGen's `FrdContract` is
+  stricter than ours (non-null `project_name`, `load_strategy` ∈
+  {'Truncate and Load','Append'}, a delimiter for `txt`): a real FRD that
+  does not state one of those fails at CodeGen's validation step, loudly,
+  before the workbook is read.
 
 ## Repo layout
 
@@ -125,9 +136,10 @@ context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
 contracts/frd_label_contract.json   the versioned FRD label contract — now a
                         frozen input, no longer mirrored anywhere (see
                         "Upstream" above)
-tests/                  offline (no LLM/network/Spark); 178 as of
-                        2026-08-22 (evening) — run `pytest` for the live count
-                        rather than trusting a number written down here
+tests/                  offline (no LLM/network/Spark); 195 as of
+                        2026-08-22 (late evening; +17 in test_render_rules.py
+                        for rule placement + audit rows) — run `pytest` for
+                        the live count rather than trusting a number here
 schema/sttm_extraction_schema.json   the extraction contract (mirrors models)
 databricks.yml + resources/frd_sttm_job.yml   asset bundle, job frd_sttm_pipeline
 resources/frd_sttm_sync_job.yml   the SCHEDULED sync job (cron in databricks.yml
@@ -384,12 +396,14 @@ code, not a document, and was left in place; flagged, not silently kept.
   at import time for the UploadFile routes; it is now in the `ui` extra AND
   `review_app_react/requirements.txt` (without it the deployed App dies at
   startup, not at first upload).
-- **The workbook→mapping-contract round trip has never been run.** The
-  extractor exists in code-gen-agent (`codegen extract-sttm`), but
-  `04_sttm_render` output has not been fed through it, and at least two
-  columns it reads are not emitted — see Purpose above for the specifics.
-  This is still the pipeline's biggest gap; what changed is that it is now
-  an integration/validation gap rather than a missing tool.
+- **The workbook→mapping-contract round trip has been run on SYNTHETIC
+  documents only (2026-08-22).** It works in the sheet-per-table dialect
+  (see "Downstream" above for exactly what changed). Not yet run on a real
+  FRD/STTM pair; in freeform mode (no template) there are no derived fields
+  and hence no audit rows, so CodeGen rejects that workbook — loudly. To
+  repeat the check: run the synthetic smoke with `EXCLUDE_OWN_REFERENCE=0`,
+  then `codegen extract-sttm` from the code-gen-agent checkout (its own
+  venv; the one on this Mac had to be rebuilt after a folder move).
 - **The label contract's cross-repo obligation is retired.**
   `contracts/frd_label_contract.json` stays versioned and is still the only
   source of the labels `01_frd_ingest` parses, but with BRD→FRD out of the
