@@ -658,6 +658,10 @@ def load_results(set_id: str, doc_id: str) -> dict:
             "status": v2.get("status") or v1.get("status"),
             "n_feeds": len(v2.get("feeds", []) or feeds),
         },
+        # Template decision (2026-08-22, docs/TEMPLATE_ARCHITECTURE.md):
+        # written by 04 into the v2 contract's provenance. None for artifact
+        # sets rendered before the template architecture existed.
+        "template": (v2.get("_provenance") or {}).get("template_decision"),
         "eval": {
             "available": totals is not None,
             "matched_cells": totals[0] if totals else None,

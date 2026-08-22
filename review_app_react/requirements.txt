@@ -34,3 +34,7 @@ python-docx
 pypdf
 openpyxl
 deltalake
+# deltalake 1.x stopped depending on pyarrow while frdsttm.local_tables still
+# imports it directly (found 2026-08-22) — same reasoning as pyproject's
+# [local] extra; keep both listed.
+pyarrow

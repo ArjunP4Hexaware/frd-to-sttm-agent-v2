@@ -90,245 +90,44 @@ from openpyxl.utils import get_column_letter
 
 GENERATOR = "frd-sttm-agent phase5 v0.1"
 
-# --------------------------------------------------------------------------- #
-# normalization
-# --------------------------------------------------------------------------- #
-_UNI = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
-                      "\u2010": "-", "\u2011": "-", "\u2013": "-", "\u2014": "-",
-                      "\u00a0": " "})
 
+# COMMAND ----------
 
-def _n(s) -> str:
-    if s is None:
-        return ""
-    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(s)).translate(_UNI)).strip()
+# MAGIC %run ./_reference_workbooks
 
+# COMMAND ----------
 
-def _nl(s) -> str:
-    return _n(s).lower()
+# Reference-workbook parsing (both dialects), feed matching and the shared
+# normalization helpers were factored VERBATIM into
+# `src/frdsttm/reference_workbooks.py` (2026-08-22) so the similarity/corpus
+# modules and the review app read dictionaries with exactly this stage's
+# parser -- one parser, no drift. `%run` above is a Databricks-only magic --
+# inert when this file executes as a plain script, so the names would never
+# get defined locally without this explicit import.
+if not IS_DATABRICKS:
+    from _reference_workbooks import (  # noqa: F401
+        _n,
+        _nl,
+        loose_tokens,
+        match_feeds,
+        parse_reference_workbook,
+    )
 
-
-_TRUE = {"yes", "y", "true"}
-
-
-def _flag(s) -> bool:
-    return _nl(s) in _TRUE
-
-
-def _not_null(s) -> bool:
-    return "not null" in _nl(s)
-
-
-# --------------------------------------------------------------------------- #
-# source-dictionary parsing
-# --------------------------------------------------------------------------- #
-_HEADER_ALIASES = {
-    "source_column": ["database column name", "database name",
-                      "client data table column name", "field name"],
-    "description": ["description"],
-    "sample": ["sample value", "example values"],
-    "datatype": ["datatype", "data type"],
-    "nullable_raw": ["null check"],
-    "phi_raw": ["phi field", "phi/pii field", "pii"],
-    "mandatory_raw": ["mandatory field", "mandatory", "mandatory column"],
-    "comment": ["comment", "comments"],
-    "length": ["length"],
-    "fixed_length": ["field length (fixed width)"],
-    "fixed_start": ["start position (fixed width)"],
-    "fixed_end": ["end position (fixed width)"],
-    "segment": ["segment (ex:header,trailer,detail)", "segment"],
-    "business_rule": ["business rule"],
-}
-
-_TARGET_ALIASES = {
-    "catalog": ["catalog"],
-    "schema": ["schema"],
-    "table": ["tablename", "table name"],
-    "column": ["columnname", "column name"],
-    "datatype": ["datatype", "data type"],
-}
-
-
-def _map_headers(headers, aliases, offset=0):
-    out = {}
-    for i, h in enumerate(headers):
-        hn = _nl(h)
-        if not hn:
-            continue
-        for field, names in aliases.items():
-            if field not in out and any(hn == a or hn.startswith(a) for a in names):
-                out[field] = i + offset
-    return out
-
-
-def _section_starts(label_row):
-    """Column indices where 'Source', 'Stage Layer', 'Standard Layer' begin."""
-    src = stage = std = None
-    for i, v in enumerate(label_row):
-        vn = _nl(v)
-        if vn.startswith("source") and src is None:
-            src = i
-        elif "stage layer" in vn and stage is None:
-            stage = i
-        elif "standard layer" in vn and std is None:
-            std = i
-    return src, stage, std
-
-
-def _row_vals(ws, r, width):
-    return [c.value for c in ws[r][:width]] if r <= ws.max_row else [None] * width
-
-
-def parse_reference_workbook(path):
-    """Returns {"dialect": ..., "feeds": {table_key: feed_dict}, "meta": {...}}.
-
-    feed_dict: {"sheet", "fields": [source-field dicts],
-                "ref_targets": [{stage:{...}, standard:{...}} per field]}  # eval only
-    """
-    wb = load_workbook(path, read_only=True)
-    if any(s.startswith("MAPPING-") for s in wb.sheetnames):
-        return _parse_sheet_per_table(wb)
-    return _parse_single_sheet(wb)
-
-
-def _parse_sheet_per_table(wb):
-    feeds, meta = {}, {}
-    if "FILE_DETAILS" in wb.sheetnames:
-        ws = wb["FILE_DETAILS"]
-        rows = list(ws.iter_rows(values_only=True))
-        if rows:
-            hdr = [_nl(v) for v in rows[0]]
-            meta["file_details"] = [
-                {hdr[i]: _n(v) for i, v in enumerate(r) if i < len(hdr) and _n(v)}
-                for r in rows[1:] if any(_n(v) for v in r)
-            ]
-    for name in wb.sheetnames:
-        if not name.startswith("MAPPING-"):
-            continue
-        ws = wb[name]
-        width = ws.max_column
-        labels = _row_vals(ws, 1, width)
-        headers = _row_vals(ws, 2, width)
-        src_i, stage_i, std_i = _section_starts(labels)
-        if src_i is None or stage_i is None:
-            continue
-        smap = _map_headers(headers[src_i:stage_i], _HEADER_ALIASES, src_i)
-        gmap = _map_headers(headers[stage_i:(std_i or width)], _TARGET_ALIASES, stage_i)
-        dmap = _map_headers(headers[std_i:], _TARGET_ALIASES, std_i) if std_i is not None else {}
-        recycle_note = next((_n(h) for h in headers if "recycle" in _nl(h)), None)
-
-        fields, ref_targets, table_key = [], [], None
-        for r in ws.iter_rows(min_row=3, values_only=True):
-            get = lambda m, k: _n(r[m[k]]) if k in m and m[k] < len(r) else ""
-            col = get(smap, "source_column")
-            if not col:
-                continue
-            fields.append({
-                "source_column": col,
-                "description": get(smap, "description"),
-                "sample": get(smap, "sample"),
-                "datatype": get(smap, "datatype") or "String",
-                "nullable": not _not_null(get(smap, "nullable_raw")),
-                "phi": _flag(get(smap, "phi_raw")),
-                "mandatory": _flag(get(smap, "mandatory_raw")),
-                "comment": get(smap, "comment"),
-                "segment": "",
-                "business_rule": "",
-            })
-            ref_targets.append({
-                "stage": {k: get(gmap, k) for k in _TARGET_ALIASES},
-                "standard": {k: get(dmap, k) for k in _TARGET_ALIASES},
-            })
-            table_key = table_key or _nl(get(gmap, "table"))
-        if table_key:
-            feeds[table_key] = {"sheet": name, "fields": fields,
-                                "ref_targets": ref_targets,
-                                "recycle_note": recycle_note}
-    return {"dialect": "sheet_per_table", "feeds": feeds, "meta": meta}
-
-
-def _parse_single_sheet(wb):
-    for name in wb.sheetnames:
-        ws = wb[name]
-        header_r = label_r = None
-        for r in range(1, min(ws.max_row, 30) + 1):
-            vals = [_nl(v) for v in _row_vals(ws, r, ws.max_column)]
-            if any(v.startswith("field name") for v in vals):
-                header_r = r
-                label_r = r - 1
-                break
-        if header_r is None:
-            continue
-        width = ws.max_column
-        meta = {}
-        for r in range(1, label_r):
-            k, v = _n(ws.cell(r, 1).value), _n(ws.cell(r, 2).value)
-            if k:
-                meta[k] = v
-        labels = _row_vals(ws, label_r, width)
-        headers = _row_vals(ws, header_r, width)
-        src_i, stage_i, std_i = _section_starts(labels)
-        smap = _map_headers(headers[src_i:stage_i], _HEADER_ALIASES, src_i)
-        gmap = _map_headers(headers[stage_i:std_i], _TARGET_ALIASES, stage_i)
-        dmap = _map_headers(headers[std_i:], _TARGET_ALIASES, std_i)
-
-        fields, ref_targets = [], []
-        blanks = 0
-        for r in ws.iter_rows(min_row=header_r + 1, values_only=True):
-            get = lambda m, k: _n(r[m[k]]) if k in m and m[k] < len(r) else ""
-            col = get(smap, "source_column")
-            if not col:
-                blanks += 1
-                if blanks > 5:
-                    break
-                continue
-            blanks = 0
-            fields.append({
-                "source_column": col,
-                "description": get(smap, "description") or get(smap, "comment"),
-                "sample": get(smap, "sample"),
-                "datatype": get(smap, "datatype") or "String",
-                "nullable": not _not_null(get(smap, "nullable_raw")),
-                "phi": _flag(get(smap, "phi_raw")),
-                "mandatory": _flag(get(smap, "mandatory_raw")),
-                "comment": get(smap, "comment"),
-                "length": get(smap, "length"),
-                "fixed_length": get(smap, "fixed_length"),
-                "fixed_start": get(smap, "fixed_start"),
-                "fixed_end": get(smap, "fixed_end"),
-                "segment": get(smap, "segment"),
-                "business_rule": get(smap, "business_rule"),
-            })
-            ref_targets.append({
-                "stage": {k: get(gmap, k) for k in _TARGET_ALIASES},
-                "standard": {k: get(dmap, k) for k in _TARGET_ALIASES},
-            })
-        feed_key = _nl(name)
-        return {"dialect": "single_sheet",
-                "feeds": {feed_key: {"sheet": name, "fields": fields,
-                                     "ref_targets": ref_targets,
-                                     "recycle_note": None}},
-                "meta": meta}
-    return {"dialect": "single_sheet", "feeds": {}, "meta": {}}
-
-
-# --------------------------------------------------------------------------- #
-# match contract feeds <-> dictionary feeds
-# --------------------------------------------------------------------------- #
-def match_feeds(contract, dictionary):
-    """Returns {contract feed index: dict feed_key}. Matches on stage tables
-    (sheet-per-table) or falls back to the single dictionary feed."""
-    out = {}
-    dict_keys = list(dictionary["feeds"])
-    for i, feed in enumerate(contract["feeds"]):
-        tables = [_nl(t) for t in (feed.get("stage_target") or {}).get("tables", [])]
-        hit = next((k for k in dict_keys if k in tables), None)
-        if hit is None and len(dict_keys) == 1 and len(contract["feeds"]) == 1:
-            hit = dict_keys[0]
-        if hit is not None:
-            out[i] = hit
-    return out
-
+# Importable in both modes: the %run shim above (Databricks) and the local
+# import (script mode) both put src/ on sys.path first.
+from frdsttm.corpus import (  # noqa: E402
+    frd_features_from_index,
+    load_corpus_index,
+    own_reference_for,
+    reference_features_from_index,
+)
+from frdsttm.similarity import (  # noqa: E402
+    decide_templates,
+    frd_features,
+    merge_dictionaries,
+    thresholds_from,
+    workbook_features,
+)
 
 # --------------------------------------------------------------------------- #
 # human resolution wiring — apply saved review-app resolutions
@@ -943,6 +742,48 @@ def evaluate_against_reference(contract, dictionary, feed_match):
     t["pct"] = round(100 * t["match"] / t["cells"], 1) if t["cells"] else 100.0
     return report
 
+
+def evaluate_cross_reference(contract, own_dictionary, feed_match_own):
+    """Eval against the document's OWN reference workbook when the render was
+    driven by a DIFFERENT template (exclude-own-reference cross-validation,
+    2026-08-22). `evaluate_against_reference` zips rows positionally, which
+    is only valid when the dictionary that derived the fields IS the eval
+    reference; here rows are aligned by source column name instead, and the
+    reference defines the denominator — a reference column the render never
+    produced counts as unmatched cells, not as ignored.
+    """
+    report = {"feeds": [], "totals": {"cells": 0, "match": 0}}
+    for i, key in feed_match_own.items():
+        feed = contract["feeds"][i]
+        derived_by_col = {_nl(f.get("source_column")): f
+                          for f in (feed.get("fields") or [])}
+        ref_feed = own_dictionary["feeds"][key]
+        diffs, cells, match = [], 0, 0
+        for src_f, rt in zip(ref_feed["fields"], ref_feed["ref_targets"]):
+            col = _nl(src_f.get("source_column"))
+            derived = derived_by_col.get(col)
+            for layer in ("stage", "standard"):
+                for attr in ("schema", "table", "column", "datatype"):
+                    ref_v = _nl(rt[layer].get(attr))
+                    if not ref_v:
+                        continue
+                    cells += 1
+                    der_v = _nl((derived or {}).get(layer, {}).get(attr)) if derived else ""
+                    if der_v == ref_v:
+                        match += 1
+                    elif len(diffs) < 8:
+                        diffs.append(f"{col}.{layer}.{attr}: "
+                                     f"derived={der_v!r} ref={ref_v!r}"
+                                     + ("" if derived else " (column not rendered)"))
+        pct = round(100 * match / cells, 1) if cells else 100.0
+        report["feeds"].append({"feed": feed["feed_name"], "cells": cells,
+                                "match": match, "pct": pct, "sample_diffs": diffs})
+        report["totals"]["cells"] += cells
+        report["totals"]["match"] += match
+    t = report["totals"]
+    t["pct"] = round(100 * t["match"] / t["cells"], 1) if t["cells"] else 100.0
+    return report
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -953,12 +794,63 @@ def evaluate_against_reference(contract, dictionary, feed_match):
 from pathlib import Path
 
 
-def _loose_tokens(s):
-    return {t for t in re.findall(r"[a-z0-9]{4,}", s.lower())}
+_loose_tokens = loose_tokens  # factored into frdsttm.reference_workbooks
 
 
 refs = sorted(Path(REFERENCE_DIR).glob("*.xlsx"))
-assert refs, f"No reference workbooks found in {REFERENCE_DIR}"
+if not refs:
+    # Pre-2026-08-22 this was a hard assert. Freeform mode makes an empty
+    # reference library a WARNED state, not a fatal one: every document
+    # renders best-effort from its contract alone, flagged, with no eval.
+    print(f"WARNING: no reference workbooks in {REFERENCE_DIR} — every "
+          f"document renders freeform (no dictionary, no eval). Import "
+          f"reference STTMs via the review app's corpus bootstrap.")
+
+# --------------------------------------------------------------------------- #
+# Template architecture (2026-08-22, docs/TEMPLATE_ARCHITECTURE.md).
+# The reference pick is a computed decision with exactly three modes:
+#   single   — one workbook is the template (dialect + dictionary + eval ref)
+#   amalgam  — top-k workbooks merge, first-wins per table key
+#   freeform — nothing matched; best-effort render from the contract, FLAGGED
+# Scores come from frdsttm.similarity over the corpus index the app's
+# bootstrap wrote next to the workbooks; without an index, features are
+# computed from the contract JSON (weaker, still deterministic). A document's
+# OWN paired workbook is excluded from candidacy (cross-validation, decided
+# 2026-08-22) and used for eval only — exclude_own_reference=0 restores the
+# old self-referential behavior for debugging, never for demos.
+# --------------------------------------------------------------------------- #
+EXCLUDE_OWN = _param("exclude_own_reference", "1").strip().lower() in ("1", "true", "yes")
+TEMPLATE_THRESHOLDS = thresholds_from(_param)
+
+corpus_index = load_corpus_index(REFERENCE_DIR)  # None when absent; raises when corrupt
+dicts_by_name = {p.name: parse_reference_workbook(str(p)) for p in refs}
+wb_feats = reference_features_from_index(corpus_index) if corpus_index else {}
+wb_feats = {n: f for n, f in wb_feats.items() if n in dicts_by_name}
+for _name, _d in dicts_by_name.items():
+    if _name not in wb_feats:
+        wb_feats[_name] = workbook_features(_name, _d)
+
+_FREEFORM_DICT = {"dialect": "sheet_per_table", "feeds": {}, "meta": {}, "feed_sources": {}}
+
+
+def _own_reference(doc_id):
+    """The doc's own paired workbook: corpus pairing first, exact-stem naming
+    convention (<doc_id>.sttm.xlsx / <doc_id>.xlsx) as the index-less guard."""
+    own = own_reference_for(corpus_index, doc_id) if corpus_index else None
+    if own is None:
+        lowered = {n: Path(n).stem.lower() for n in dicts_by_name}
+        for n, stem in lowered.items():
+            if stem in (f"{doc_id.lower()}.sttm", doc_id.lower()):
+                own = n
+                break
+    return own if own in dicts_by_name else None
+
+
+def _target_features(doc_id, contract):
+    feat = frd_features_from_index(corpus_index, doc_id) if corpus_index else None
+    if feat is None:
+        feat = frd_features(doc_id, json.dumps(contract, ensure_ascii=False))
+    return feat
 
 # Read contracts from the CONTRACTS_DIR JSON files, not the frd_contracts
 # Delta table. The table is a snapshot from 03_contract_build.py's run, at
@@ -985,13 +877,30 @@ Path(REPORTS_DIR).mkdir(parents=True, exist_ok=True)
 
 runs = []
 for doc_id, contract in contracts.items():
-    dt = _loose_tokens(doc_id)
-    ref = max(refs, key=lambda p: len(_loose_tokens(p.stem) & dt))
-    dictionary = parse_reference_workbook(str(ref))
+    own_ref = _own_reference(doc_id)
+    exclude = {own_ref} if (EXCLUDE_OWN and own_ref) else set()
+    if wb_feats:
+        decision = decide_templates(_target_features(doc_id, contract), wb_feats,
+                                    TEMPLATE_THRESHOLDS, exclude=exclude)
+    else:
+        decision = {"mode": "freeform", "selections": [], "ranked": [],
+                    "thresholds": {}}
+    order = [sel["reference"] for sel in decision["selections"]]
+    if decision["mode"] == "freeform":
+        dictionary = dict(_FREEFORM_DICT)
+    elif len(order) == 1:
+        dictionary = dicts_by_name[order[0]]
+    else:
+        dictionary = merge_dictionaries(dicts_by_name, order)
     fm = match_feeds(contract, dictionary)
-    if not fm:
-        print(f"SKIP {doc_id}: no feed matched dictionary {ref.name}")
-        continue
+    if not fm and decision["mode"] != "freeform":
+        # The scored template did not structurally match any feed. Demote to
+        # freeform and KEEP rendering — the pre-2026-08-22 behavior (silent
+        # SKIP) left the document with no workbook at all.
+        decision = {**decision, "mode": "freeform", "demoted_from": order}
+        order = []
+        dictionary = dict(_FREEFORM_DICT)
+        fm = {}
 
     human_settled, human_audit = apply_human_resolutions(contract)
     human_audit = list(human_audit)  # snapshot -- resolution_audit gets automatic entries appended next
@@ -1002,17 +911,71 @@ for doc_id, contract in contracts.items():
     derive_field_mappings(contract, dictionary, fm)
     out_xlsx = str(Path(RENDERED_DIR) / f"{doc_id}.sttm.xlsx")
     render_contract(contract, dictionary, out_xlsx)
-    ev = evaluate_against_reference(contract, dictionary, fm)
+
+    # Eval precedence: the doc's OWN workbook is the ground truth whenever it
+    # exists (name-aligned cross eval — valid even though the dictionary that
+    # drove the render was a different template). Otherwise the positional
+    # eval against the chosen template, matching pre-2026-08-22 semantics.
+    # Freeform with no own reference has nothing honest to eval against.
+    ev = None
+    ev_reference = None
+    if own_ref is not None:
+        fm_own = match_feeds(contract, dicts_by_name[own_ref])
+        if fm_own:
+            ev = evaluate_cross_reference(contract, dicts_by_name[own_ref], fm_own)
+            ev_reference = own_ref
+    if ev is None and fm:
+        ev = evaluate_against_reference(contract, dictionary, fm)
+        ev_reference = " + ".join(order)
+
+    contract["_provenance"]["template_decision"] = {
+        "mode": decision["mode"],
+        "selections": decision["selections"],
+        "ranked": decision["ranked"][:5],
+        "own_reference": own_ref,
+        "own_excluded": bool(exclude),
+        "eval_reference": ev_reference,
+        "feed_sources": dictionary.get("feed_sources", {}),
+        "thresholds": decision.get("thresholds", {}),
+        **({"demoted_from": decision["demoted_from"]}
+           if "demoted_from" in decision else {}),
+    }
 
     (Path(CONTRACTS_DIR) / f"{doc_id}.contract.v2.json").write_text(
         json.dumps(contract, indent=2, ensure_ascii=False), encoding="utf-8")
 
     n_human_applied = sum(1 for a in human_audit if a["applied"])
+    template_desc = {
+        "single": f"template: {order[0]}" if order else "template: (none)",
+        "amalgam": "amalgam of: " + ", ".join(order),
+        "freeform": "FREEFORM — no template matched"
+                    + (f" (demoted from {', '.join(decision['demoted_from'])})"
+                       if "demoted_from" in decision else ""),
+    }[decision["mode"]]
+    eval_line = (
+        f"**Golden-pair eval vs {ev_reference}: {ev['totals']['pct']}%** "
+        f"({ev['totals']['match']}/{ev['totals']['cells']} target cells match the reference)"
+        if ev else
+        "**No eval** — no paired reference workbook for this document"
+    )
     lines = [f"# STTM render — {doc_id}", "",
              f"**Status: {contract['status']}** | dialect: {dictionary['dialect']} | "
-             f"reference: {ref.name}",
-             f"**Golden-pair eval: {ev['totals']['pct']}%** "
-             f"({ev['totals']['match']}/{ev['totals']['cells']} target cells match the reference)", ""]
+             f"{template_desc}",
+             eval_line, ""]
+    lines += ["## Template decision",
+              f"- mode: **{decision['mode']}**"
+              + (f" | own reference {own_ref} excluded from candidacy" if exclude else "")]
+    for r in decision["ranked"][:5]:
+        marker = " (excluded — own reference)" if r["excluded"] else ""
+        chosen = " ← chosen" if r["reference"] in order else ""
+        lines.append(f"- {r['reference']}: score {r['score']:.3f} "
+                     f"(columns {r['components']['columns']:.2f}, tables "
+                     f"{r['components']['tables']:.2f}, prose "
+                     f"{r['components']['tokens']:.2f}){marker}{chosen}")
+    if dictionary.get("feed_sources") and decision["mode"] == "amalgam":
+        lines += [f"- sheet {k!r} from {v}" for k, v in
+                  sorted(dictionary["feed_sources"].items())]
+    lines += [""]
     if human_audit:
         lines += ["## Resolution audit (human vs. automatic)"]
         for a in human_audit:
@@ -1025,23 +988,32 @@ for doc_id, contract in contracts.items():
     if resolutions:
         lines += ["## Attribution resolutions (dictionary cross-check, automatic)"] + \
                  [f"- {r}" for r in resolutions] + [""]
-    lines += ["## Per-feed eval"]
-    for f in ev["feeds"]:
-        lines.append(f"- **{f['feed']}**: {f['pct']}% ({f['match']}/{f['cells']})")
-        for d in f["sample_diffs"]:
-            lines.append(f"    - {d}")
+    if ev:
+        lines += ["## Per-feed eval"]
+        for f in ev["feeds"]:
+            lines.append(f"- **{f['feed']}**: {f['pct']}% ({f['match']}/{f['cells']})")
+            for d in f["sample_diffs"]:
+                lines.append(f"    - {d}")
     (Path(REPORTS_DIR) / f"{doc_id}.phase5.md").write_text("\n".join(lines), encoding="utf-8")
 
-    print(f"{contract['status']:6s} {doc_id}: eval {ev['totals']['pct']}%, "
+    print(f"{contract['status']:6s} {doc_id}: [{decision['mode']}] "
+          f"eval {str(ev['totals']['pct']) + '%' if ev else 'n/a'}, "
           f"{n_human_applied}/{len(human_audit)} human resolution(s) applied, "
           f"{len(resolutions)} attribution resolution(s) -> {Path(out_xlsx).name}")
     runs.append({"doc_id": doc_id, "status": contract["status"],
-                 "dialect": dictionary["dialect"], "reference": ref.name,
+                 "dialect": dictionary["dialect"],
+                 # comma-joined template list, or the mode marker when none
+                 "reference": ", ".join(order) if order else "(freeform)",
+                 "template_mode": decision["mode"],
+                 "eval_reference": ev_reference or "",
                  "n_resolutions": len(resolutions),
                  "n_human_resolutions": len(human_audit),
                  "n_human_resolutions_applied": n_human_applied,
-                 "eval_pct": float(ev["totals"]["pct"]),
-                 "eval_cells": ev["totals"]["cells"],
+                 # -1.0 / 0 are the explicit "no eval" sentinels: the columns
+                 # stay non-nullable in both writers, and a dashboard can
+                 # filter eval_pct >= 0 without NULL semantics.
+                 "eval_pct": float(ev["totals"]["pct"]) if ev else -1.0,
+                 "eval_cells": ev["totals"]["cells"] if ev else 0,
                  "rendered_path": out_xlsx,
                  "run_at": datetime.now(timezone.utc)})
 
@@ -1053,6 +1025,8 @@ if IS_DATABRICKS:
         T.StructField("status", T.StringType(), False),
         T.StructField("dialect", T.StringType(), False),
         T.StructField("reference", T.StringType(), False),
+        T.StructField("template_mode", T.StringType(), False),
+        T.StructField("eval_reference", T.StringType(), False),
         T.StructField("n_resolutions", T.IntegerType(), False),
         T.StructField("n_human_resolutions", T.IntegerType(), False),
         T.StructField("n_human_resolutions_applied", T.IntegerType(), False),

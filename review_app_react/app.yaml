@@ -57,3 +57,13 @@ env:
   #   value: "FRDs"                       # "" = library root
   # - name: "SHAREPOINT_OUTPUT_FOLDER"
   #   value: "STTMs"                      # the ONLY folder this app writes
+  # Reference-STTM folder for the corpus bootstrap (2026-08-22,
+  # docs/TEMPLATE_ARCHITECTURE.md). Defaults to the FRD folder; deliberately
+  # NOT the output folder — published output must never feed back in as
+  # reference input.
+  # - name: "SHAREPOINT_REFERENCE_FOLDER"
+  #   value: "FRDs"
+  # UC volume holding reference workbooks + corpus_index.json (default
+  # sttm_reference — must match the job's reference_volume widget).
+  # - name: "STTM_REFERENCE_VOLUME"
+  #   value: "sttm_reference"

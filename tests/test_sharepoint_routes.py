@@ -211,7 +211,11 @@ def test_locate_exact_name_imports_and_is_ready_to_run(client, configured, monke
     assert (tmp_path / "Community_Risk_FRD.docx").read_bytes() == b"DOCX"
 
 
-def test_locate_presents_the_existing_sttm_and_imports_nothing(client, configured, monkeypatch, tmp_path):
+def test_locate_presents_the_existing_sttm_and_a_runnable_document(client, configured, monkeypatch, tmp_path):
+    """2026-08-22: the existing_sttm response ALSO imports the FRD so the
+    reviewer can deliberately regenerate despite the existing workbook
+    (previously nothing was downloaded). Import is read-only; the existing
+    STTM is only replaced by an explicit confirm-gated publish later."""
     monkeypatch.setattr(spr, "UPLOADS_DIR", tmp_path)
     _stub_graph(monkeypatch, children=[_FRD_ITEM], outputs=[_STTM_ITEM], content=b"DOCX")
     r = client.post("/api/demo/sharepoint/locate",
@@ -221,7 +225,9 @@ def test_locate_presents_the_existing_sttm_and_imports_nothing(client, configure
     assert body["status"] == "existing_sttm"
     assert body["sttm"]["item_id"] == "sttm-1"
     assert body["frd"]["item_id"] == "frd-1"
-    assert list(tmp_path.iterdir()) == []          # nothing downloaded to run
+    doc = body["document"]
+    assert doc["source"] == "sharepoint"
+    assert (tmp_path / doc["name"]).read_bytes() == b"DOCX"  # runnable import
 
 
 def test_locate_partial_match_returns_candidates_never_autopicks(client, configured, monkeypatch, tmp_path):

@@ -35,12 +35,22 @@ from pydantic import ValidationError
 from frdsttm.models import FrdIngestionSpec
 
 
-def build_extraction_prompt(content: str, schema: dict | None = None) -> str:
+def build_extraction_prompt(content: str, schema: dict | None = None,
+                            exemplars: str | None = None) -> str:
     """The full user prompt: output contract, JSON schema (with every field
-    description — that is where the extraction guidance lives), then the
-    parsed FRD markdown."""
+    description — that is where the extraction guidance lives), optionally a
+    retrieved-exemplars block (frdsttm.exemplars — client conventions from
+    approved pairs, NEVER a source of facts; stage 03's grounding audit
+    enforces that), then the parsed FRD markdown.
+
+    Ordering is deliberate for prompt caching: the instruction + schema
+    prefix is byte-identical across every call; exemplars vary per document
+    and sit after it; the FRD comes last. `exemplars=None` reproduces the
+    pre-corpus prompt byte-for-byte.
+    """
     if schema is None:
         schema = FrdIngestionSpec.model_json_schema()
+    exemplar_section = ("\n\n" + exemplars.rstrip("\n")) if exemplars else ""
     return (
         "Extract the ingestion specification from the FRD below.\n\n"
         "Respond with ONLY a single JSON object (no markdown fences, no "
@@ -48,6 +58,7 @@ def build_extraction_prompt(content: str, schema: dict | None = None) -> str:
         "explicitly; use null or [] for anything the document does not "
         "state; never add properties not in the schema.\n\n"
         "JSON SCHEMA:\n" + json.dumps(schema, indent=2) +
+        exemplar_section +
         "\n\nFRD DOCUMENT (parsed markdown):\n" + content
     )
 
@@ -86,7 +97,8 @@ def parse_extraction_response(raw_text: str, doc_id: str) -> FrdIngestionSpec:
 
 
 def extract_live(client, doc_id: str, content: str, *, model: str,
-                 max_tokens: int, system_prompt: str) -> SimpleNamespace:
+                 max_tokens: int, system_prompt: str,
+                 exemplars: str | None = None) -> SimpleNamespace:
     """One streaming extraction call. Returns a namespace mirroring the mock
     branch's response shape (`stop_reason`, `parsed_output`, `usage`) so
     everything downstream stays provider-agnostic.
@@ -100,7 +112,8 @@ def extract_live(client, doc_id: str, content: str, *, model: str,
         model=model,
         max_tokens=max_tokens,
         system=system_prompt,
-        messages=[{"role": "user", "content": build_extraction_prompt(content)}],
+        messages=[{"role": "user",
+                   "content": build_extraction_prompt(content, exemplars=exemplars)}],
     ) as stream:
         msg = stream.get_final_message()
 

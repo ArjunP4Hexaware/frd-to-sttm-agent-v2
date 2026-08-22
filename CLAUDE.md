@@ -94,7 +94,13 @@ src/frdsttm/            models.py (FrdIngestionSpec, GatedAmbiguity,
                         grounding_audit / gating), label_contract.py
                         (shared-label-contract loader), local_tables.py,
                         mock_extractions.py, live_extraction.py,
-                        sharepoint.py (Microsoft Graph transport)
+                        sharepoint.py (Microsoft Graph transport);
+                        since 2026-08-22 (docs/TEMPLATE_ARCHITECTURE.md):
+                        frd_parsing.py + reference_workbooks.py (the 01/04
+                        parsers, factored verbatim behind new shims),
+                        similarity.py (deterministic FRD↔STTM scoring,
+                        thresholds), corpus.py (corpus_index.json),
+                        exemplars.py (retrieved-exemplar prompt blocks)
 contracts/frd_label_contract.json   the versioned FRD label contract — now a
                         frozen input, no longer mirrored anywhere (see
                         "Upstream" above)
@@ -138,12 +144,15 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[local,dev,ui]"     # deps from pyproject.toml; ui gives the
                                      # review-app backend its FastAPI tests
 
-pytest                               # 119 tests, offline
+pytest                               # offline; run it for the live count
 
-python notebooks/01_frd_ingest.py                        # parse demo_frd
-STTM_MOCK_EXTRACTION=1 python notebooks/02_extract.py    # zero-cost mock
-python notebooks/03_contract_build.py                    # gate: PASS_WITH_FLAGS
-python notebooks/04_sttm_render.py                       # render + eval (94.1% on demo)
+# Offline smoke of 01→03→04 with SYNTHETIC documents (the repo carries no
+# FRD/STTM material since 2026-08-22; this replaces the deleted fixtures
+# without client content — 02 is skipped, its extraction JSONs pre-written):
+python tools/make_synthetic_smoke_fixture.py
+python notebooks/01_frd_ingest.py
+python notebooks/03_contract_build.py                    # both gate PASS
+python notebooks/04_sttm_render.py                       # template decision + eval
 ```
 
 Without `STTM_MOCK_EXTRACTION=1`, `02_extract` makes real billed Anthropic
@@ -243,11 +252,15 @@ Carry these into the next session; none is implemented.
 (The manual publish button, formerly listed here, landed 2026-08-21 — see
 the SharePoint section above.)
 
-- **Duplicate-FRD detection — v1 SHIPPED 2026-08-21, name-keyed.** The
-  locate flow now short-circuits when the output folder already holds
-  `<doc_id>.sttm.xlsx`: the existing STTM is PRESENTED (download + link,
-  explicitly no publish option — decided 2026-08-21), never regenerated and
-  never silently skipped. This is keyed on the workbook naming convention
+- **Duplicate-FRD detection — v1 SHIPPED 2026-08-21, name-keyed;
+  regenerate-despite-existing added 2026-08-22.** The locate flow
+  short-circuits when the output folder already holds `<doc_id>.sttm.xlsx`:
+  the existing STTM is PRESENTED first (download + link, no publish option),
+  and the same response now also imports the FRD so the reviewer can
+  deliberately regenerate behind a two-step confirm + the billed-run gate —
+  the published workbook is only replaced by an explicit confirm-gated
+  publish of the new render, and every such run is auto-evaled against the
+  existing STTM. This is keyed on the workbook naming convention
   because SharePoint names are all the app can see pre-run. The
   content-hash upgrade below remains the right next step — FRDs get
   revised, and same-name-new-content currently presents the STALE workbook
@@ -256,16 +269,17 @@ the SharePoint section above.)
   auto-presenting.
 - **Unity Catalog as the working store.** Once harvested from SharePoint, FRDs
   and STTMs live in UC. SharePoint remains the system of record for hand-off.
-- **Historical corpus for quality.** Harvest ACFC's FRDs + STTMs, pair them
-  deterministically, and use them as (1) an eval set — the highest-value use,
-  since the 80% UAT gate currently cannot be measured against one golden pair,
-  (2) retrieved few-shot exemplars, and (3) a mined data dictionary feeding
-  `04_sttm_render`'s existing source-dictionary cross-check. Gated on the
-  HIPAA/BAA data-handling review before any real document is harvested.
-  **NOT fine-tuning** — the Claude API has no fine-tuning surface, and it would
-  move ACFC's conventions into weights that cannot be inspected, cited, or
-  corrected, which is the opposite of this repo's grounding doctrine. Full
-  reasoning in the master context document §7a. Settled; do not re-open.
+- **Historical corpus for quality — BUILT 2026-08-22** as the template
+  architecture (docs/TEMPLATE_ARCHITECTURE.md): the app's corpus bootstrap
+  harvests the library's FRDs + STTMs, pairs them deterministically
+  (`frdsttm/similarity.py`, verdicts in code), and every approved pair is a
+  template — (1) automatic golden-pair eval on every regeneration
+  (exclude-own-reference cross-validation), (2) retrieved few-shot
+  exemplars in 02's prompt, (3) the matched workbook(s) as 04's dictionary
+  + layout. The HIPAA/BAA gate still applies before harvesting real ACFC
+  documents in the ACFC environment. **Still NOT fine-tuning** — the Claude
+  API has no fine-tuning surface; reasoning in the master context document
+  §7a. Settled; do not re-open.
 
 ## Branching model
 
@@ -322,6 +336,21 @@ code, not a document, and was left in place; flagged, not silently kept.
 - `%run ./_models` / `%run ./_contract_build` (Databricks) and
   `from _models import ...` (local) both resolve through the shims in
   `notebooks/` — edit `src/frdsttm/`, never the shims.
+
+- **Template thresholds are seeded, not calibrated (2026-08-22).**
+  `similarity.THRESHOLD_DEFAULTS` were set against the synthetic smoke
+  fixture. With a 2-document corpus and exclude-own on, each FRD has ONE
+  eligible template candidate, so `template_single_min` alone decides
+  single-vs-freeform — calibrate on the two real Hexaware pairs before the
+  demo and record the outcome in docs/TEMPLATE_ARCHITECTURE.md.
+- **Slow interpreter exit on the py3.14 venv (2026-08-22).** After a
+  notebook stage completes, the interpreter can take tens of seconds in C
+  finalizers (deltalake/pyarrow teardown). All output is flushed first and
+  the work is complete; it inflates local per-stage wall clock (the demo
+  stage tracker waits on subprocess exit) and does not affect Databricks
+  runs. `pyarrow` itself is now an explicit `[local]` dependency —
+  deltalake 1.x stopped depending on it while `frdsttm.local_tables` still
+  imports it.
 
 ### Deploy blockers — live Databricks App, Hexaware, by 2026-08-24
 

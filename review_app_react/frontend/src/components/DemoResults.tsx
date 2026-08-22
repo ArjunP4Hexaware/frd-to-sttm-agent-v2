@@ -29,6 +29,7 @@ export function DemoResults({ setId, docId }: { setId: string; docId: string }) 
   return (
     <div className="flex flex-col gap-6">
       <ExtractionSummary r={r} />
+      <TemplatePanel r={r} />
       <GateStrip r={r} />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <VerdictTile r={r} />
@@ -147,6 +148,69 @@ function VerdictTile({ r }: { r: R }) {
           <div className="text-sm text-muted-foreground mt-1">
             {r.verdict.n_feeds} feed{r.verdict.n_feeds === 1 ? "" : "s"} in the mapping contract
           </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * Which template(s) drove the render, with the deterministic evidence
+ * (docs/TEMPLATE_ARCHITECTURE.md). Absent for pre-template artifact sets.
+ */
+function TemplatePanel({ r }: { r: R }) {
+  const t = r.template;
+  if (!t) return null;
+  const modeLabel =
+    t.mode === "single"
+      ? "Single template"
+      : t.mode === "amalgam"
+        ? "Amalgam of templates"
+        : "Freeform — no template matched";
+  return (
+    <div>
+      <h2 className="eyebrow mb-2">Template decision</h2>
+      <Card>
+        <CardContent className="py-3 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <Badge variant={t.mode === "freeform" ? "warning" : "success"}>{modeLabel}</Badge>
+            {t.own_excluded && t.own_reference && (
+              <span className="text-xs text-muted-foreground">
+                own reference <span className="mono-id">{t.own_reference}</span> excluded from candidacy;
+                used for scoring only
+              </span>
+            )}
+            {t.demoted_from && (
+              <span className="text-xs text-muted-foreground">
+                demoted from <span className="mono-id">{t.demoted_from.join(", ")}</span> — no structural
+                feed match
+              </span>
+            )}
+          </div>
+          <div className="flex flex-col gap-1">
+            {t.ranked.slice(0, 5).map((c) => {
+              const chosen = t.selections.some((sel) => sel.reference === c.reference);
+              return (
+                <div key={c.reference} className="flex items-center gap-2 text-sm">
+                  <span className="mono-id">{c.reference}</span>
+                  <span className="text-muted-foreground">
+                    {Math.round(c.score * 100)}% — columns {Math.round(c.components.columns * 100)}%,
+                    tables {Math.round(c.components.tables * 100)}%, prose{" "}
+                    {Math.round(c.components.tokens * 100)}%
+                  </span>
+                  {c.excluded && <Badge variant="outline">own — excluded</Badge>}
+                  {chosen && <Badge variant="success">chosen</Badge>}
+                </div>
+              );
+            })}
+          </div>
+          {t.mode === "freeform" && (
+            <p className="text-xs text-muted-foreground">
+              No approved pair was similar enough to this document, so the workbook was rendered from the
+              contract alone (feed metadata and rules; no column dictionary). Review it accordingly, or
+              add a closer reference STTM to the corpus and regenerate.
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -225,9 +225,12 @@ def sharepoint_locate(body: LocateRequest) -> dict:
 
     If the located FRD already has an STTM in the output folder (keyed on
     the rendered-workbook naming convention `<doc_id>.sttm.xlsx`), the
-    response is `existing_sttm`: the app presents that workbook instead of
-    regenerating (decided 2026-08-21) — surfaced, never silently skipped,
-    and with no publish option, since it is already in SharePoint.
+    response is `existing_sttm`: the app presents that workbook first —
+    surfaced, never silently skipped (decided 2026-08-21). Since 2026-08-22
+    the same response also carries the imported FRD (`document`), so the
+    reviewer can deliberately REGENERATE despite the existing STTM (the
+    corpus/eval flow depends on exactly this); publishing the regenerated
+    workbook is a separate confirm-gated step that replaces the old one.
     Otherwise the FRD is imported and returned ready for the run path.
     """
     target = Path(body.name.strip()).name
@@ -272,10 +275,16 @@ def sharepoint_locate(body: LocateRequest) -> dict:
         ) from exc
     existing = [i for i in rendered if i.name.casefold() == sttm_name.casefold()]
     if existing:
+        # The FRD is imported HERE TOO (2026-08-22): regenerate-despite-
+        # existing needs a runnable document, and importing is read-only —
+        # the existing workbook is only ever replaced by an explicit,
+        # confirm-gated publish of the new render. The UI presents the
+        # existing STTM first; regeneration is a deliberate second step.
         return {
             "status": "existing_sttm",
             "frd": _item_payload(frd),
             "sttm": _item_payload(existing[0]),
+            "document": _import_item(client, frd.item_id, frd.name),
         }
 
     return {"status": "ready", "document": _import_item(client, frd.item_id, frd.name)}

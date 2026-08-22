@@ -19,6 +19,10 @@ local = [
     "pypdf",
     "openpyxl",
     "deltalake",
+    # deltalake 1.x no longer depends on pyarrow, but frdsttm.local_tables
+    # imports it directly for the local Delta writer -- found 2026-08-22 when
+    # the recreated py3.14 venv broke local mode. Keep it explicit.
+    "pyarrow",
     "databricks-sdk",
 ]
 # The review app's FastAPI backend (review_app_react/backend). The deployed

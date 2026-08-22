@@ -105,6 +105,27 @@ else:
     OUT_ROOT = str(LOCAL_ROOT / OUT_VOLUME)
 EXTRACTIONS_DIR = f"{OUT_ROOT}/extractions"
 
+# Template-architecture inputs (2026-08-22, docs/TEMPLATE_ARCHITECTURE.md):
+# the reference volume also carries corpus_index.json, built by the review
+# app's corpus bootstrap. When it exists (and the run is live), the k most
+# similar APPROVED FRD->STTM pairs contribute a conventions digest to the
+# extraction prompt (frdsttm.exemplars). Facts still come only from the FRD:
+# 03's grounding audit rejects anything not present in the target document,
+# exemplars included.
+#   sttm_exemplars: auto (use the corpus when present) | on (require it) | off
+REFERENCE_VOLUME = _param("reference_volume", "sttm_reference")
+if IS_DATABRICKS:
+    REFERENCE_DIR = f"/Volumes/{CATALOG}/{SCHEMA}/{REFERENCE_VOLUME}"
+else:
+    REFERENCE_DIR = str(LOCAL_ROOT / REFERENCE_VOLUME)
+EXEMPLARS_MODE = _param("sttm_exemplars", "auto").strip().lower()
+if EXEMPLARS_MODE not in ("auto", "on", "off"):
+    raise ValueError(
+        f"sttm_exemplars={EXEMPLARS_MODE!r} is not recognised (auto|on|off). "
+        f"Refusing to guess."
+    )
+EXEMPLARS_K = int(_param("sttm_exemplars_k", "2"))
+
 # Zero-cost local testing only: skips the real Anthropic call entirely and
 # returns a hand-authored FrdIngestionSpec per doc_id from
 # notebooks/_mock_extractions.py instead. Deliberately laptop-only --
@@ -254,6 +275,11 @@ if not IS_DATABRICKS:
     from _models import FrdIngestionSpec  # noqa: F401
     from _live_extraction import extract_live  # noqa: F401
 
+# Importable in both modes: the %run/_live_extraction shim above (Databricks)
+# and the local import (script mode) both put src/ on sys.path first.
+from frdsttm.corpus import load_corpus_index  # noqa: E402
+from frdsttm.exemplars import build_exemplar_block  # noqa: E402
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -305,6 +331,22 @@ else:
 print(f"{len(docs)} document(s) in {DOCS_TABLE}")
 assert docs, f"No documents in {DOCS_TABLE} — run 01_frd_ingest first."
 
+# Corpus for retrieved exemplars. Absent index -> None (the ordinary
+# fallback: the prompt is byte-identical to the pre-corpus prompt); corrupt
+# index -> load_corpus_index raises (never silently degrade). Mock runs skip
+# exemplars entirely — they make no call for a prompt to influence.
+corpus_index = None
+if EXEMPLARS_MODE != "off" and not (MOCK_EXTRACTION or USE_MOCK):
+    corpus_index = load_corpus_index(REFERENCE_DIR)
+    if EXEMPLARS_MODE == "on" and corpus_index is None:
+        raise ValueError(
+            f"sttm_exemplars=on but no corpus index at {REFERENCE_DIR} — run "
+            f"the review app's corpus bootstrap first, or set sttm_exemplars=auto."
+        )
+    print("exemplars: "
+          + (f"corpus of {len(corpus_index.get('pairs', {}))} pair(s)"
+             if corpus_index else "no corpus index — none"))
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -341,6 +383,10 @@ for d in docs:
             usage=SimpleNamespace(input_tokens=0, output_tokens=0),
         )
     else:
+        exemplar_block = build_exemplar_block(
+            d["doc_id"], d["content"], corpus_index, REFERENCE_DIR,
+            k=EXEMPLARS_K,
+        ) if corpus_index else None
         try:
             response = extract_live(
                 client,
@@ -349,9 +395,18 @@ for d in docs:
                 model=MODEL,
                 max_tokens=MAX_TOKENS,
                 system_prompt=SYSTEM_PROMPT,
+                exemplars=exemplar_block["text"] if exemplar_block else None,
             )
         except anthropic.APIError as exc:
             raise RuntimeError(f"{d['doc_id']}: extraction failed — {exc}") from exc
+        # Provenance sidecar: which approved pairs informed this prompt.
+        # Written even when empty is skipped — absence of the file means
+        # "no exemplars were used", a reviewable fact.
+        if exemplar_block:
+            (Path(EXTRACTIONS_DIR) / f"{d['doc_id']}.exemplars.json").write_text(
+                json.dumps(exemplar_block["exemplars"], indent=2),
+                encoding="utf-8",
+            )
 
     assert response.stop_reason not in {"refusal", "max_tokens"}, (
         f"{d['doc_id']}: unusable stop_reason={response.stop_reason!r} "

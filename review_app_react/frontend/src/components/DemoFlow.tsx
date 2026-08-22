@@ -12,6 +12,7 @@ import {
   useStartDemoRun,
 } from "../demoApi";
 import type { DemoDocument, DemoRunEvent, DemoRunSnapshot, SharePointItemInfo } from "../demoApi";
+import { CorpusPanel } from "./CorpusPanel";
 import { DemoResults } from "./DemoResults";
 
 /**
@@ -20,16 +21,21 @@ import { DemoResults } from "./DemoResults";
  * the app locates it in the SharePoint library itself, and then either
  *
  *  - presents the already-published STTM if one exists in the output folder
- *    (no regeneration, and deliberately NO publish option — it is already
- *    in SharePoint), or
+ *    first — and, since 2026-08-22, offers a deliberate two-step
+ *    "regenerate anyway" that re-enters the billed-run gate (the
+ *    corpus/eval flow depends on regenerating documents whose STTMs
+ *    exist; the published workbook is only replaced by an explicit
+ *    confirm-gated publish of the new render), or
  *  - runs the real pipeline on it, behind the billed-run confirmation.
  *
  * Matching is exact-or-explicit-pick: an ambiguous name renders candidates
- * for the user to choose from; nothing is ever auto-picked.
+ * for the user to choose from; nothing is ever auto-picked. The corpus
+ * panel below the name entry lists every known FRD (paired + unmapped) and
+ * feeds the SAME locate flow — one run path.
  */
 type Phase =
   | { kind: "setup" }
-  | { kind: "existing"; frd: SharePointItemInfo; sttm: SharePointItemInfo }
+  | { kind: "existing"; frd: SharePointItemInfo; sttm: SharePointItemInfo; doc: DemoDocument }
   | { kind: "confirm"; doc: DemoDocument }
   | { kind: "running"; runId: string }
   | { kind: "results"; setId: string; docId: string };
@@ -41,7 +47,7 @@ export function DemoFlow() {
     <div className="flex flex-col gap-6">
       {phase.kind === "setup" && (
         <MappingSetup
-          onExisting={(frd, sttm) => setPhase({ kind: "existing", frd, sttm })}
+          onExisting={(frd, sttm, doc) => setPhase({ kind: "existing", frd, sttm, doc })}
           onReadyToRun={(doc) => setPhase({ kind: "confirm", doc })}
         />
       )}
@@ -50,6 +56,7 @@ export function DemoFlow() {
           frd={phase.frd}
           sttm={phase.sttm}
           onBack={() => setPhase({ kind: "setup" })}
+          onRegenerate={() => setPhase({ kind: "confirm", doc: phase.doc })}
         />
       )}
       {phase.kind === "confirm" && (
@@ -87,7 +94,7 @@ function MappingSetup({
   onExisting,
   onReadyToRun,
 }: {
-  onExisting: (frd: SharePointItemInfo, sttm: SharePointItemInfo) => void;
+  onExisting: (frd: SharePointItemInfo, sttm: SharePointItemInfo, doc: DemoDocument) => void;
   onReadyToRun: (doc: DemoDocument) => void;
 }) {
   const configQuery = useDemoConfig();
@@ -104,7 +111,7 @@ function MappingSetup({
     if (!query) return;
     locate.mutate(query, {
       onSuccess: (result) => {
-        if (result.status === "existing_sttm") onExisting(result.frd, result.sttm);
+        if (result.status === "existing_sttm") onExisting(result.frd, result.sttm, result.document);
         else if (result.status === "ready") onReadyToRun(result.document);
         // "candidates" renders below from locate.data.
       },
@@ -190,24 +197,33 @@ function MappingSetup({
         </div>
       )}
 
+      <CorpusPanel onPick={(pickedName) => submit(pickedName)} />
+
     </div>
   );
 }
 
 /**
- * An FRD that already has a published STTM: present it, full stop. No
- * regeneration, and deliberately NO publish control — the workbook is
- * already in the SharePoint output folder, which is the system of record.
+ * An FRD that already has a published STTM: present it FIRST — nothing is
+ * regenerated on locate. Since 2026-08-22 a deliberate two-step
+ * "regenerate anyway" affordance re-enters the billed-run gate (the corpus
+ * flow regenerates documents whose STTMs exist, and every such run is an
+ * automatic golden-pair eval). There is still NO publish control here: the
+ * published workbook is only ever replaced by an explicit confirm-gated
+ * publish of the NEW render, from the results view.
  */
 function ExistingSttmView({
   frd,
   sttm,
   onBack,
+  onRegenerate,
 }: {
   frd: SharePointItemInfo;
   sttm: SharePointItemInfo;
   onBack: () => void;
+  onRegenerate: () => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -240,10 +256,28 @@ function ExistingSttmView({
               </Button>
             )}
           </div>
+          <div className="flex items-center gap-2 pt-1 border-t">
+            {!confirming ? (
+              <Button variant="outline" onClick={() => setConfirming(true)}>
+                Regenerate this mapping anyway…
+              </Button>
+            ) : (
+              <>
+                <span className="text-sm text-muted-foreground">
+                  Runs the full pipeline on <span className="mono-id">{frd.name}</span> again. The
+                  published workbook is untouched until you explicitly publish the new result, and the
+                  new run is scored against the existing STTM.
+                </span>
+                <Button onClick={onRegenerate}>Continue</Button>
+                <Button variant="ghost" onClick={() => setConfirming(false)}>
+                  Cancel
+                </Button>
+              </>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground">
-            This mapping already lives in SharePoint, so there is nothing to publish. If the FRD has been
-            revised and needs a fresh mapping, remove or rename the published workbook in the output folder
-            first — the app will then treat it as unmapped.
+            The published workbook stays the system of record until a new render is explicitly
+            published over it.
           </p>
         </CardContent>
       </Card>

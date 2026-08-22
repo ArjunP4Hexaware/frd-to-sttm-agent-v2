@@ -12,7 +12,10 @@ import unicodedata
 from pathlib import Path
 
 RENDER_SRC = Path(__file__).resolve().parent.parent / "notebooks" / "04_sttm_render.py"
-_NEEDED = {"_UNI", "_n", "_nl", "_ATTR_UNICODE_MAP", "_attr_norm",
+# _UNI/_n/_nl were factored into frdsttm.reference_workbooks (2026-08-22);
+# they are injected into the exec namespace below from the real module, so
+# these tests still exercise the exact committed normalization code.
+_NEEDED = {"_ATTR_UNICODE_MAP", "_attr_norm",
            "_COL_TOKEN", "_quote_rule", "resolve_attribution"}
 
 
@@ -31,7 +34,10 @@ def _load_resolve_attribution():
         for t in n.targets if isinstance(t, ast.Name)}
     assert found == _NEEDED, f"loader drifted from source: missing {_NEEDED - found}"
     module = ast.Module(body=picked, type_ignores=[])
-    ns = {"re": re, "unicodedata": unicodedata, "frozenset": frozenset}
+    from frdsttm.reference_workbooks import _n, _nl
+
+    ns = {"re": re, "unicodedata": unicodedata, "frozenset": frozenset,
+          "_n": _n, "_nl": _nl}
     exec(compile(ast.fix_missing_locations(module), str(RENDER_SRC), "exec"), ns)
     return ns["resolve_attribution"]
 

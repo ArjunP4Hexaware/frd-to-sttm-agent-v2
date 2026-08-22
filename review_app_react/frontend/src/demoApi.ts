@@ -174,7 +174,65 @@ export interface DemoResults {
     is_golden: boolean;
   };
   mappings: { feed_name: string | null; rows: DemoMappingRow[] }[];
+  /** Template decision from 04's provenance (docs/TEMPLATE_ARCHITECTURE.md);
+   *  null for artifact sets rendered before the template architecture. */
+  template: TemplateDecision | null;
   workbook_available: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Template architecture + corpus (backend/corpus_routes.py, 2026-08-22)
+// ---------------------------------------------------------------------------
+export interface TemplateScore {
+  reference: string;
+  score: number;
+  components: { columns: number; tables: number; tokens: number; name: number };
+  excluded?: boolean;
+}
+
+export interface TemplateDecision {
+  /** single = one workbook drove layout+dictionary; amalgam = merged top-k,
+   *  first-wins per sheet; freeform = nothing matched, best-effort, flagged. */
+  mode: "single" | "amalgam" | "freeform";
+  selections: TemplateScore[];
+  ranked: TemplateScore[];
+  own_reference: string | null;
+  own_excluded: boolean;
+  eval_reference: string | null;
+  feed_sources: Record<string, string>;
+  thresholds: Record<string, number>;
+  demoted_from?: string[];
+}
+
+export interface CorpusSummary {
+  built: boolean;
+  generated_at: string | null;
+  n_frds: number;
+  n_references: number;
+  n_pairs: number;
+  n_unmapped: number;
+  unpaired_references: string[];
+}
+
+export interface CorpusFrd {
+  doc_id: string;
+  name: string;
+  path: string | null;
+  runnable: boolean;
+  paired: boolean;
+  reference: string | null;
+  score: number | null;
+  confidence: "high" | "low" | null;
+  components: { columns: number; tables: number; tokens: number; name: number } | null;
+}
+
+export interface CorpusBootstrapResult extends CorpusSummary {
+  frd_folder: string | null;
+  reference_folder: string | null;
+  n_frd_files: number;
+  n_reference_files: number;
+  uploaded_to_uc: number;
+  skipped: { name: string; error: string }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +320,10 @@ export interface SharePointItemInfo {
  */
 export type LocateResult =
   | { status: "ready"; document: DemoDocument }
-  | { status: "existing_sttm"; frd: SharePointItemInfo; sttm: SharePointItemInfo }
+  /** Since 2026-08-22 the existing_sttm branch ALSO imports the FRD
+   *  (`document`) so the reviewer can deliberately regenerate despite the
+   *  published workbook — the corpus/eval flow depends on exactly that. */
+  | { status: "existing_sttm"; frd: SharePointItemInfo; sttm: SharePointItemInfo; document: DemoDocument }
   | { status: "candidates"; candidates: SharePointItemInfo[] };
 
 export function useLocateFrd() {
@@ -295,6 +356,41 @@ export function useSharePointPublish() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...req, confirm: true }),
+      }),
+  });
+}
+
+/** Corpus state; unbuilt is a normal 200, so no retry noise. */
+export function useCorpusSummary() {
+  return useQuery({
+    queryKey: ["demo", "corpus", "summary"],
+    queryFn: () => fetchJson<CorpusSummary>("/api/demo/corpus"),
+    retry: false,
+  });
+}
+
+export function useCorpusFrds(enabled: boolean) {
+  return useQuery({
+    queryKey: ["demo", "corpus", "frds"],
+    queryFn: () => fetchJson<{ built: boolean; frds: CorpusFrd[] }>("/api/demo/corpus/frds"),
+    enabled,
+    retry: false,
+  });
+}
+
+/**
+ * Corpus bootstrap: downloads every FRD + reference STTM from the SharePoint
+ * library and rebuilds the corpus index. Zero model calls (ingest-all is not
+ * extract-all), but it writes into the reference/raw volumes, so the backend
+ * demands confirm:true and this hook only fires from the two-step control.
+ */
+export function useCorpusBootstrap() {
+  return useMutation({
+    mutationFn: () =>
+      fetchJson<CorpusBootstrapResult>("/api/demo/corpus/bootstrap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
       }),
   });
 }
