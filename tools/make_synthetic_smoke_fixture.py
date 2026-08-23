@@ -42,8 +42,13 @@ from frdsttm.models import Feed, FrdIngestionSpec, Project, TableTarget  # noqa:
 
 LOCAL_ROOT = REPO / "local_dev_fixtures"
 
-SRC_HDRS = ["Database Column Name", "Description", "Datatype", "Null Check", "Comment"]
-TGT_HDRS = ["Catalog", "Schema", "TableName", "ColumnName", "Datatype"]
+# The source-band headers CodeGen's extractor requires (its header_synonyms),
+# as every real client workbook in this dialect carries them.
+SRC_HDRS = ["Database Column Name", "Description", "Sample Value", "Datatype", "Null Check",
+            "PHI Field", "Mandatory Field", "Comment"]
+# Stage/standard bands as the client's sheet-per-table dialect has them (no
+# Catalog column there — that belongs to the single-sheet dialect).
+TGT_HDRS = ["Schema", "TableName", "ColumnName", "Datatype"]
 # (column, datatype) — synthetic names; datatypes are the two CodeGen accepts
 # for audit columns ("string" / "timestamp").
 AUDIT_ROWS = [("SYN_SRC_FILE", "string"), ("SYN_LOAD_TS", "timestamp")]
@@ -126,25 +131,33 @@ def spec_for(doc_id: str, d: dict) -> FrdIngestionSpec:
 
 def workbook_for(path: Path, d: dict) -> None:
     wb = Workbook()
-    ws = wb.active
-    ws.title = f"MAPPING-{d['table']}"[:31]
+    # The client dialect's bookkeeping sheets (CodeGen's extractor requires
+    # both; 04's template fill keeps them from the template).
+    fd = wb.active
+    fd.title = "FILE_DETAILS"
+    fd.append(["Vendor", "FileName", "File Description", "Location", "Frequency"])
+    fd.append(["Synthetic Vendor", d["pattern"], "", f"/synthetic/landing/{path.stem.replace('.sttm', '')}", "weekly"])
+    vh = wb.create_sheet("VERSION_HISTORY")
+    vh.append(["Version", "Date", "Author", "Change Description"])
+    vh.append(["1.0", "2026-01-01", "synthetic analyst", "hand-built reference"])
+    ws = wb.create_sheet(f"MAPPING-{d['table']}"[:31])
     ws.append(["Source File Layout"] + [""] * (len(SRC_HDRS) - 1)
               + ["Stage Layer"] + [""] * (len(TGT_HDRS) - 1)
               + ["Standard Layer"] + [""] * (len(TGT_HDRS) - 1))
     ws.append(SRC_HDRS + TGT_HDRS + TGT_HDRS)
     for col in d["columns"]:
-        ws.append([col, f"synthetic {col.lower().replace('_', ' ')}", "String",
-                   "Not Null", ""]
-                  + ["syn_cat", "syn_stg", d["table"], col, "String"]
-                  + ["syn_cat", "syn_std", d["table"], col, "String"])
+        ws.append([col, f"synthetic {col.lower().replace('_', ' ')}", "", "String",
+                   "Not Null", "No", "Yes", ""]
+                  + ["syn_stg", d["table"], col, "String"]
+                  + ["syn_std", d["table"], col, "String"])
     # Trailing audit rows, as every client workbook in this dialect carries
     # them: source "NA", the ETL audit column named only on the target side.
     # 04 derives these from the template (not 1:1), and CodeGen's
     # `extract-sttm` requires at least one per mapping sheet.
     for col, dtype in AUDIT_ROWS:
-        ws.append(["NA", f"synthetic audit column {col.lower()}", dtype, "", ""]
-                  + ["syn_cat", "syn_stg", d["table"], col, dtype]
-                  + ["syn_cat", "syn_std", d["table"], col, dtype])
+        ws.append(["NA", f"synthetic audit column {col.lower()}", "", dtype, "", "", "", ""]
+                  + ["syn_stg", d["table"], col, dtype]
+                  + ["syn_std", d["table"], col, dtype])
     wb.save(path)
 
 

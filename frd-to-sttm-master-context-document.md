@@ -1,6 +1,6 @@
 # FRD-to-STTM Agent — Master Context Document
 
-**Last verified: 2026-08-22, late evening — after the start-up-sync + `FRD_`/`STTM_` naming change (§12 top entry; IMPLEMENTED, offline-tested), the rule-placement / audit-row fix in 04 and the first successful CodeGen round trip on synthetic documents.** Read this end to end at the start
+**Last verified: 2026-08-22, late evening — after TEMPLATE FILL (04 renders into the chosen template's own layout; §12 top entry), the start-up-sync + `FRD_`/`STTM_` naming change (IMPLEMENTED, offline-tested), the rule-placement / audit-row fix in 04 and the first successful CodeGen round trip on synthetic documents.** Read this end to end at the start
 of any session in this repo (≈8–10 minutes; §§1–3 alone are the 2-minute
 version). It is the single get-up-to-speed document for THIS agent only, and
 it is **tracked in git deliberately** so it travels with every clone — unlike
@@ -108,12 +108,15 @@ widgets-vs-env-vars and Spark-vs-`deltalake`):
                       status ∈ {PASS, PASS_WITH_FLAGS, FAIL} — computed in code
 04_sttm_render        TEMPLATE DECISION (single/amalgam/freeform, §4) →
                       dictionary cross-check → derive mappings (audit rows
-                      from the template) → render workbook with every FRD
-                      rule placed on the row it names (Comment / Recycle
-                      Flag / Business Rule; else a feed-level cell —
-                      `_provenance.rule_placement`, 2026-08-22) → eval vs
-                      the doc's OWN reference (§4) → contract.v2.json +
-                      phase5 report + frd_sttm_runs row
+                      from the template) → render INTO the lead template's
+                      own layout (`layout_of` + `render_into_template`,
+                      2026-08-22: its sheets/headers/styles, whatever
+                      dialect; unfillable template columns blank + reported
+                      in `_provenance.template_fill`; built-in renderers only
+                      as the freeform fallback) with every FRD rule placed
+                      on the row it names (`_provenance.rule_placement`) →
+                      eval vs the doc's OWN reference (§4) → contract.v2.json
+                      + phase5 report + frd_sttm_runs row
 (no 05)               there is NO publish stage anywhere (2026-08-22): the
                       repo never writes to SharePoint — the reviewer uploads
                       the finished STTM; the sync pulls it back in and pairs it
@@ -150,8 +153,11 @@ first — `FRD_<x>` ↔ `STTM_<x>` by the library's prefix convention; the older
 volume.
 Generating an STTM retrieves the most similar approved pairs: their
 conventions enter the extraction prompt as exemplars (02), and the
-best-matching workbook(s) drive the rendered layout and dictionary (04) in
-one of exactly three computed modes — **single** (top match ≥
+best-matching workbook(s) drive the rendered layout and dictionary (04) —
+since 2026-08-22 literally: 04 renders INTO the lead template's own
+workbook layout (`layout_of` → `render_into_template`), so a third client
+dialect needs no code; the two built-in renderers are only the freeform
+fallback — in one of exactly three computed modes — **single** (top match ≥
 `template_single_min`), **amalgam** (top-k merged, first-wins per table key,
 lead workbook's dialect), **freeform** (nothing matched → best-effort render
 from the contract alone, FLAGGED, never a silent guess; an empty reference
@@ -322,7 +328,7 @@ Replacements that keep development possible with zero client content:
 
 **Proven:**
 
-- Offline suite: **206 passed / 4 skipped**, zero network/credentials
+- Offline suite: **213 passed / 4 skipped**, zero network/credentials
   (2026-08-22 late evening — run `pytest` for the live count, never trust a
   written one).
 - **04 → `codegen extract-sttm` round trip on the synthetic smoke (both
@@ -368,6 +374,23 @@ take tens of seconds in C finalizers (deltalake/pyarrow) after a stage's
 work is fully done — inflates local per-stage wall clock only.
 
 ## 12. Decisions log (newest first; reasons matter more than dates)
+
+- **2026-08-22 late evening (Arjun) — TEMPLATE FILL replaces the two
+  hard-coded output dialects.** `reference_workbooks.layout_of` turns the
+  parser's header-name observation into a write-side layout descriptor;
+  `04.render_into_template` / `render_into_single_sheet_template` open the
+  lead template workbook, keep its sheets / bands / headers / widths /
+  styles, drop its data rows and write ours under the same headers via the
+  logical roles; unknown template columns stay blank and are reported
+  (`_provenance.template_fill`); unused sheets removed, extra feeds copied
+  from the lead sheet; FILE_DETAILS / VERSION_HISTORY kept or created
+  minimal + flagged. Why: the renderer was the last place a client's
+  workbook shape was hard-coded; every approved pair already IS the layout.
+  "Ad-lib" is allowed only for the shape, never a cell value — the doctrine
+  applied to layout. The built-in renderers survive only as the freeform
+  fallback. Round trip re-verified: both synthetic docs → `codegen
+  extract-sttm` EXTRACTED (fixture templates made CodeGen-complete in the
+  process). 213 tests.
 
 - **2026-08-22 late evening (Arjun) — sync on app START-UP, not on a
   schedule; `FRD_` / `STTM_` naming.** Whenever the app starts, it lists

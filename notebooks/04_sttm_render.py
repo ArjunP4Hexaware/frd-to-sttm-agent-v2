@@ -22,7 +22,12 @@
 # MAGIC membership (zip_code/member_id) and dictionary recycle markers;
 # MAGIC **(c)** derive stage/standard mappings (1:1 names, String at stage,
 # MAGIC segment-suffix table routing HDR/DTL/TRL); **(d)** render the STTM
-# MAGIC workbook in the matching client dialect (sheet-per-table or single-sheet),
+# MAGIC workbook INTO the chosen template's own layout — its sheets, band
+# MAGIC labels, headers, widths and styles, whatever dialect it is
+# MAGIC (`layout_of` + `render_into_template`, 2026-08-22; a template column
+# MAGIC the contract cannot fill stays blank and is reported in
+# MAGIC `_provenance.template_fill`; the two built-in dialects remain only as
+# MAGIC the freeform fallback when no template matched),
 # MAGIC placing every FRD-stated validation/recycle rule on the row whose
 # MAGIC column it names (Comment / Recycle Flag / Business Rule) or, when it
 # MAGIC names none, in a feed-level cell — recorded in
@@ -86,6 +91,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from copy import copy
 from datetime import datetime, timezone
 
 from openpyxl import Workbook, load_workbook
@@ -112,6 +118,7 @@ if not IS_DATABRICKS:
     from _reference_workbooks import (  # noqa: F401
         _n,
         _nl,
+        layout_of,
         loose_tokens,
         match_feeds,
         parse_reference_workbook,
@@ -840,10 +847,17 @@ def render_single_sheet(contract, out_path, sheet_name="mapping", placements=Non
     return out_path
 
 
-def render_contract(contract, dictionary, out_path):
-    """Render in the dictionary's dialect and record, per feed, where every
-    FRD-stated rule landed (`_provenance.rule_placement`) — so an
-    unattributed rule is visible in the contract and report, never silent."""
+def render_contract(contract, dictionary, out_path, layout=None, feed_match=None):
+    """Render the workbook and record, per feed, where every FRD-stated rule
+    landed (`_provenance.rule_placement`) — so an unattributed rule is
+    visible in the contract and report, never silent.
+
+    With a `layout` (from `layout_of(<template workbook>)`, 2026-08-22) the
+    workbook is rendered INTO that template — its sheets, bands, headers,
+    widths and styles, whatever dialect it is — and `_provenance.template_fill`
+    records what the template had that the contract could not fill. Without
+    one (freeform: no template matched) the two built-in dialects remain the
+    last-resort fallback."""
     placements = [place_feed_rules(feed) for feed in contract["feeds"]]
     contract.setdefault("_provenance", {})["rule_placement"] = [
         {"feed": feed.get("feed_name"),
@@ -852,10 +866,240 @@ def render_contract(contract, dictionary, out_path):
          "recycle": p["recycle"],
          "unattributed": p["unattributed"]}
         for feed, p in zip(contract["feeds"], placements)]
+    if layout is not None and layout.get("dialect") == "sheet_per_table" and layout.get("sheets"):
+        return render_into_template(contract, dictionary, layout, out_path, placements,
+                                    feed_match=feed_match or {})
+    if layout is not None and layout.get("dialect") == "single_sheet" and layout.get("sheet"):
+        return render_into_single_sheet_template(contract, layout, out_path, placements)
     if dictionary["dialect"] == "sheet_per_table":
         return render_sheet_per_table(contract, out_path, placements=placements)
     sheet = next(iter(dictionary["feeds"].values()))["sheet"]
     return render_single_sheet(contract, out_path, sheet_name=sheet, placements=placements)
+
+
+# --------------------------------------------------------------------------- #
+# template fill — render INTO the chosen reference workbook (2026-08-22)
+# --------------------------------------------------------------------------- #
+# The template's layout is the dialect. Its sheets, band labels, headers,
+# column widths and cell styles are kept; its data rows (another FRD's) are
+# removed and ours written under the SAME headers via the logical roles the
+# parser recovered (`layout_of`). A template column the contract knows
+# nothing about (e.g. "Owner", "Start position") stays BLANK and is listed in
+# `_provenance.template_fill.unfilled_columns` — the ad-lib is the shape,
+# never a cell value. Sheets the template has for feeds we do not render are
+# removed; feeds the template has no sheet for get a copy of the lead sheet.
+
+def _copy_row_style(ws, src_row, dst_row, width):
+    for c in range(1, width + 1):
+        a, b = ws.cell(src_row, c), ws.cell(dst_row, c)
+        b.font, b.fill, b.border = copy(a.font), copy(a.fill), copy(a.border)
+        b.alignment, b.number_format = copy(a.alignment), a.number_format
+
+
+def _field_value(f, role, placement, sheet_has_comment):
+    """The cell value for one derived field under one logical column role."""
+    kind, key = role
+    if kind == "source":
+        rules = placement["by_column"].get(f["source_column"], [])
+        if key == "source_column":
+            return f["source_column"]
+        if key == "description":
+            return f.get("description", "")
+        if key == "sample":
+            return f.get("sample", "")
+        if key == "datatype":
+            return f.get("datatype", "String")
+        if key == "nullable_raw":
+            return "NULL" if f.get("nullable") else "Not NULL"
+        if key == "phi_raw":
+            return "Yes" if f.get("phi") else "No"
+        if key == "mandatory_raw":
+            return "Yes" if f.get("mandatory") else "No"
+        if key == "comment":
+            return "\n".join(rules + ([f["comment"]] if f.get("comment") else []))
+        if key == "business_rule":
+            # rules go to Comment when the sheet has one; else here
+            own = [] if sheet_has_comment else rules
+            return "\n".join(own + ([f["business_rule"]] if f.get("business_rule") else []))
+        return f.get(key, "") or ""
+    if kind in ("stage", "standard"):
+        return (f.get(kind) or {}).get(key) or ""
+    if kind == "recycle":
+        rec = placement["recycle"]
+        return f"Y ( {rec['text']} )" if rec and rec["column"] == f["source_column"] else ""
+    return ""
+
+
+def _fill_sheet(ws, sheet_layout, fields, placement, audit_style_from=None):
+    """Replace a template sheet's data rows with `fields`, under its headers."""
+    first = sheet_layout["first_data_row"]
+    width = sheet_layout["width"]
+    cols = sheet_layout["columns"]
+    # remember the first data row's styles before clearing
+    style_row = first if ws.max_row >= first else None
+    styles = None
+    if style_row:
+        styles = [(copy(ws.cell(style_row, c).font), copy(ws.cell(style_row, c).fill),
+                   copy(ws.cell(style_row, c).border), copy(ws.cell(style_row, c).alignment),
+                   ws.cell(style_row, c).number_format) for c in range(1, width + 1)]
+    if ws.max_row >= first:
+        ws.delete_rows(first, ws.max_row - first + 1)
+    has_comment = any(c["role"] == ("source", "comment") for c in cols)
+    r = first
+    for n, f in enumerate(fields, 1):
+        for c in cols:
+            role = c["role"]
+            if role is None:
+                continue
+            val = n if role == ("index", None) else _field_value(f, role, placement, has_comment)
+            ws.cell(r, c["index"] + 1).value = val if val != "" else None
+        if styles:
+            for ci, (fo, fi, bo, al, nf) in enumerate(styles, 1):
+                cell = ws.cell(r, ci)
+                cell.font, cell.fill, cell.border, cell.alignment, cell.number_format = fo, fi, bo, al, nf
+        r += 1
+
+
+def render_into_template(contract, dictionary, layout, out_path, placements, feed_match):
+    from openpyxl import load_workbook as _load
+    wb = _load(layout["path"])
+    sheets = layout["sheets"]
+    sheet_objs = {name: wb[name] for name in sheets if name in wb.sheetnames}
+    lead_sheet_name = next(iter(sheets))
+    fill = {"template": Path(layout["path"]).name, "dialect": "sheet_per_table",
+            "sheets": {}, "unfilled_columns": {}, "created_sheets": [], "removed_sheets": [],
+            "file_details": None, "version_history": None}
+
+    # FILE_DETAILS: our feeds under the template's own header row
+    fd = layout.get("file_details")
+    if fd and "FILE_DETAILS" in wb.sheetnames:
+        ws = wb["FILE_DETAILS"]
+        if ws.max_row >= 2:
+            ws.delete_rows(2, ws.max_row - 1)
+        cols = fd["columns"]
+        for i, (feed, placement) in enumerate(zip(contract["feeds"], placements), 2):
+            vals = {"vendor": feed.get("source_system") or "",
+                    "file_name": "; ".join(feed.get("file_name_patterns", [])),
+                    "description": _feed_level_rule_text(placement),
+                    "location": feed.get("landing_location") or "",
+                    "frequency": feed.get("frequency") or ""}
+            for k, v in vals.items():
+                if k in cols and v:
+                    ws.cell(i, cols[k] + 1, v)
+        fill["file_details"] = {"filled": sorted(cols), "unfilled": [h for h in fd["headers"]
+                                                                    if h and _nl(h) not in
+                                                                    {_nl(fd["headers"][i]) for i in cols.values()}]}
+    else:
+        # The template has no FILE_DETAILS sheet. It carries contract FACTS
+        # (vendor, file pattern, location, frequency) plus the feed-level
+        # rules' only home, and CodeGen's extractor requires it — so create
+        # a minimal one, flagged as created rather than copied.
+        ws = wb.create_sheet("FILE_DETAILS", 0)
+        ws.append(["Vendor", "FileName", "File Description", "Location", "Frequency"])
+        for feed, placement in zip(contract["feeds"], placements):
+            ws.append([feed.get("source_system") or "", "; ".join(feed.get("file_name_patterns", [])),
+                       _feed_level_rule_text(placement), feed.get("landing_location") or "",
+                       feed.get("frequency") or ""])
+        fill["created_sheets"].append("FILE_DETAILS (template had none; minimal sheet — CodeGen requires it)")
+
+    vh = layout.get("version_history")
+    if vh and "VERSION_HISTORY" in wb.sheetnames:
+        ws = wb["VERSION_HISTORY"]
+        if ws.max_row >= 2:
+            ws.delete_rows(2, ws.max_row - 1)
+        cols = vh["columns"]
+        vals = {"version": "0.1", "date": datetime.now(timezone.utc).date().isoformat(),
+                "author": GENERATOR,
+                "change": f"Auto-generated from {contract.get('generated_from_frd', 'FRD')} "
+                          f"into the layout of {Path(layout['path']).name}"}
+        for k, v in vals.items():
+            if k in cols:
+                ws.cell(2, cols[k] + 1, v)
+        fill["version_history"] = {"filled": sorted(cols)}
+    else:
+        ws = wb.create_sheet("VERSION_HISTORY", 1 if "FILE_DETAILS" in wb.sheetnames else 0)
+        ws.append(["Version", "Date", "Author", "Change Description"])
+        ws.append(["0.1", datetime.now(timezone.utc).date().isoformat(), GENERATOR,
+                   f"Auto-generated from {contract.get('generated_from_frd', 'FRD')} "
+                   f"into the layout of {Path(layout['path']).name}"])
+        fill["created_sheets"].append("VERSION_HISTORY (template had none; minimal sheet — CodeGen requires it)")
+
+    # which template sheet each rendered feed uses
+    used = set()
+    for i, feed in enumerate(contract["feeds"]):
+        fields = feed.get("fields") or []
+        if not fields:
+            continue
+        key = feed_match.get(i)
+        src_sheet = (dictionary["feeds"].get(key) or {}).get("sheet") if key is not None else None
+        if src_sheet not in sheets or src_sheet in used:
+            src_sheet = lead_sheet_name if lead_sheet_name not in used else next(
+                (n for n in sheets if n not in used), lead_sheet_name)
+        table = (feed.get("stage_target") or {}).get("tables", [feed["feed_name"]])[0]
+        title = f"MAPPING-{table.upper()}"[:31]
+        if src_sheet in used:
+            ws = wb.copy_worksheet(sheet_objs[src_sheet])
+            fill["created_sheets"].append(f"{title} (copy of {src_sheet})")
+        else:
+            ws = sheet_objs[src_sheet]
+            used.add(src_sheet)
+        ws.title = title if title not in wb.sheetnames or wb[title] is ws else f"{title[:28]}-{i}"
+        sl = sheets[src_sheet]
+        _fill_sheet(ws, sl, fields, placements[i])
+        fill["sheets"][ws.title] = {"from": src_sheet, "rows": len(fields)}
+        if sl["unmapped"]:
+            fill["unfilled_columns"][ws.title] = sl["unmapped"]
+    # template sheets for feeds we did not render carry another FRD's rows: remove
+    for name in list(sheets):
+        if name not in used and name in sheet_objs:
+            wb.remove(sheet_objs[name])
+            fill["removed_sheets"].append(name)
+    contract.setdefault("_provenance", {})["template_fill"] = fill
+    wb.save(out_path)
+    return out_path
+
+
+def render_into_single_sheet_template(contract, layout, out_path, placements):
+    from openpyxl import load_workbook as _load
+    wb = _load(layout["path"])
+    ws = wb[layout["sheet"]]
+    feed, placement = contract["feeds"][0], placements[0]
+    fill = {"template": Path(layout["path"]).name, "dialect": "single_sheet",
+            "sheets": {layout["sheet"]: {"rows": len(feed.get("fields") or [])}},
+            "unfilled_columns": {layout["sheet"]: layout["unmapped"]} if layout["unmapped"] else {},
+            "unfilled_meta": [], "created_sheets": [], "removed_sheets": []}
+    # metadata block: fill the keys we know, clear the rest (they are another feed's)
+    for m in layout["meta_rows"]:
+        field = m["field"]
+        val = None
+        if field == "file_name_patterns":
+            val = "\n".join(feed.get("file_name_patterns", []))
+        elif field == "lobs":
+            val = ",".join(re.sub(r"^REG#\d+\s+", "", l) for l in feed.get("lobs", []))
+        elif field == "file_type":
+            val = (f"{feed.get('file_format') or ''}"
+                   + (f" ({feed.get('delimiter')} delimited)" if feed.get("delimiter") else "")) or None
+        elif field == "domain":
+            val = (feed.get("domain") or "").upper() or None
+        elif field is not None:
+            val = feed.get(field) or None
+        else:
+            fill["unfilled_meta"].append(m["key"])
+        ws.cell(m["row"], 2).value = val   # .value=: None must CLEAR the template's old value
+    # feed-level rules: the recycle rule and unattributed rules get rows of
+    # their own in the metadata block only if the template has such keys;
+    # otherwise they go to the report (recorded), never invented into a row
+    leftover = _feed_level_rule_text(placement)
+    if leftover:
+        fill["feed_level_rules_unplaced"] = leftover
+    _fill_sheet(ws, layout, feed.get("fields") or [], placement)
+    for name in wb.sheetnames:
+        if name != layout["sheet"] and name.startswith("MAPPING-"):
+            del wb[name]
+            fill["removed_sheets"].append(name)
+    contract.setdefault("_provenance", {})["template_fill"] = fill
+    wb.save(out_path)
+    return out_path
 
 
 # --------------------------------------------------------------------------- #
@@ -1066,7 +1310,10 @@ for doc_id, contract in contracts.items():
          "resolution_type": None, "applied": True, "target": None, "detail": r} for r in resolutions)
     derive_field_mappings(contract, dictionary, fm)
     out_xlsx = str(Path(RENDERED_DIR) / f"{doc_id}.sttm.xlsx")
-    render_contract(contract, dictionary, out_xlsx)
+    # Render INTO the lead template's own layout (2026-08-22): its sheets,
+    # headers and styles are the dialect. Freeform keeps the built-in fallback.
+    template_layout = layout_of(str(Path(REFERENCE_DIR) / order[0])) if order else None
+    render_contract(contract, dictionary, out_xlsx, layout=template_layout, feed_match=fm)
 
     # Eval precedence: the doc's OWN workbook is the ground truth whenever it
     # exists (name-aligned cross eval — valid even though the dictionary that
@@ -1144,6 +1391,25 @@ for doc_id, contract in contracts.items():
     if resolutions:
         lines += ["## Attribution resolutions (dictionary cross-check, automatic)"] + \
                  [f"- {r}" for r in resolutions] + [""]
+    tf = contract["_provenance"].get("template_fill")
+    if tf:
+        lines += [f"## Template fill — rendered into the layout of {tf['template']} ({tf['dialect']})"]
+        for sheet, info in tf.get("sheets", {}).items():
+            lines.append(f"- sheet {sheet}: {info.get('rows', 0)} rows"
+                         + (f" (layout from {info['from']})" if info.get("from") else ""))
+        for sheet, cols in tf.get("unfilled_columns", {}).items():
+            lines.append(f"- {sheet}: template columns left EMPTY — the FRD does not state them: "
+                         + ", ".join(cols))
+        if tf.get("unfilled_meta"):
+            lines.append("- metadata keys left empty: " + ", ".join(tf["unfilled_meta"]))
+        if tf.get("feed_level_rules_unplaced"):
+            lines.append("- feed-level rules with no home in this layout (see Rule placement): "
+                         + _quote_rule(tf["feed_level_rules_unplaced"], 120))
+        for c in tf.get("created_sheets", []):
+            lines.append(f"- created sheet: {c}")
+        for r in tf.get("removed_sheets", []):
+            lines.append(f"- removed template sheet (another FRD's rows): {r}")
+        lines += [""]
     placements = contract["_provenance"].get("rule_placement") or []
     if any(p["by_column"] or p["recycle"] or p["unattributed"] for p in placements):
         lines += ["## Rule placement (where the FRD's rules landed in the workbook)"]

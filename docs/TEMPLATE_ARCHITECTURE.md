@@ -74,6 +74,25 @@ idempotently on every sync tick. In the deployed App the container keeps a
 mirror of both volumes for listing/staging, refreshed after "Sync now" and
 lazily (`STTM_CORPUS_REFRESH_SECONDS`) so another instance's sync shows up.
 
+**Template fill (2026-08-22, late evening).** The chosen template's own
+workbook layout IS the render dialect. `reference_workbooks.layout_of(path)`
+returns the write-side descriptor (per mapping sheet: band/header/first-data
+rows, each column's logical role via the same alias tables the parser reads
+with, the unmapped columns; FILE_DETAILS / VERSION_HISTORY header maps; for
+the single-sheet dialect the metadata block's keys → contract fields).
+`04.render_into_template` opens the lead template, keeps sheets, bands,
+headers, widths and styles, removes its data rows and writes ours under the
+same headers; a template column the contract cannot fill stays blank and is
+listed in `_provenance.template_fill.unfilled_columns` (reported in the
+phase-5 report); sheets for feeds we do not render are removed, extra feeds
+get a copy of the lead sheet; FILE_DETAILS / VERSION_HISTORY are kept from
+the template or created minimal and flagged (CodeGen's extractor requires
+both). The two built-in renderers (`render_sheet_per_table`,
+`render_single_sheet`) remain only as the freeform fallback. Consequence: a
+new client dialect is a new template in the library, not new code — and a
+template missing a column the downstream extractor needs yields a workbook
+that extractor rejects loudly, which is the honest outcome.
+
 **Pairing (2026-08-22 evening).** `similarity.pair_corpus` pairs by exact
 **name** first — `name_key()` strips extensions (`.sttm.xlsx` included)
 and trailing role tokens (`sttm`, `frd`, `mapping`), so `Community Risk

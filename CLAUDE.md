@@ -113,9 +113,28 @@ Two hand-off contracts matter:
   stage ColumnName `NA`, which CodeGen rejects). The synthetic fixture
   carries audit rows + states project name / delimiter / load strategy so
   the round trip needs no patching.
-  Still true: `render_single_sheet` (CAQH dialect) is incompatible with the
-  FLAT-only extractor outright (different band/header dialect); the rules
-  now land in its `Business Rule` column + metadata block for humans.
+  **Template fill (2026-08-22, later the same night):** 04 no longer
+  writes from a hard-coded header list when a template matched — it renders
+  INTO the lead template workbook's own layout (`reference_workbooks.layout_of`
+  → `render_into_template` / `render_into_single_sheet_template`): sheets,
+  band labels, headers, widths and styles are kept; the template's data rows
+  (another FRD's) are removed; ours are written under the SAME headers via
+  the logical roles the parser already recovers; a template column the
+  contract knows nothing about stays BLANK and is listed in
+  `_provenance.template_fill.unfilled_columns` (the ad-lib is the shape,
+  never a cell); unused template sheets are removed, extra feeds get a copy
+  of the lead sheet; FILE_DETAILS / VERSION_HISTORY are kept from the
+  template or created minimal + flagged (CodeGen requires both). A third
+  client dialect therefore needs no code. The two built-in renderers
+  (`render_sheet_per_table` / `render_single_sheet`) remain ONLY as the
+  freeform fallback (no template matched). Tests:
+  tests/test_render_template_fill.py (an unseen dialect, a spare-sheet
+  reuse, copy/remove, the CAQH metadata block, the freeform fallback).
+  Consequence for the round trip: the output now mirrors the template, so a
+  template that lacks a column CodeGen requires yields a workbook CodeGen
+  rejects — loudly, and the synthetic fixture's templates were made
+  CodeGen-complete (Sample Value / PHI Field / Mandatory Field, no Catalog
+  in the stage band, FILE_DETAILS + VERSION_HISTORY) for that reason.
   Still UNPROVEN on real documents — and CodeGen's `FrdContract` is
   stricter than ours (non-null `project_name`, `load_strategy` ∈
   {'Truncate and Load','Append'}, a delimiter for `txt`): a real FRD that
@@ -175,10 +194,11 @@ context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
 contracts/frd_label_contract.json   the versioned FRD label contract — now a
                         frozen input, no longer mirrored anywhere (see
                         "Upstream" above)
-tests/                  offline (no LLM/network/Spark); 206 as of
+tests/                  offline (no LLM/network/Spark); 213 as of
                         2026-08-22 (late evening; +17 rule placement/audit rows,
-                        +11 start-up sync / prefix pairing) — run `pytest` for
-                        the live count rather than trusting a number here
+                        +11 start-up sync / prefix pairing, +7 template fill) —
+                        run `pytest` for the live count rather than trusting
+                        a number here
 schema/sttm_extraction_schema.json   the extraction contract (mirrors models)
 databricks.yml + resources/frd_sttm_job.yml   asset bundle, job frd_sttm_pipeline
 resources/frd_sttm_sync_job.yml   the sync job — NO schedule (2026-08-22 late):
