@@ -1,6 +1,6 @@
 # FRD-to-STTM Agent — Master Context Document
 
-**Last verified: 2026-08-22, late evening — after the rule-placement / audit-row fix in 04 and the first successful CodeGen round trip on synthetic documents (§12 top entry).** Read this end to end at the start
+**Last verified: 2026-08-22, late evening — after the start-up-sync + `FRD_`/`STTM_` naming decision (§12 top entry; DECIDED, not yet in code), the rule-placement / audit-row fix in 04 and the first successful CodeGen round trip on synthetic documents.** Read this end to end at the start
 of any session in this repo (≈8–10 minutes; §§1–3 alone are the 2-minute
 version). It is the single get-up-to-speed document for THIS agent only, and
 it is **tracked in git deliberately** so it travels with every clone — unlike
@@ -57,12 +57,15 @@ presentation of both agents still stands after it). Everything needed is on
 2. Offline sanity with zero client content:
    `python tools/make_synthetic_smoke_fixture.py`, then run notebooks
    01 → 03 → 04 (02 is skipped by design — §10).
-3. **First SharePoint sync** against the 2 real FRD/STTM pairs (app →
-   "Sync from SharePoint now…", or `databricks bundle run
-   frd_sttm_sharepoint_sync`). Zero model calls. Verify both pairs paired
-   (by name if the STTMs follow `<FRD name>.sttm.xlsx` / `… STTM.xlsx`,
-   else by similarity). With no tenant yet, "Rebuild index…" indexes
-   whatever was hand-placed in the volumes.
+3. **First SharePoint sync** against the 2 real FRD/STTM pairs — and wire
+   the START-UP sync (decision 2026-08-22 late, §12): a backend start-up
+   hook that runs the same `frdsttm.sync` path as "Sync now", importing
+   every `FRD_*` / `STTM_*` file not yet in Unity Catalog; drop the cron
+   schedule; pair by the prefix convention (`FRD_<name>` ↔ `STTM_<name>`,
+   similarity as fallback). Until the hook exists: app → "Sync from
+   SharePoint now…" or `databricks bundle run frd_sttm_sharepoint_sync`.
+   Zero model calls. Verify both pairs paired. With no tenant yet, "Rebuild
+   index…" indexes whatever was hand-placed in the volumes.
 4. **Calibrate `TEMPLATE_SINGLE_MIN`** — with a 2-document corpus and
    exclude-own on, each FRD has exactly ONE eligible template, so this one
    threshold decides single-vs-freeform. Record the outcome in
@@ -73,8 +76,8 @@ presentation of both agents still stands after it). Everything needed is on
    client's real STTM.
 6. `databricks bundle run frd_sttm_pipeline` — the gating check for the
    Apps deploy (§11) — and `databricks bundle run frd_sttm_sharepoint_sync`
-   (the scheduled sync job; unpause its schedule in the demo target) — then
-   `databricks apps deploy`.
+   (the sync job — deployed as the manual / start-up target, NO schedule
+   per the 2026-08-22 late decision) — then `databricks apps deploy`.
 7. In parallel from step 1: chase the **Entra ID app registration**
    (`Sites.Selected` application permission, admin consent, per-site
    grant). External, blocking, and the long pole for everything SharePoint.
@@ -87,10 +90,12 @@ widgets-vs-env-vars and Spark-vs-`deltalake`):
 
 ```
 00_sharepoint_sync    SharePoint FRD + STTM folders → frd_raw + sttm_reference
-                      volumes → corpus_index.json. SCHEDULED job
-                      (frd_sttm_sharepoint_sync, cron `sync_cron`); incremental
-                      (eTag/modified/size via sync_manifest.json); also what
-                      the app's "Sync now" triggers. READ only. (2026-08-22)
+                      volumes → corpus_index.json. Runs on APP START-UP and
+                      "Sync now" (decided 2026-08-22 late — the code still
+                      has it as the scheduled job frd_sttm_sharepoint_sync,
+                      cron `sync_cron`); incremental (eTag/modified/size via
+                      sync_manifest.json); files are `FRD_*.docx` / `STTM_*.xlsx`.
+                      READ only.
 00_sharepoint_fetch   library → frd_raw volume            (network at the edge;
                       the pipeline job's own fetch for a stand-alone run)
 01_frd_ingest         docx/pdf/md/txt → markdown → frd_documents Delta   (deterministic)
@@ -136,9 +141,11 @@ with the app's corpus code, no drift.
 Full rationale: `docs/TEMPLATE_ARCHITECTURE.md`. The one-paragraph version:
 
 **Every approved FRD→STTM pair is a template.** The SharePoint sync
-(`frdsttm/sync.py`, scheduled job + app "Sync now") lands the library's
-FRDs + STTMs in the volumes, pairs them deterministically (exact name match
-first, similarity second — `matched_by` on every pair), and writes
+(`frdsttm/sync.py`; runs on app start-up + "Sync now" per the 2026-08-22
+late decision — the scheduled job is the pre-decision code) lands the
+library's FRDs + STTMs in the volumes, pairs them deterministically (name
+first — `FRD_<x>` ↔ `STTM_<x>` by the library's prefix convention; the older
+`.sttm.xlsx` patterns and similarity after — `matched_by` on every pair), and writes
 `corpus_index.json` (v2, `content_sha256` per document) into the reference
 volume.
 Generating an STTM retrieves the most similar approved pairs: their
@@ -208,12 +215,13 @@ Runs are mode-switched on `STTM_APP_MODE`:
   to container disk as a rehydratable cache. "Sync now" triggers the
   bundle-deployed **sync job** the same way, waits, then mirrors `frd_raw`
   + `sttm_reference` down to the container; reads re-mirror lazily after
-  `STTM_CORPUS_REFRESH_SECONDS` so the scheduled ticks show up.
+  `STTM_CORPUS_REFRESH_SECONDS`. The same sync is to run at app START-UP
+  (decision 2026-08-22 late; the hook is not written yet).
 
 There is no publish path (2026-08-22, supersedes the 2026-08-21 manual
 button): the app never writes to SharePoint. The reviewer downloads the
-draft, edits/approves, uploads it to the STTM folder; the sync pairs it by
-name (`<doc_id>.sttm.xlsx`) on the next tick.
+draft, edits/approves, uploads it to the STTM folder as `STTM_<name>.xlsx`;
+the next start-up or "Sync now" pairs it with `FRD_<name>.docx`.
 
 Backend route families: `demo.py` (`/api/demo/...` config, documents,
 uploads, runs + SSE, artifacts), `sharepoint_routes.py` (config probe +
@@ -331,7 +339,8 @@ Replacements that keep development possible with zero client content:
 **Unproven — treat each as false until seen working:**
 
 1. **SharePoint against a real tenant** (token, consent, site/drive
-   resolution, replace-on-upload). Blocked on the Entra ID registration.
+   resolution). Blocked on the Entra ID registration. Plus the **start-up
+   sync hook and prefix pairing are decided but NOT written** (§12 top).
 2. **Any Databricks execution from this checkout**: the bundle-job run
    through the `%run` shims, the Jobs-API demo path, the Apps deploy, SSE
    through the Apps proxy. First `databricks bundle run frd_sttm_pipeline`
@@ -358,6 +367,19 @@ take tens of seconds in C finalizers (deltalake/pyarrow) after a stage's
 work is fully done — inflates local per-stage wall clock only.
 
 ## 12. Decisions log (newest first; reasons matter more than dates)
+
+- **2026-08-22 late evening (Arjun) — sync on app START-UP, not on a
+  schedule; `FRD_` / `STTM_` naming.** Whenever the app starts, it lists
+  the SharePoint library, imports every FRD and STTM not already in Unity
+  Catalog, re-pairs and re-indexes ("Sync now" stays as the manual
+  repeat). The cron schedule goes. Learned the same day: every FRD in the
+  library is `FRD_<name>.docx` and every STTM is `STTM_<name>.xlsx`, so
+  listing filters by prefix and pairing is by the stem after it (similarity
+  remains the fallback). Why: the reviewer opens the app to work, so the
+  freshest corpus at that moment is what matters; a background schedule
+  adds a job to babysit and a lag to explain. **Decided, NOT yet in code**
+  — the implementation list is in CLAUDE.md's decision block; the solution
+  architecture slide already shows the new trigger.
 
 - **2026-08-22 late evening (Arjun, pre-hand-off review):** the rendered
   workbook dropped every FRD-stated validation/recycle rule (they lived

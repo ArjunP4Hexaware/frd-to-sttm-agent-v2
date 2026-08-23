@@ -15,7 +15,7 @@ algorithmic-art, brand-guidelines and theme-factory skills, 2026-08-22):
 
   header   title, one-line subtitle, three status chips
   flow     five nodes on one axis — SharePoint (with the FRD page as a
-           thumbnail) → scheduled read-only sync → the four-stage Databricks
+           thumbnail) → read-only sync on app start-up → the four-stage Databricks
            job (stage 02, the ONLY model call, in Claude orange) → the review
            app (human) → outputs (with the STTM sheet as a thumbnail) — and
            the gold return loop (the reviewer uploads; the sync pairs it)
@@ -399,7 +399,7 @@ def band_label(slide, x, y, text, color):
 
 def down_arrow(slide, x, y1, y2, label, color=T_SEC):
     add_line(slide, x, y1, x, y2, color=color, width=1.5, head=True)
-    add_text(slide, x + 0.14, (y1 + y2) / 2 - 0.11, 6.0, 0.22, [(label, {})], size=9.5, color=T_SEC, bold=True)
+    add_text(slide, x + 0.14, (y1 + y2) / 2 - 0.11, 7.8, 0.22, [(label, {})], size=9.5, color=T_SEC, bold=True)
 
 
 def build(out: Path) -> Path:
@@ -440,8 +440,8 @@ def build(out: Path) -> Path:
         add_logo(s, logo, x + 0.12, y + 0.12, 0.38, 0.38)
         add_text(s, x + 0.6, y + 0.08, w - 0.7, 0.24, [(title, {})], size=10.5, color=T_PRI, bold=True)
         add_text(s, x + 0.6, y + 0.32, w - 0.7, 0.26, [(sub, {})], size=8.5, color=T_SEC)
-    doc_tile(L + 4.85, AY + 0.33, "word", "FRD  ·  .docx", "input — approved requirements")
-    doc_tile(L + 7.6, AY + 0.33, "excel", "Approved STTM  ·  .xlsx", "input — becomes a template")
+    doc_tile(L + 4.85, AY + 0.33, "word", "FRD_<name>.docx", "input — approved requirements")
+    doc_tile(L + 7.6, AY + 0.33, "excel", "STTM_<name>.xlsx", "input — becomes a template")
     # access
     add_logo(s, "entra", L + 10.45, AY + 0.4, 0.5, 0.5)
     add_text(s, L + 11.05, AY + 0.35, 1.1, 0.6,
@@ -450,7 +450,7 @@ def build(out: Path) -> Path:
 
     # ----- arrow A → B ---------------------------------------------------------------
     BY, BH = 3.05, 2.62
-    down_arrow(s, L + 4.2, AY + AH, BY, "00  scheduled sync — every 15 min, incremental · pulls FRDs and STTMs down · never writes back")
+    down_arrow(s, L + 4.2, AY + AH, BY, "00  sync on app start-up — imports every FRD_* / STTM_* not yet in Unity Catalog · never writes back")
 
     # ----- band B: data platform ---------------------------------------------------
     add_rect(s, L, BY, W, BH, fill=CARD, line=HAIR, radius=0.025)
@@ -504,7 +504,7 @@ def build(out: Path) -> Path:
     add_logo(s, "fastapi", c3x + 0.18, cy + 0.5, 0.85, 0.17)
     add_logo(s, "react", c3x + 1.12, cy + 0.44, 0.28, 0.28)
     add_text(s, c3x + 0.18, cy + 0.8, c3w - 0.36, ch - 0.9,
-             [("Pick an FRD · run (confirm-gated) · answer what the agent could not settle · re-render · download.", {})],
+             [("On start-up: syncs SharePoint → Unity Catalog. Then pick an FRD · run (confirm-gated) · answer what the agent could not settle · re-render · download.", {})],
              size=9.5, color=T_SEC, line_spacing=1.08)
 
     # ----- arrow B → C ---------------------------------------------------------------
@@ -518,7 +518,7 @@ def build(out: Path) -> Path:
     add_icon(s, "user", L + 0.25, CY + 0.4, 0.42)
     add_text(s, L + 0.85, CY + 0.36, hw - 1.05, 0.55,
              [("The reviewer approves the STTM (edits in Excel if needed) and uploads it to SharePoint "
-               "themselves. The next sync pairs it — it becomes a template.", {})], size=10, color=T_SEC, line_spacing=1.05)
+               "themselves. The next start-up sync pairs it — it becomes a template.", {})], size=10, color=T_SEC, line_spacing=1.05)
     ox = L + hw + 0.25
     ow = R - ox
     add_rect(s, ox, CY, ow, CH, fill=CARD, line=EXT, line_w=1.0, radius=0.025)

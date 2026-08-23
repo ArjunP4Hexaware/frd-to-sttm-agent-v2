@@ -40,6 +40,24 @@ Databricks App in the Hexaware environment by Monday 2026-08-24** —
 replay-only. The three deploy blockers are the last entries under "Known
 gaps" below; verify each rather than assuming it still holds.
 
+**Architecture decision 2026-08-22 (late evening, Arjun) — DECIDED, NOT YET
+IN CODE:** the SharePoint → Unity Catalog sync runs **when the app starts
+up** (and on "Sync now"), not on a cron schedule. On start-up the backend
+lists the library, imports every FRD and STTM that is not already in the
+volumes, re-pairs and re-indexes. The library's naming convention is now
+known: **every FRD is `FRD_<name>.docx`, every STTM is `STTM_<name>.xlsx`**,
+so listing can filter by prefix and pairing is `FRD_X` ↔ `STTM_X` by the
+stem after the prefix (similarity stays the fallback). What this means for
+the code, in order: (1) a start-up hook in `review_app_react/backend` that
+runs the same `frdsttm.sync` path the "Sync now" button uses (local mode:
+in-process; databricks mode: the sync job via the Jobs API, then the mirror);
+(2) the schedule in `resources/frd_sttm_sync_job.yml` goes — the job stays
+only as the databricks-mode execution target for start-up and "Sync now";
+(3) `frdsttm/sync.py` pairing gets the prefix rule first, the older
+`<doc_id>.sttm.xlsx` / `<doc> STTM.xlsx` patterns and similarity after it;
+(4) `00_sharepoint_sync` remains the implementation. Wherever this file
+still says "scheduled" / "every 15 min", read it as the pre-decision code.
+
 Two hand-off contracts matter:
 
 - **Upstream (versioned, now a FROZEN INPUT):** `01_frd_ingest` parses the
@@ -102,8 +120,10 @@ notebooks/01..04_*.py   the four core entry points — dual-mode (plain local
                         detection, widgets ↔ env vars, Spark ↔ deltalake)
 notebooks/00_sharepoint_sync.py     SharePoint FRD + STTM folders → frd_raw +
                         sttm_reference volumes → corpus_index.json (READ;
-                        scheduled job frd_sttm_sharepoint_sync; incremental
-                        via sync_manifest.json; also the app's "Sync now")
+                        run on app START-UP + "Sync now" per the 2026-08-22
+                        late decision — the code still carries the scheduled
+                        job frd_sttm_sharepoint_sync; incremental via
+                        sync_manifest.json)
 notebooks/00_sharepoint_fetch.py    SharePoint library → frd_raw (read; the
                         pipeline job's own fetch for a stand-alone full run)
                         — there is NO publish notebook: the repo never writes
@@ -151,8 +171,9 @@ tests/                  offline (no LLM/network/Spark); 195 as of
                         the live count rather than trusting a number here
 schema/sttm_extraction_schema.json   the extraction contract (mirrors models)
 databricks.yml + resources/frd_sttm_job.yml   asset bundle, job frd_sttm_pipeline
-resources/frd_sttm_sync_job.yml   the SCHEDULED sync job (cron in databricks.yml
-                        `sync_cron`, paused on the dev target)
+resources/frd_sttm_sync_job.yml   the sync job (cron `sync_cron` in databricks.yml —
+                        SCHEDULE TO BE REMOVED per the 2026-08-22 late decision;
+                        the job becomes the start-up / "Sync now" target only)
 resources/frd_sttm_render_job.yml the render-only job (stage 04 over an existing
                         run suffix) that the human-in-the-loop re-render triggers
                         in databricks mode — no re-extraction, nothing billed
@@ -263,7 +284,7 @@ is PAUSED on the dev target (no tenant there); UNPAUSED by default.
 - The grounding audit is the quality gate (strict fields verbatim,
   advisory prose token-overlap). Never relax it to make a run pass.
 
-## SharePoint / Microsoft Graph (added 2026-08-21; made READ-ONLY + scheduled sync 2026-08-22)
+## SharePoint / Microsoft Graph (added 2026-08-21; READ-ONLY 2026-08-22; sync on app start-up decided 2026-08-22 late — see the decision block at the top)
 
 The document library is the program's system of record: FRDs and approved
 STTMs live there. `src/frdsttm/sharepoint.py` is the whole transport;
@@ -286,8 +307,10 @@ the parsing stage.
   `tests/test_sharepoint_routes.py` guards that the router exposes only
   the config probe. The hand-off is a PERSON uploading the reviewed
   workbook to the library's STTM folder; the next sync pulls it into
-  `sttm_reference` and pairs it with its FRD (exact name match first —
-  `<doc_id>.sttm.xlsx`, `<doc> STTM.xlsx` etc. — similarity second).
+  `sttm_reference` and pairs it with its FRD (name first — the library's
+  convention is `FRD_<name>.docx` ↔ `STTM_<name>.xlsx`, so the stem after the
+  prefix is the key; the older `<doc_id>.sttm.xlsx` / `<doc> STTM.xlsx`
+  patterns the code matches today become fallbacks — similarity last).
   Consequence for the long-pole Entra ID grant: `Sites.Selected` **read**
   on the one site is sufficient. Do not add a write path back "for
   convenience"; the slides, docs and grant all rely on its absence.
@@ -299,8 +322,10 @@ the parsing stage.
   local copy of anything that left the library (only files IT synced — a
   hand-staged file is left alone), then rebuilds `corpus_index.json` with a
   `content_sha256` per document. First tick = bulk load; every later tick =
-  incremental. Scheduled by `resources/frd_sttm_sync_job.yml` (`sync_cron`,
-  default every 15 min, UTC; `max_concurrent_runs: 1`). `sync_mode=reindex`
+  incremental. TRIGGER (decided 2026-08-22 late): app START-UP and "Sync
+  now" — not a schedule; `resources/frd_sttm_sync_job.yml` still carries
+  `sync_cron` (default every 15 min, UTC; `max_concurrent_runs: 1`) until the
+  code catches up. `sync_mode=reindex`
   rebuilds the index from the volumes without touching SharePoint — the
   path for an unwired tenant and for the synthetic smoke fixture. Zero
   model calls. Empty library = warning, not failure (a scheduled tick must
@@ -516,7 +541,9 @@ checkout; treat each as unproven until you have seen it work.
   `Sites.Selected` READ consent actually granting what is needed, the
   site/drive resolution shape and eTag format on a real tenant. (There is
   no upload behaviour left to verify.)
-- **The scheduled sync job has never been deployed (2026-08-22).**
+- **The sync job has never been deployed (2026-08-22)** — and its schedule
+  is now slated for removal (start-up sync decision); the job remains the
+  databricks-mode execution path for start-up and "Sync now".
   `resources/frd_sttm_sync_job.yml` parses and the notebook runs locally in
   both modes, but `databricks bundle validate` could not be run from this
   checkout (expired CLI token) and no workspace has executed it. The
