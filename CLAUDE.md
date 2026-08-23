@@ -1,28 +1,14 @@
 # FRD-to-STTM Agent — working notes
 
-> **Read first, every session:** read
-> `frd-to-sttm-master-context-document.md` (repo root, tracked in git) in
-> its entirety before working in this repo — it is this agent's single
-> get-up-to-speed document (priority + Monday checklist, pipeline, template
-> architecture, proven-vs-unproven state, decisions log). On the original
-> dev Mac, ALSO read
-> `../amerihealth-agents/amerihealth-project-master-context-document.md`
-> for program-wide context (all three agents) — that file is not in any git
-> repo; it lives in the umbrella folder, which this repo was moved OUT of on
-> 2026-08-22 (it now sits beside it, not inside it). This CLAUDE.md remains
-> authoritative for this repo where the derived documents disagree with it.
->
-> **Where the work happens since 2026-08-23 (Arjun's decision): on Arjun's
-> personal MacBook Air, working clone `~/Desktop/career/frd-to-sttm-agent`
-> — the work is NOT moving to the Hexaware laptop.** Consequences: the
-> umbrella folder and the program-wide master context document are NOT on
-> this machine (copy by hand if needed); the clone was made blobless after
-> the 2026-08-23 history purge; and `~/Desktop` is iCloud-synced, which
-> produces Finder conflict copies named `<file> 2.<ext>` when files change
-> quickly — they are stale snapshots: delete them, never commit them (five
-> appeared on 2026-08-23; moving the clone out of `~/Desktop` would stop it).
-> Arjun's global CLAUDE.md rule "this laptop is not for company code" is
-> relaxed for THIS repo only, by him, on that date.
+> **Where the work happens (Arjun's decision, corrected same day
+> 2026-08-23): on this Hexaware Windows laptop**, working clone
+> `C:\Users\2000198467\Desktop\frd-to-sttm-agent`. Earlier the same day this
+> file briefly said the opposite — that work was moving to Arjun's personal
+> MacBook Air and NOT to the Hexaware laptop — that decision was reversed
+> within the day. The Mac-specific consequences noted at the time (a
+> blobless clone made after the history purge, iCloud Finder conflict
+> copies on `~/Desktop`) no longer apply since work isn't happening there.
+> The umbrella folder is present on this machine, beside this repo.
 
 ## Purpose & pipeline position
 
@@ -464,8 +450,7 @@ to detect it now exists).
   exemplars in 02's prompt, (3) the matched workbook(s) as 04's dictionary
   + layout. The HIPAA/BAA gate still applies before harvesting real ACFC
   documents in the ACFC environment. **Still NOT fine-tuning** — the Claude
-  API has no fine-tuning surface; reasoning in the master context document
-  §7a. Settled; do not re-open.
+  API has no fine-tuning surface. Settled; do not re-open.
 
 ## Governance (added 2026-08-23 — docs/AI_GOVERNANCE.md is the full record)
 
