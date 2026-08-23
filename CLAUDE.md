@@ -130,7 +130,9 @@ context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
                         ACFC-style deck; built by scripts/build_architecture_deck.py
                         from scripts/deck_assets/),
                         FRD_to_STTM_Agent_System_Architecture.pptx (ONE slide,
-                        "Signal" theme, white canvas since v4 — philosophy + theme spec in
+                        TOP-DOWN technology layers with official logos since v5
+                        (scripts/deck_assets/logos/, sources listed in the design doc);
+                        "Signal" theme, white canvas — philosophy + theme spec in
                         scripts/deck_assets/ONEPAGER_DESIGN.md; built by
                         scripts/build_architecture_onepager.py — regenerate it
                         there, never edit the .pptx by hand; python-pptx +

@@ -5,7 +5,10 @@
 
 Default output: context/FRD_to_STTM_Agent_System_Architecture.pptx
 
-ONE slide — "Signal" theme, LIGHT variant since v4 (white canvas, Arjun 2026-08-22;
+ONE slide, TOP-DOWN since v5 (technology layers with official logos — SharePoint /
+Word / Excel / Entra ID → Databricks: Unity Catalog · Jobs (Claude on 02) · Apps
+(FastAPI + React) → Human review + Outputs (Excel, JSON → CodeGen, Code Review);
+logos in scripts/deck_assets/logos, sources in ONEPAGER_DESIGN.md) — "Signal" theme, LIGHT variant since v4 (white canvas, Arjun 2026-08-22;
 the dark v3 palette is recorded in ONEPAGER_DESIGN.md) — design philosophy + theme spec in
 scripts/deck_assets/ONEPAGER_DESIGN.md, written with the canvas-design,
 algorithmic-art, brand-guidelines and theme-factory skills, 2026-08-22):
@@ -381,12 +384,26 @@ def crosshair(slide, cx, cy, arm=0.07):
 
 
 # --------------------------------------------------------------------------- #
-# the slide
+# the slide — TOP-DOWN (v5, 2026-08-22): technology layers with their logos
 # --------------------------------------------------------------------------- #
+LOGOS = ASSETS / "logos"   # official marks: Wikimedia Commons SVG/PNG + unitycatalog GitHub (see ONEPAGER_DESIGN.md)
+
+
+def add_logo(slide, name, x, y, w, h):
+    add_image(slide, LOGOS / f"{name}.png", x, y, w, h)
+
+
+def band_label(slide, x, y, text, color):
+    add_text(slide, x, y, 4, 0.22, [(text.upper(), {})], size=9, color=color, font=SANS, bold=True, spacing=1.4)
+
+
+def down_arrow(slide, x, y1, y2, label, color=T_SEC):
+    add_line(slide, x, y1, x, y2, color=color, width=1.5, head=True)
+    add_text(slide, x + 0.14, (y1 + y2) / 2 - 0.11, 6.0, 0.22, [(label, {})], size=9.5, color=T_SEC, bold=True)
+
+
 def build(out: Path) -> Path:
     GEN.mkdir(parents=True, exist_ok=True)
-    for stale in ("shot_pick.png", "shot_review.png"):   # v2 assets, no longer on the slide
-        (GEN / stale).unlink(missing_ok=True)
     bg = make_background(GEN / "background.png")
     frd_img = make_frd_preview(GEN / "frd_page.png")
     wb_img = make_workbook_preview(GEN / "sttm_sheet.png")
@@ -398,97 +415,145 @@ def build(out: Path) -> Path:
     for cx, cy in ((0.3, 0.3), (W_IN - 0.3, 0.3), (0.3, H_IN - 0.3), (W_IN - 0.3, H_IN - 0.3)):
         crosshair(s, cx, cy)
 
+    L, R = 0.6, W_IN - 0.6
+    W = R - L
+
     # ----- header ------------------------------------------------------------
-    add_text(s, 0.6, 0.46, 9, 0.24,
+    add_text(s, L, 0.38, 9, 0.24,
              [("HEXAWARE  ·  AMERIHEALTH CARITAS  ·  AI-IN-ENGINEERING  ·  AGENT 01 / 03", {})],
              size=9, color=T_MUTED, font=SANS, bold=True, spacing=1.4)
-    add_text(s, 0.6, 0.72, 9.5, 0.6, [("FRD → STTM Agent", {"color": INK, "bold": True, "size": 30}),
-                                      ("    system architecture", {"color": T_MUTED, "size": 16})], size=30)
-    add_text(s, 0.6, 1.28, 12.1, 0.3,
-             [("An approved requirements document becomes an audited source-to-target mapping — "
-               "every fact checked against the source text, every ambiguity routed to a person.", {})],
-             size=12, color=T_SEC)
-    chips = [("pulls from SharePoint · never writes back", EXT_DIM, EXT), ("1 model call per document", LLM_DIM, LLM),
-             ("verdicts computed in code", CODE_DIM, CODE)]
-    cx = 0.6
-    for t, col, bd in chips:
-        cx = chip(s, cx, 1.68, t, color=col, border=bd)
+    add_text(s, L, 0.6, 9.5, 0.55, [("FRD → STTM Agent", {"color": INK, "bold": True, "size": 28}),
+                                    ("    system architecture", {"color": T_MUTED, "size": 15})], size=28)
+    add_text(s, L, 1.12, 12.1, 0.26,
+             [("Top to bottom: the technologies the agent runs on, and what flows between them — "
+               "FRD in, audited STTM and contract out, a person in the loop.", {})], size=11.5, color=T_SEC)
 
-    # ----- the flow ------------------------------------------------------------
-    TOP, NH = 2.2, 3.05
-    nodes = [  # x, w, accent, icon, idx, title, caption, thumbnail
-        (0.6, 2.05, EXT, "folder", "SRC", "SharePoint",
-         "System of record. The sync pulls FRDs and STTMs into Databricks and never writes back.", frd_img),
-        (2.95, 1.95, CODE, "refresh", "00", "Scheduled sync",
-         "Every 15 minutes, incremental. Pairs each FRD with its STTM and indexes the corpus in Unity Catalog. Zero model calls.", None),
-        (5.2, 2.8, CODE, None, "01–04", "Generation job",
-         "Four stages on Databricks. Extract is the single Claude call; parsing, grounding audit, gate and render are code.", None),
-        (8.3, 1.85, HUMAN, "user", "HITL", "Review app",
-         "Pick an FRD, run, answer what the agent could not settle, re-render — then upload the approved STTM yourself.", None),
-        (10.45, 2.28, EXT, "code", "OUT", "Outputs",
-         "STTM workbook + feed contract → CodeGen and Code Review agents.", wb_img),
-    ]
-    DIM = {LLM: LLM_DIM, CODE: CODE_DIM, HUMAN: HUMAN_DIM, EXT: EXT_DIM}
-    for x, w, acc, icon, idx, title, cap, thumb in nodes:
-        add_rect(s, x, TOP, w, NH, fill=CARD, line=HAIR, radius=0.035)
-        add_dot(s, x + 0.26, TOP + 0.3, 0.11, acc)
-        add_text(s, x + 0.44, TOP + 0.19, 1.0, 0.24, [(idx, {})], size=9, color=DIM[acc], font=MONO, bold=True, spacing=1.2)
-        add_text(s, x + 0.24, TOP + 0.46, w - 0.4, 0.34, [(title, {})], size=14.5, color=T_PRI, bold=True)
-        if icon:
-            add_icon(s, icon, x + w - 0.52, TOP + 0.16, 0.3)
-        add_text(s, x + 0.24, TOP + 0.88, w - 0.46, 1.2, [(cap, {})], size=11, color=T_SEC, line_spacing=1.12)
-        if thumb is not None:
-            th = 0.88
-            add_rect(s, x + 0.16, TOP + NH - th - 0.16, w - 0.32, th, fill=RAISED, line=HAIR2, radius=0.03)
-            add_image(s, thumb, x + 0.18, TOP + NH - th - 0.14, w - 0.36, th - 0.04)
+    # ----- band A: system of record ------------------------------------------------
+    AY, AH = 1.5, 1.12
+    add_rect(s, L, AY, W, AH, fill=CARD, line=HAIR, radius=0.025)
+    band_label(s, L + 0.25, AY + 0.12, "System of record", EXT_DIM)
+    add_logo(s, "sharepoint", L + 0.25, AY + 0.4, 0.6, 0.6)
+    add_text(s, L + 1.0, AY + 0.38, 3.4, 0.3, [("Microsoft SharePoint", {})], size=14, color=T_PRI, bold=True)
+    add_text(s, L + 1.0, AY + 0.7, 3.5, 0.4,
+             [("The client's document library — the only place anything is authored or approved.", {})],
+             size=10, color=T_SEC)
+    # documents that live there (inputs)
+    def doc_tile(x, y, logo, title, sub, w=2.55):
+        add_rect(s, x, y, w, 0.62, fill=RAISED, line=HAIR2, radius=0.08)
+        add_logo(s, logo, x + 0.12, y + 0.12, 0.38, 0.38)
+        add_text(s, x + 0.6, y + 0.08, w - 0.7, 0.24, [(title, {})], size=10.5, color=T_PRI, bold=True)
+        add_text(s, x + 0.6, y + 0.32, w - 0.7, 0.26, [(sub, {})], size=8.5, color=T_SEC)
+    doc_tile(L + 4.85, AY + 0.33, "word", "FRD  ·  .docx", "input — approved requirements")
+    doc_tile(L + 7.6, AY + 0.33, "excel", "Approved STTM  ·  .xlsx", "input — becomes a template")
+    # access
+    add_logo(s, "entra", L + 10.45, AY + 0.4, 0.5, 0.5)
+    add_text(s, L + 11.05, AY + 0.35, 1.1, 0.6,
+             [[("Entra ID app", {"bold": True, "color": T_PRI})], [("Microsoft Graph", {})], [("Sites.Selected · read", {})]],
+             size=8.5, color=T_SEC, line_spacing=1.0)
 
-    # stage chips inside the job node
-    jx, jw = nodes[2][0], nodes[2][1]
-    st = [("01", "Ingest", CODE), ("02", "Extract", LLM), ("03", "Audit", CODE), ("04", "Render", CODE)]
+    # ----- arrow A → B ---------------------------------------------------------------
+    BY, BH = 3.05, 2.62
+    down_arrow(s, L + 4.2, AY + AH, BY, "00  scheduled sync — every 15 min, incremental · pulls FRDs and STTMs down · never writes back")
+
+    # ----- band B: data platform ---------------------------------------------------
+    add_rect(s, L, BY, W, BH, fill=CARD, line=HAIR, radius=0.025)
+    band_label(s, L + 0.25, BY + 0.12, "Data platform", CODE_DIM)
+    add_logo(s, "databricks", L + 0.25, BY + 0.34, 1.45, 0.4)
+    add_text(s, L + 1.85, BY + 0.36, 6.5, 0.3,
+             [("Databricks", {"bold": True, "color": T_PRI, "size": 12}),
+              ("   — Jobs run the pipeline, Apps serve the reviewer, Unity Catalog holds every file and table.", {})],
+             size=10, color=T_SEC)
+    cy, ch = BY + 0.85, BH - 1.02
+    # card 1: Unity Catalog
+    c1x, c1w = L + 0.25, 3.35
+    add_rect(s, c1x, cy, c1w, ch, fill=RAISED, line=HAIR2, radius=0.04)
+    add_logo(s, "unitycatalog", c1x + 0.18, cy + 0.16, 1.45, 0.46)
+    add_text(s, c1x + 0.18, cy + 0.72, c1w - 0.36, ch - 0.8,
+             [[("Volumes", {"bold": True, "color": T_PRI}), ("  —  FRDs, approved STTMs, the corpus index, every run's artifacts", {})],
+              [("frd_raw · sttm_reference · sttm_out", {"font": MONO, "size": 8.5, "color": CODE_DIM, "bold": True})],
+              [("Delta tables", {"bold": True, "color": T_PRI}), ("  —  run history and contracts", {})]],
+             size=9.5, color=T_SEC, line_spacing=1.06)
+    # card 2: Jobs — the generation pipeline
+    c2x, c2w = c1x + c1w + 0.2, 5.35
+    add_rect(s, c2x, cy, c2w, ch, fill=RAISED, line=HAIR2, radius=0.04)
+    add_text(s, c2x + 0.18, cy + 0.12, c2w - 0.36, 0.26,
+             [("Generation job", {"bold": True, "color": T_PRI, "size": 12}), ("   Databricks Jobs · serverless · stages 01–04", {})],
+             size=9.5, color=T_SEC)
+    st = [("01", "Ingest", "docx → markdown", CODE), ("02", "Extract", "the one model call", LLM),
+          ("03", "Audit · gate", "verbatim grounding", CODE), ("04", "Render", "STTM + contract", CODE)]
     sgap = 0.1
-    sw = (jw - 0.48 - 3 * sgap) / 4
-    sy = TOP + NH - 0.98
-    for i, (idx, name, acc) in enumerate(st):
-        x = jx + 0.24 + i * (sw + sgap)
+    sw = (c2w - 0.36 - 3 * sgap) / 4
+    sy = cy + 0.48
+    for i, (idx, name, sub, acc) in enumerate(st):
+        x = c2x + 0.18 + i * (sw + sgap)
         is_llm = acc == LLM
-        add_rect(s, x, sy, sw, 0.5, fill=(LLM_TINT if is_llm else RAISED), line=(LLM if is_llm else HAIR2),
-                 line_w=(1.25 if is_llm else 0.75), radius=0.1)
-        add_text(s, x, sy + 0.07, sw, 0.18, [(idx, {})], size=8.5, color=(LLM_DIM if is_llm else CODE_DIM), font=MONO,
-                 bold=True, align=PP_ALIGN.CENTER)
-        add_text(s, x, sy + 0.24, sw, 0.22, [(name, {})], size=9, color=(LLM_DIM if is_llm else T_PRI), bold=is_llm,
-                 align=PP_ALIGN.CENTER)
+        add_rect(s, x, sy, sw, 0.7, fill=(LLM_TINT if is_llm else CARD), line=(LLM if is_llm else HAIR2),
+                 line_w=(1.25 if is_llm else 0.75), radius=0.08)
+        add_text(s, x + 0.1, sy + 0.07, sw - 0.2, 0.18, [(idx, {})], size=8.5, color=(LLM_DIM if is_llm else CODE_DIM), font=MONO, bold=True)
+        add_text(s, x + 0.1, sy + 0.25, sw - 0.2, 0.22, [(name, {})], size=10, color=(LLM_DIM if is_llm else T_PRI), bold=True)
+        add_text(s, x + 0.1, sy + 0.47, sw - 0.2, 0.2, [(sub, {})], size=8, color=(LLM_DIM if is_llm else T_SEC))
         if i < 3:
-            add_line(s, x + sw + 0.01, sy + 0.25, x + sw + sgap - 0.01, sy + 0.25, color=HAIR2, width=0.75, head=True)
-    add_text(s, jx + 0.24, sy + 0.6, jw - 0.48, 0.24,
-             [("02 is the only model call", {})], size=9.5, color=LLM_DIM,
-             align=PP_ALIGN.CENTER)
+            add_line(s, x + sw + 0.01, sy + 0.36, x + sw + sgap - 0.01, sy + 0.36, color=T_MUTED, width=0.75, head=True)
+    # Claude beside stage 02
+    add_logo(s, "claude", c2x + 0.18, sy + 0.82, 0.95, 0.21)
+    add_text(s, c2x + 1.22, sy + 0.8, c2w - 1.4, 0.26,
+             [("Anthropic API — one call per document, in stage 02; everything else is deterministic code.", {})],
+             size=8.5, color=T_SEC)
+    # card 3: Apps — the review app
+    c3x, c3w = c2x + c2w + 0.2, (L + W - 0.25) - (c2x + c2w + 0.2)
+    add_rect(s, c3x, cy, c3w, ch, fill=RAISED, line=HAIR2, radius=0.04)
+    add_text(s, c3x + 0.18, cy + 0.12, c3w - 0.36, 0.26,
+             [("Review app", {"bold": True, "color": T_PRI, "size": 12}), ("   Databricks Apps", {})], size=9.5, color=T_SEC)
+    add_logo(s, "fastapi", c3x + 0.18, cy + 0.5, 0.85, 0.17)
+    add_logo(s, "react", c3x + 1.12, cy + 0.44, 0.28, 0.28)
+    add_text(s, c3x + 0.18, cy + 0.8, c3w - 0.36, ch - 0.9,
+             [("Pick an FRD · run (confirm-gated) · answer what the agent could not settle · re-render · download.", {})],
+             size=9.5, color=T_SEC, line_spacing=1.08)
 
-    # connectors between nodes
-    mid = TOP + 0.6
-    for i in range(4):
-        add_line(s, nodes[i][0] + nodes[i][1] + 0.02, mid, nodes[i + 1][0] - 0.02, mid, color=T_SEC, width=1.25, head=True)
+    # ----- arrow B → C ---------------------------------------------------------------
+    CY, CH = 6.06, 0.92
+    down_arrow(s, L + 4.2, BY + BH, CY, "draft STTM  .xlsx  +  feed contract  .json   →   to a person")
 
-    # the human return loop
-    ly = TOP + NH + 0.26
-    hx, sx = nodes[3][0] + 0.7, nodes[0][0] + 0.7
-    add_line(s, hx, TOP + NH, hx, ly, color=HUMAN, width=1.25, dash="dash")
-    add_line(s, hx, ly, sx, ly, color=HUMAN, width=1.25, dash="dash")
-    add_line(s, sx, ly, sx, TOP + NH + 0.02, color=HUMAN, width=1.25, dash="dash", head=True)
-    add_text(s, 1.2, ly + 0.08, 9.6, 0.26,
-             [("the reviewer uploads the approved STTM   →   the next sync pairs it   →   it becomes a template", {})],
-             size=9.5, color=HUMAN_DIM, font=SANS, bold=True, align=PP_ALIGN.CENTER)
+    # ----- band C: human review (left) + outputs (right) ---------------------------------
+    hw = 5.7
+    add_rect(s, L, CY, hw, CH, fill=CARD, line=HUMAN, line_w=1.0, radius=0.025)
+    band_label(s, L + 0.25, CY + 0.1, "Human review", HUMAN_DIM)
+    add_icon(s, "user", L + 0.25, CY + 0.4, 0.42)
+    add_text(s, L + 0.85, CY + 0.36, hw - 1.05, 0.55,
+             [("The reviewer approves the STTM (edits in Excel if needed) and uploads it to SharePoint "
+               "themselves. The next sync pairs it — it becomes a template.", {})], size=10, color=T_SEC, line_spacing=1.05)
+    ox = L + hw + 0.25
+    ow = R - ox
+    add_rect(s, ox, CY, ow, CH, fill=CARD, line=EXT, line_w=1.0, radius=0.025)
+    band_label(s, ox + 0.25, CY + 0.1, "Outputs · downstream", EXT_DIM)
+    add_logo(s, "excel", ox + 0.25, CY + 0.42, 0.38, 0.38)
+    add_text(s, ox + 0.72, CY + 0.37, 1.7, 0.5,
+             [[("STTM workbook", {"bold": True, "color": T_PRI})], [(".xlsx · client dialect", {})]], size=9.5, color=T_SEC, line_spacing=1.0)
+    add_logo(s, "json", ox + 2.25, CY + 0.42, 0.36, 0.36)
+    add_text(s, ox + 2.7, CY + 0.37, 1.75, 0.5,
+             [[("Feed contract", {"bold": True, "color": T_PRI})], [("contract.json · machine-readable", {})]], size=9.5, color=T_SEC, line_spacing=1.0)
+    add_line(s, ox + 4.45, CY + 0.6, ox + 4.7, CY + 0.6, color=EXT, width=1.25, head=True)
+    add_text(s, ox + 4.8, CY + 0.37, ow - 4.9, 0.55,
+             [[("CodeGen agent", {"bold": True, "color": EXT_DIM})], [("Code Review agent", {"bold": True, "color": EXT_DIM})]],
+             size=9.5, color=T_SEC, line_spacing=1.0)
 
-    # ----- footer --------------------------------------------------------------
-    FY = 6.3
-    add_line(s, 0.6, FY, W_IN - 0.6, FY, color=HAIR, width=0.5)
-    add_text(s, 0.6, FY + 0.14, 9.5, 0.34,
-             [("the model proposes", {"color": LLM_DIM, "bold": True}), ("      ·      ", {"color": HAIR2}),
-              ("deterministic code audits and decides", {"color": CODE_DIM, "bold": True}), ("      ·      ", {"color": HAIR2}),
-              ("a person resolves", {"color": HUMAN_DIM, "bold": True})], size=12)
-    add_text(s, 0.6, FY + 0.5, 12.1, 0.3,
-             [("Grounding checks, gate status, pairing verdicts, template choice and eval scores are computed in code, "
-               "never by the model. Fail loud — no silent mock, no silent live, no stale copies.", {})], size=10, color=T_SEC)
-    add_text(s, W_IN - 5.4, FY + 0.2, 4.8, 0.22,
+    # ----- the human return loop, up the left margin ------------------------------------
+    mx = 0.38
+    add_line(s, L + 0.9, CY, L + 0.9, CY - 0.18, color=HUMAN, width=1.25, dash="dash")
+    add_line(s, L + 0.9, CY - 0.18, mx, CY - 0.18, color=HUMAN, width=1.25, dash="dash")
+    add_line(s, mx, CY - 0.18, mx, AY + AH / 2, color=HUMAN, width=1.25, dash="dash")
+    add_line(s, mx, AY + AH / 2, L - 0.02, AY + AH / 2, color=HUMAN, width=1.25, dash="dash", head=True)
+    tb = add_text(s, 0.19 - 1.15, (AY + AH / 2 + CY) / 2 - 0.12, 2.3, 0.24,
+                  [("approved STTM goes back", {})], size=8.5, color=HUMAN_DIM, bold=True, align=PP_ALIGN.CENTER)
+    tb.rotation = -90
+
+    # ----- footer -------------------------------------------------------------------------
+    FY = 7.08
+    add_text(s, L, FY + 0.04, 8.5, 0.3,
+             [("the model proposes", {"color": LLM_DIM, "bold": True}), ("     ·     ", {"color": HAIR2}),
+              ("deterministic code audits and decides", {"color": CODE_DIM, "bold": True}), ("     ·     ", {"color": HAIR2}),
+              ("a person resolves", {"color": HUMAN_DIM, "bold": True})], size=11)
+    add_text(s, R - 4.8, FY + 0.08, 4.8, 0.22,
              [("staging · 2026-08-22 · verified offline · live deploy pending", {})], size=8.5, color=T_MUTED, font=SANS,
              align=PP_ALIGN.RIGHT)
 

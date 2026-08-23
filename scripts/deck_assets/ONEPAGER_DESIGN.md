@@ -1,5 +1,7 @@
 # Signal — design philosophy for the one-slide architecture
 
+> **v5 (2026-08-22, Arjun): TOP-DOWN.** The slide now reads as technology layers — System of record (Microsoft SharePoint; FRD .docx and approved STTM .xlsx as inputs; Entra ID / Graph read access) → Data platform (Databricks: Unity Catalog volumes + Delta, the Jobs pipeline 01–04 with Claude on stage 02, the Databricks App review UI on FastAPI + React) → Human review (gold; the approved STTM loops back up the left margin to SharePoint) and Outputs / downstream (indigo; STTM .xlsx, contract.json → CodeGen, Code Review). Each technology carries its official logo (see **Logos** below). The flow-field background and the Signal theme are unchanged.
+>
 > **v4 (2026-08-22, Arjun): the canvas is WHITE.** The philosophy below was written for the dark v3 and still governs; the theme table at the end is the light spec now in force, with the dark values kept for reference.
 
 Applies to `context/FRD_to_STTM_Agent_System_Architecture.pptx`, built by
@@ -74,3 +76,23 @@ the bright Blueprint accents that glow on black fail contrast on white.
 
 The particles cross left to right and thin out exactly where the human
 node sits — the field is the automated flow; the calm is the review.
+
+## Logos (v5) — `scripts/deck_assets/logos/`
+
+Official marks, trimmed of margins, used at small size on light cards and
+never recoloured. Sources (all fetched 2026-08-22):
+
+| File | Mark | Source |
+|---|---|---|
+| `sharepoint.png` | Microsoft SharePoint (2019–present) | Wikimedia Commons `Microsoft_Office_SharePoint_(2019–present).svg` |
+| `word.png` / `excel.png` | Microsoft Word / Excel (2019–present) | Wikimedia Commons `Microsoft_Office_Word_(2019–present).svg`, `…Excel…svg` |
+| `entra.png` | Microsoft Entra ID | Wikimedia Commons `Microsoft_Entra_ID_color_icon.svg` |
+| `databricks.png` | Databricks | Wikimedia Commons `Databricks_Logo.png` |
+| `unitycatalog.png` | Unity Catalog | github.com/unitycatalog/unitycatalog `docs/assets/images/uc-logo.png` |
+| `claude.png` / `anthropic.png` | Claude / Anthropic | Wikimedia Commons `Claude_AI_logo.svg`, `Anthropic_logo.svg` |
+| `fastapi.png` / `react.png` | FastAPI / React | Wikimedia Commons `FastAPI_logo.svg`, `React-icon.svg` |
+| `json.png` | JSON | Wikimedia Commons `JSON_vector_logo.svg` |
+
+SVGs were rasterised at 512 px with sharp (`scratch icons/raster.js`) and
+trimmed with Pillow. Trademarks belong to their owners; the slide is an
+internal architecture document that names the technologies it uses.
