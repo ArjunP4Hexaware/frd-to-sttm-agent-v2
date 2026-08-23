@@ -1,0 +1,71 @@
+# Signal Dark — design philosophy for the one-slide architecture
+
+Applies to `context/FRD_to_STTM_Agent_System_Architecture.pptx`, built by
+`scripts/build_architecture_onepager.py`. Written 2026-08-22 using the
+canvas-design, algorithmic-art, brand-guidelines and theme-factory skills;
+the theme below is the theme-factory "custom theme" Arjun chose over the
+Tech Innovation and Midnight Galaxy presets.
+
+## The movement: Signal Dark
+
+Information as signal against a quiet field. The slide is a dark instrument
+panel, not a poster: a near-black ground, a faint computed field moving
+across it, and five lit nodes where the system does work. Everything that
+is not signal recedes — hairlines instead of boxes, one accent per meaning,
+no decoration that does not encode something. The composition must read
+from three metres in the first two seconds (five nodes, left to right, one
+return loop) and still reward a close reading (stage chips, the one orange
+node, the thumbnails of the documents going in and coming out).
+
+Space is the primary material. Nodes sit on a strict horizontal axis with
+equal gutters; nothing stacks under them except the single return loop and
+a one-line footer. Type is large and few: a 30 pt title, 15 pt node titles,
+11 pt body in near-white, and mono only for the small identifiers that name
+stages — never for running text. Contrast is deliberately high: the lowest
+text tone on the slide is a mid grey that still passes comfortably on the
+black ground. Every box and label was placed, rendered, inspected and
+re-placed; nothing touches, nothing wraps by accident.
+
+Colour is a semantic code, not a palette of moods. Blueprint's dark neutrals
+carry the structure (black `111418`, card `1c2127`, raised `252a31`, hairline
+`383e47`, text ramp `8f99a8 → c5cbd3 → f6f7f9`). Four accents each mean one
+thing and are never used decoratively: **Claude orange `d97757`** (Anthropic
+brand accent) marks the *single* model call in the whole system and appears
+nowhere else; **turquoise `13c9ba`** is deterministic code — sync, parse,
+audit, gate, render; **gold `f0b726`** is a person; **indigo `9881f3`** is an
+external system — the SharePoint library and the downstream agents. A reader
+who learns the code once can read the whole slide by colour.
+
+The field behind the panel is algorithmic, seeded and reproducible ("Field
+Dynamics"): several thousand particles born on the left edge follow a
+layered-noise vector field left to right — the direction the documents
+travel — leaving faint trails that are densest at the two edges and calm in
+the band where the nodes sit, so the art frames the content and never
+competes with it. Same seed, same image, every build. It is meant to be felt
+rather than noticed: the suggestion of a system in motion beneath a still,
+exact reading surface.
+
+Craft standard: this must look like the product of many hours by someone at
+the top of their field — a Swiss-grid discipline applied to a dark,
+contemporary data-product idiom. Refinement means removing, aligning and
+sharpening what is already there, never adding another element.
+
+## Theme spec (theme-factory custom theme)
+
+| Role | Value |
+|---|---|
+| Canvas | `111418` with the generated field image |
+| Card / raised card / hairline | `1c2127` / `252a31` / `383e47` |
+| Text — primary / secondary / muted | `f6f7f9` / `c5cbd3` / `8f99a8` |
+| LLM (one place) | `d97757` Claude orange (brand-guidelines accent) |
+| Deterministic code | `13c9ba` turquoise |
+| Human | `f0b726` gold |
+| External system | `9881f3` indigo |
+| Headings | Calibri Bold (Poppins is the brand heading face but is not installed on the target machines; Calibri ships with Office and renders true-to-width in QA) |
+| Body | Calibri |
+| Identifiers / tracked labels | Courier New, ≥ 9 pt |
+
+## Conceptual seed (kept quiet)
+
+The particles cross left to right and thin out exactly where the human
+node sits — the field is the automated flow; the calm is the review.
