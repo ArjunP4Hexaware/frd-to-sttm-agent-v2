@@ -188,41 +188,34 @@ FRD_LINES = [  # the SYNTHETIC smoke FRD (tools/make_synthetic_smoke_fixture.py)
 
 
 def make_frd_preview(path: Path) -> Path:
-    """A page of the synthetic FRD; strict-grounded spans ({…}) underlined in
-    Claude orange — the fields 03 must find verbatim."""
-    w, h = 1400, 900
+    """Close-up of the synthetic FRD at thumbnail scale: the project line and
+    ONE requirement in large type, the strict-grounded span underlined in
+    Claude orange. (A whole page was illegible at 1.9 in — PowerPoint
+    screenshots 2026-08-22 9:07 PM.)"""
+    w, h = 1400, 720
     img = Image.new("RGB", (w, h), "#" + RAISED)
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle([40, 30, w - 40, h + 40], radius=16, fill="#ffffff", outline="#d3d8de", width=2)
-    fh, fs, fp, fm = _font("sans", 46, True), _font("sans", 32, True), _font("sans", 30), _font("mono", 25)
-    y = 80
-    for kind, text in FRD_LINES:
-        x = 100
-        if kind == "h":
-            d.text((x, y), text, font=fh, fill="#1c2127"); y += 74
-        elif kind == "m":
-            d.text((x, y), text, font=fm, fill="#5f6b7c"); y += 60
-        elif kind == "s":
-            d.text((x, y), text, font=fs, fill="#215db0"); y += 56
-        elif kind == "p":
-            for part in re.split(r"(\{[^}]+\})", text):
-                if not part:
-                    continue
-                strict = part.startswith("{")
-                t = part.strip("{}")
-                d.text((x, y), t, font=fp, fill="#1c2127")
-                tw = d.textlength(t, font=fp)
-                if strict:
-                    d.line([x, y + 38, x + tw, y + 38], fill="#" + LLM, width=5)
-                x += tw
-            y += 46
-        else:
-            y += 26
-    fade = Image.new("L", (w, h), 0)
-    fd = ImageDraw.Draw(fade)
-    for i in range(160):
-        fd.line([0, h - 160 + i, w, h - 160 + i], fill=int(255 * i / 160))
-    img = Image.composite(Image.new("RGB", (w, h), "#" + RAISED), img, fade)
+    d.rounded_rectangle([24, 24, w - 24, h - 24], radius=22, fill="#ffffff", outline="#d3d8de", width=3)
+    f_small, f_head, f_body, f_req = _font("mono", 44), _font("sans", 62, True), _font("sans", 66), _font("sans", 48, True)
+    d.text((80, 70), "FRD  ·  Project ID 9100001", font=f_small, fill="#5f6b7c")
+    d.text((80, 140), "Data Quality", font=f_head, fill="#215db0")
+    d.rounded_rectangle([80, 250, 330, 318], radius=12, fill="#e8f0fb")
+    d.text((104, 260), "REQ-001", font=f_req, fill="#215db0")
+    lines = ["Process shall reject the record", "when {MEMBER_ID} is NULL and move", "it to the reject table."]
+    y = 340
+    for line in lines:
+        x = 80
+        for part in re.split(r"(\{[^}]+\})", line):
+            if not part:
+                continue
+            strict = part.startswith("{")
+            t = part.strip("{}")
+            d.text((x, y), t, font=f_body, fill="#1c2127")
+            tw = d.textlength(t, font=f_body)
+            if strict:
+                d.line([x, y + 78, x + tw, y + 78], fill="#" + LLM, width=8)
+            x += tw
+        y += 96
     img.save(path, optimize=True)
     return path
 
@@ -239,54 +232,37 @@ WB_ROWS = [  # synthetic smoke rows as 04 renders them (sheet MAPPING-SYN_MEMBER
 
 
 def make_workbook_preview(path: Path) -> Path:
-    """The rendered STTM sheet: band row, header row, rows — the Comment
-    cell carries the FRD rule on the row it names."""
-    w, h = 1400, 900
+    """Close-up of the rendered STTM sheet at thumbnail scale — the Outputs
+    node is the narrowest, so: three columns, three rows, large type; the
+    Comment cell carries the FRD rule on the row it names."""
+    w, h = 1400, 930
     img = Image.new("RGB", (w, h), "#" + RAISED)
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle([40, 30, w + 200, h + 40], radius=16, fill="#ffffff", outline="#d3d8de", width=2)
-    ft = _font("sans", 24)
-    tx = 70
-    for name, active in (("FILE_DETAILS", False), ("VERSION_HISTORY", False), ("MAPPING-SYN_MEMBER_RISK", True)):
-        tw = d.textlength(name, font=ft) + 40
-        d.rounded_rectangle([tx, 48, tx + tw, 96], radius=8, fill=("#ffffff" if active else "#e5e8eb"), outline="#c5cbd3")
-        d.text((tx + 20, 59), name, font=ft, fill=("#215db0" if active else "#5f6b7c"))
-        tx += tw + 8
-    cols = [("Database column Name", 270), ("NULL CHECK", 150), ("Comment", 520), ("Schema", 130),
-            ("TableName", 250), ("ColumnName", 220)]
-    x0, y0 = 40, 118
-    fb, fhd, fc, fcm = _font("sans", 26, True), _font("sans", 25, True), _font("sans", 25), _font("mono", 23)
-    x, ci = x0, 0
-    for name, n in (("Source File Layout", 3), ("Stage Layer", 3)):
-        bw = sum(cw for _, cw in cols[ci:ci + n])
-        d.rectangle([x, y0, x + bw, y0 + 50], fill="#bdd7ee", outline="#ffffff")
-        d.text((x + 14, y0 + 10), name, font=fb, fill="#1c2127")
-        x += bw
-        ci += n
+    d.rounded_rectangle([24, 24, w - 24, h - 24], radius=22, fill="#ffffff", outline="#d3d8de", width=3)
+    f_tab, f_hd, f_cell, f_mono = _font("sans", 50), _font("sans", 66, True), _font("sans", 70), _font("mono", 64)
+    d.rounded_rectangle([80, 70, 860, 150], radius=12, fill="#e8f0fb")
+    d.text((100, 86), "MAPPING-SYN_MEMBER_RISK", font=f_tab, fill="#215db0")
+    cols = [("Column", 470), ("Null", 300), ("Comment", 550)]
+    x0, y0, hh, rh = 80, 200, 130, 210
     x = x0
     for name, cw in cols:
-        d.rectangle([x, y0 + 50, x + cw, y0 + 100], fill="#d9e1f2", outline="#ffffff")
-        d.text((x + 14, y0 + 61), name, font=fhd, fill="#1c2127")
+        d.rectangle([x, y0, x + cw, y0 + hh], fill="#d9e1f2", outline="#ffffff", width=3)
+        d.text((x + 24, y0 + 28), name, font=f_hd, fill="#1c2127")
         x += cw
-    y = y0 + 100
-    for r in WB_ROWS:
+    rows = [("MEMBER_ID", "Not NULL", "reject if NULL"),
+            ("ZIP_CODE", "Not NULL", "")]
+    y = y0 + hh
+    for r in rows:
         x = x0
         for (name, cw), val in zip(cols, r):
-            d.rectangle([x, y, x + cw, y + 54], fill="#ffffff", outline="#edeff2")
+            d.rectangle([x, y, x + cw, y + rh], fill="#ffffff", outline="#e5e8eb", width=3)
             if name == "Comment" and val:
-                d.rectangle([x + 1, y + 1, x + cw - 1, y + 53], fill="#fbeee8")
-                d.text((x + 14, y + 14), val, font=fcm, fill="#8a4a36")
+                d.rectangle([x + 3, y + 3, x + cw - 3, y + rh - 3], fill="#" + LLM_TINT)
+                d.text((x + 24, y + 60), val, font=f_cell, fill="#" + LLM_DIM)
             else:
-                d.text((x + 14, y + 13), val,
-                       font=(fcm if name in ("Schema", "TableName", "ColumnName") else fc),
-                       fill=("#8f99a8" if val in ("NA", "NULL") else "#1c2127"))
+                d.text((x + 24, y + 62), val, font=(f_mono if name == "Column" else f_cell), fill="#1c2127")
             x += cw
-        y += 54
-    fade = Image.new("L", (w, h), 0)
-    fd = ImageDraw.Draw(fade)
-    for i in range(140):
-        fd.line([w - 140 + i, 0, w - 140 + i, h], fill=int(255 * i / 140))
-    img = Image.composite(Image.new("RGB", (w, h), "#" + RAISED), img, fade)
+        y += rh
     img.save(path, optimize=True)
     return path
 
@@ -432,7 +408,7 @@ def build(out: Path) -> Path:
              [("An approved requirements document becomes an audited source-to-target mapping — "
                "every fact checked against the source text, every ambiguity routed to a person.", {})],
              size=12, color=T_SEC)
-    chips = [("read-only SharePoint", EXT_DIM, EXT), ("1 model call per document", LLM_DIM, LLM),
+    chips = [("pulls from SharePoint · never writes back", EXT_DIM, EXT), ("1 model call per document", LLM_DIM, LLM),
              ("verdicts computed in code", CODE_DIM, CODE)]
     cx = 0.6
     for t, col, bd in chips:
@@ -441,15 +417,15 @@ def build(out: Path) -> Path:
     # ----- the flow ------------------------------------------------------------
     TOP, NH = 2.2, 3.05
     nodes = [  # x, w, accent, icon, idx, title, caption, thumbnail
-        (0.6, 2.2, EXT, "folder", "SRC", "SharePoint",
-         "System of record. FRDs in, approved STTMs back. The agent only ever reads it.", frd_img),
-        (3.1, 2.05, CODE, "refresh", "00", "Scheduled sync",
+        (0.6, 2.05, EXT, "folder", "SRC", "SharePoint",
+         "System of record. The sync pulls FRDs and STTMs into Databricks and never writes back.", frd_img),
+        (2.95, 1.95, CODE, "refresh", "00", "Scheduled sync",
          "Every 15 minutes, incremental. Pairs each FRD with its STTM and indexes the corpus in Unity Catalog. Zero model calls.", None),
-        (5.45, 2.95, CODE, None, "01–04", "Generation job",
+        (5.2, 2.8, CODE, None, "01–04", "Generation job",
          "Four stages on Databricks. Extract is the single Claude call; parsing, grounding audit, gate and render are code.", None),
-        (8.7, 1.95, HUMAN, "user", "HITL", "Review app",
+        (8.3, 1.85, HUMAN, "user", "HITL", "Review app",
          "Pick an FRD, run, answer what the agent could not settle, re-render — then upload the approved STTM yourself.", None),
-        (10.95, 1.78, EXT, "code", "OUT", "Outputs",
+        (10.45, 2.28, EXT, "code", "OUT", "Outputs",
          "STTM workbook + feed contract → CodeGen and Code Review agents.", wb_img),
     ]
     DIM = {LLM: LLM_DIM, CODE: CODE_DIM, HUMAN: HUMAN_DIM, EXT: EXT_DIM}
@@ -462,7 +438,7 @@ def build(out: Path) -> Path:
             add_icon(s, icon, x + w - 0.52, TOP + 0.16, 0.3)
         add_text(s, x + 0.24, TOP + 0.88, w - 0.46, 1.2, [(cap, {})], size=11, color=T_SEC, line_spacing=1.12)
         if thumb is not None:
-            th = 0.98
+            th = 0.88
             add_rect(s, x + 0.16, TOP + NH - th - 0.16, w - 0.32, th, fill=RAISED, line=HAIR2, radius=0.03)
             add_image(s, thumb, x + 0.18, TOP + NH - th - 0.14, w - 0.36, th - 0.04)
 
@@ -479,7 +455,7 @@ def build(out: Path) -> Path:
                  line_w=(1.25 if is_llm else 0.75), radius=0.1)
         add_text(s, x, sy + 0.07, sw, 0.18, [(idx, {})], size=8.5, color=(LLM_DIM if is_llm else CODE_DIM), font=MONO,
                  bold=True, align=PP_ALIGN.CENTER)
-        add_text(s, x, sy + 0.24, sw, 0.22, [(name, {})], size=9.5, color=(LLM_DIM if is_llm else T_PRI), bold=is_llm,
+        add_text(s, x, sy + 0.24, sw, 0.22, [(name, {})], size=9, color=(LLM_DIM if is_llm else T_PRI), bold=is_llm,
                  align=PP_ALIGN.CENTER)
         if i < 3:
             add_line(s, x + sw + 0.01, sy + 0.25, x + sw + sgap - 0.01, sy + 0.25, color=HAIR2, width=0.75, head=True)
