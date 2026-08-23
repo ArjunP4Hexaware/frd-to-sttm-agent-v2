@@ -38,6 +38,32 @@ Databricks App in the Hexaware environment by Monday 2026-08-24** —
 replay-only. The three deploy blockers are the last entries under "Known
 gaps" below; verify each rather than assuming it still holds.
 
+**FRD picker for the 2026-08-24 demo (decided 2026-08-23, Arjun) — no code
+change needed.** Both FRDs in the Hexaware SharePoint library must stay
+selectable/generatable through the demo regardless of mapped status. This
+is already true of the picker as it exists today: `GET
+/api/demo/corpus/frds` (`corpus_routes.py`) returns every FRD with a
+`paired` flag and never removes a mapped one from the response, and
+`CorpusPanel.tsx` renders mapped FRDs in their own "FRDs already mapped"
+section with a "View STTM" action plus a two-step regenerate-anyway
+control that re-enters the same billed-run gate as a fresh generation.
+There is no dedicated allow-list or override for specific documents (and,
+checked 2026-08-23, none exists anywhere in the repo) — none is needed,
+because the permissive behavior is already the default, not an exception
+carved out for these two documents.
+
+**Post-demo plan is a new restriction to build, not a reversion (Arjun,
+2026-08-23).** The picker's current behavior — showing mapped FRDs with
+view + regenerate-anyway, never hiding them — has been the only behavior
+this codebase has ever had; there is no prior stricter mode to "revert" to.
+The target state after 2026-08-24 is to add one: mapped FRDs stop being
+offered for (re)generation and surface only their approved STTM. That gate
+does not exist yet — see the corresponding bullet under "Designed, not
+built" below once you're ready to scope it; treat it as new work on
+`corpus_routes.py` (exclude/flag mapped FRDs out of the generatable set
+server-side) and `CorpusPanel.tsx` (drop or lock the regenerate-anyway
+control client-side), not as flipping a flag.
+
 **Architecture decision 2026-08-22 (late evening, Arjun) — IMPLEMENTED the
 same evening:** the SharePoint → Unity Catalog sync runs **when the app starts
 up** (and on "Sync now"), not on a cron schedule. On start-up the backend
@@ -451,6 +477,15 @@ to detect it now exists).
   + layout. The HIPAA/BAA gate still applies before harvesting real ACFC
   documents in the ACFC environment. **Still NOT fine-tuning** — the Claude
   API has no fine-tuning surface. Settled; do not re-open.
+- **Hide mapped FRDs from the generate flow — NOT BUILT, planned for after
+  the 2026-08-24 demo (Arjun).** Today `GET /api/demo/corpus/frds` /
+  `CorpusPanel.tsx` show mapped FRDs alongside unmapped ones (view +
+  two-step regenerate-anyway) — see the note under "Current priority"
+  above for why that stays unchanged through the demo. The target
+  afterward: mapped FRDs are no longer offered for (re)generation at all,
+  surfacing only their approved STTM. Needs a concrete design (does
+  regenerate-anyway disappear entirely, or move behind a reviewer-only
+  control?) before it's built.
 
 ## Governance (added 2026-08-23 — docs/AI_GOVERNANCE.md is the full record)
 

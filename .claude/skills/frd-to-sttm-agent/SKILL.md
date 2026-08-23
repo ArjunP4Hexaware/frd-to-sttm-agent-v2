@@ -1,128 +1,36 @@
 ---
 name: frd-to-sttm-agent
-description: Load this whenever you are designing any agent elsewhere that has an LLM extract structured records (mappings, fields, entities) from a document, verifies them against the source text, and routes ambiguity to a human before a downstream consumer uses the result. It captures the exact division of labor (LLM proposes, deterministic code audits, human resolves), the three-status gating vocabulary, the "schema-in-prompt / no repair loop / truncation-is-failure" transport pattern, the confirm-and-clear-on-zero-removals bug, and the choreography needed when the same document can produce different gate shapes across runs. Read this before writing extraction prompts, grounding checks, ambiguity taxonomies, or HITL flows for a similar agent. ALSO load it when working in or asking about the frd-to-sttm-agent repo itself (FRD ingest, extraction schema, `03_contract_build` grounding audit or gating, `04_sttm_render`, the shared `contracts/frd_label_contract.json`, the review app, the Databricks-native rebuild in `docs/NATIVE_REBUILD_SPEC.md`, or the client demo runbook).
+description: Load this when the task is to recreate, port, or re-implement the FRD-to-STTM agent — the pipeline that turns an approved Functional Requirements Document into a Source-to-Target Mapping workbook plus a machine-readable feed-level contract — in a new environment, on a different stack, or from scratch. It is a complete, platform-agnostic functional and architectural spec: the four-stage pipeline, the grounding-audit quality gate, the three-status/three-ambiguity/three-resolution vocabularies, the human-in-the-loop review model, the SharePoint sync design, the governance/audit model, and the hard-won design constraints (schema-in-prompt extraction, the confirm-and-clear-on-zero-removals fix, non-determinism-as-a-demo-concern). ALSO load it when working in or asking about the frd-to-sttm-agent repo itself (FRD ingest, extraction schema, contract build / grounding audit / gating, STTM render, the shared `contracts/frd_label_contract.json`, the review app, or the SharePoint sync).
 ---
 
-This skill has two parts. **Part A** is a map of the concrete FRD→STTM agent in this repo — enough that a new contributor can navigate the code, and enough that another engineer can decide whether the shape here matches their problem. **Part B** is the abstracted pattern, written so it can be applied to an unrelated "LLM extracts, code verifies, human resolves" agent.
+**Purpose of this file.** A self-contained functional and architectural specification of the FRD→STTM agent, written so someone can rebuild it **as faithfully as possible in a new environment** — a different cloud, a plain Python service, a different vendor's data platform — without access to the rest of this repo. It describes *what* every component does and *why*, and calls out every place a design choice was paid for by a real failure mode. It deliberately avoids pasting source or literal class definitions; those live in the existing repo (`src/frdsttm/`, `notebooks/`, `review_app_react/`) and should be read there if you have this repo available, not transcribed here.
 
-**This file is fully self-contained.** Only this SKILL.md gets imported into the AmeriHealth Databricks workspace when this agent is built there via Genie Code — no other file from this repo (`docs/`, `README.md`, `CLAUDE.md`, `contracts/`) travels with it. Everything needed to rebuild the agent from scratch — target architecture, stage-by-stage design, the grounding/HITL contracts, hard-won lessons, and acceptance criteria — is inlined in Part A below. A companion deep-reference, `docs/NATIVE_REBUILD_SPEC.md`, still exists in this repo for local Claude Code sessions and is kept in sync with the content below; treat it as a local convenience copy, never as something Genie Code can reach.
+**Storage nomenclature used throughout.** This spec uses two generic nouns instead of naming a specific product, so the design travels to any stack:
+- **table store** — an append-friendly structured store queryable by row (the reference implementation backs this with Delta tables in Databricks Unity Catalog; a Postgres table or any transactional/log-structured store works identically).
+- **artifact store** — a blob/file store keyed by path (the reference implementation uses Databricks Unity Catalog Volumes; S3/GCS/Azure Blob/a local filesystem work identically).
+
+Every time these nouns appear, assume "and here is what the reference implementation concretely used" even where not restated.
 
 ---
 
-## Part A — This agent, concretely
+## 1. What this agent does, and where it sits
 
-### Databricks Unit (DBU) budget — read before generating anything
+Consumes an approved FRD (`.docx`, also `.pdf`/`.md`/`.txt`) and produces a Source-to-Target Mapping (STTM) workbook plus a machine-readable feed-level mapping contract JSON. It is the **first agent in a three-agent AI-in-Engineering program**: **FRD→STTM** → CodeGen → Code Review. (An earlier five-agent scope included BRD→FRD upstream and a SQL-Optimization agent; both left the program — preserved here only where it explains why a contract is now a frozen input rather than a live sync.)
 
-Arjun and Soham share a **450-DBU/month** pool (recurring, not one-time)
-across both engineers and all five agents in this program. Genie Code's
-own build/iterate loop and the resulting pipeline's runtime compute both
-draw against it, so both need to be efficient — not just the finished
-architecture.
+Two hand-off contracts matter to a faithful rebuild:
 
-| Agent | Monthly DBU guardrail | Real Databricks footprint |
-|---|---|---|
-| **FRD → STTM (this agent)** | **~150** | **4 chained serverless notebooks + UC volumes — cost center** |
-| CodeGen | ~120 | Generated Spark tests need a JVM cluster — **cost center** |
-| SQL Optimization | ~130 | Warehouse EXPLAIN/DESCRIBE/telemetry queries — **cost center** |
-| BRD → FRD | ~30 | Databricks App hosting only — light |
-| Code Review | ~10 | Runs off Databricks entirely; audit-sink stub only — near-zero |
-| *(10 DBU/month held as shared pod buffer)* | | |
+- **Upstream, now a FROZEN INPUT.** Stage 1 parses labels a specific FRD-authoring convention emits: section headings ("In Scope", "Assumptions, Constraints & Dependencies", …), a `Project ID: NNNNNNN` line, requirement-id families (`BR|REQ|FR|SRQ|SIR|NFR|MDST`), and a `TBD — pending client input…` placeholder that routes to open items. These are loaded from a **versioned label contract JSON** (see §9) rather than hardcoded — the parser fails loudly if that file is missing or unversioned. Originally this file was byte-synced with an upstream agent's repo; treat it now as a frozen description of the FRD documents this agent must parse, changed only when a real input document stops matching it.
+- **Downstream.** A CodeGen consumer needs both the rendered STTM workbook's own feed-level contract (emitted at the end of stage 3, before rendering) **and** a workbook-derived mapping contract JSON extracted from the rendered `.xlsx` by a separate downstream tool. That extraction step is a downstream consumer's responsibility, not this agent's, but this agent's render output must satisfy it: (a) a `Comment` column carrying each validation rule on the row(s) whose source column it names, (b) a `Recycle Flag` column carrying the recycle rule verbatim, (c) trailing audit rows (row-level, source `NA`) derived from the target template's own column/datatype rather than invented, and (d) required metadata (project name, a load strategy the consumer's own validation accepts, a delimiter when the file is delimited text) — an FRD that states none of these will fail at the consumer's validation step, loudly, before the workbook is even read. This round trip has only been proven on synthetic documents; a template lacking a column the consumer requires yields a workbook the consumer will reject.
 
-This agent carries the **single largest allocation** in the program: its
-steady-state design permanently requires four chained serverless
-notebooks per real document, plus UC volume I/O and the review app's own
-Databricks App hosting. These are planning guardrails, not automatic
-limits — check the workspace usage/cost dashboard against this table
-monthly; if a wave is trending over its guardrail before it's done, stop
-and re-scope rather than keep spending.
-
-**Minimizing Genie Code build cost (the biggest lever):**
-
-The largest controllable cost is how many separate generation passes it
-takes Genie Code to go from "empty folder + spec" to a working agent —
-not the runtime footprint above. Attack it directly:
-
-- **This SKILL.md is now the primary and only generation input — nothing
-  else from this repo is reachable during the actual build.** The
-  complete target architecture, stage-by-stage design, and acceptance
-  criteria are inlined below, starting at "Product Context" through
-  "Anthropic / Claude-Specific Adaptation Notes." Every decision those
-  sections already make is a generation turn Genie Code doesn't have to
-  spend exploring.
-- **Request full-scope generation per stage in one pass** (e.g.,
-  "generate the ingest, extract, contract-build, and render stages as
-  LDP pipeline steps now"), not file-by-file back-and-forth.
-- **Treat the target architecture below as fixed scope.** Don't ask
-  Genie Code to propose alternatives to the four-stage LDP design —
-  that exploration is billed iteration this file already resolved.
-- **Review generated code yourself, outside Genie Code**, rather than
-  prompting it to re-explain or re-justify what it wrote.
-- **Batch fixes** into one follow-up prompt instead of correcting issues
-  one at a time across many small turns.
-- **Cap generation passes per agent** (e.g., 5–8) and stop to reassess if
-  you hit it — that's a signal this file is underspecified somewhere,
-  not a signal to keep prompting.
-
-**General doctrine — applies everywhere in this repo:**
-
-- **Serverless first.** Use serverless notebooks/jobs/SQL warehouses
-  wherever the workspace offers them — they bill only for execution
-  seconds and scale to zero between Genie Code turns. If a classic
-  cluster is unavoidable, use the smallest single-node instance type and
-  set auto-termination to 10–15 minutes; never leave the default.
-- **Local/mock/replay first.** Iterate against this repo's existing
-  offline paths (local dev, mock providers, replay fixtures, `--dry-run`)
-  for as long as possible. Reserve real Databricks compute for a small
-  number of deliberate validation checkpoints, not every change.
-- **Capture every successful live run once.** This repo's record/replay
-  seam exists exactly so a working path never needs to be re-run, and
-  re-spent, to prove it still works.
-- **No scheduled/cron jobs during the build phase.** Trigger runs
-  manually, only when there's something new to validate.
-
-**Specific to this agent:**
-
-- Build and validate against **local mode + `STTM_MOCK_EXTRACTION=1`**
-  almost exclusively — it makes zero LLM calls and touches no workspace
-  resource, and covers the entire 41-test suite plus most of the
-  four-notebook logic.
-- Reserve real notebook runs for: one ingest pass against a real UC
-  volume, one or two live (non-mock) `02_extract` runs to prove the real
-  Anthropic/Model-Serving path, and one full bundle-job run per wave
-  milestone — not per code change.
-- The bundle job is deliberately **on-demand only, no cron schedule**
-  (documents arrive irregularly, no review gate exists for a scheduled
-  run) — this is already a DBU-saving property; don't add a schedule to
-  "make the demo more automatic."
-- All four notebook tasks already run on serverless compute with
-  `max_retries: 0` by design — don't add cluster provisioning or
-  retries; a failed deterministic stage should fail loud, not burn DBUs
-  retrying.
-
-### Product Context
-
-The agent is the **second link in a five-agent AI-in-Engineering program**: BRD → FRD → **FRD → STTM** → CodeGen → Code Review. Its inputs and outputs are content contracts with the neighboring agents and must remain byte-stable across both sides:
-
-- **Upstream** — reads a Functional Requirements Document (FRD) produced by the BRD-to-FRD agent, and shares a **label contract** JSON that names section headings, project-ID conventions, requirement-ID families, and placeholder strings. That file is committed byte-identically to both repos; any change bumps its `version` and must land in both repos in the same change set (see "The shared label contract" below).
-- **Downstream** — must ultimately produce a **feed-level STTM mapping contract JSON** that a CodeGen agent can consume. Today the agent renders a client-dialect **STTM workbook** (.xlsx) and emits a per-run contract JSON with human-review resolutions folded in; the workbook-→CodeGen-contract adapter is the **biggest known program-wide gap** and is out of scope for the current agent.
-
-Design philosophy carried over from the existing implementation:
+## 2. Design philosophy (non-negotiable)
 
 > The LLM reads prose and scattered requirement tables; deterministic code owns validation, regex-able facts, grounding checks, attribution, and rendering. Every extracted string is audited against the source document; genuine ambiguities are gated for human review, never guessed.
 
-The rebuild must preserve that division of labor. The LLM should never be the arbiter of "did we get this right"; audits, gates, and dictionary cross-checks are.
+The LLM is never the arbiter of "did we get this right" — audits, gates, and dictionary cross-checks are. A rebuild that lets the model self-certify its own output, or that adds a "just ask it again" repair loop, has broken the design.
 
-**Current implementation, for orientation.** Today this runs as four Databricks notebooks; it also runs locally end-to-end via env-var fallbacks and a `deltalake`-backed warehouse under `local_dev_fixtures/`. The target architecture on Genie Code (below) reshapes the runtime but preserves the pipeline shape, vocabularies, audit design, and HITL model unchanged.
+## 3. End-to-end pipeline
 
-### The shared label contract
-
-`contracts/frd_label_contract.json` (v1.0.0). Names the section headings the upstream BRD→FRD renderer emits ("In Scope", "Assumptions, Constraints & Dependencies", …), the Project-ID line pattern, the requirement-ID families (`BR|REQ|FR|SRQ|SIR|NFR|MDST`), and the `TBD — pending client input…` placeholder that routes to `open_items`. Loaded via `frdsttm.label_contract`; **fails loudly** if missing or unversioned — no hardcoded fallback.
-
-The **same file** is committed byte-identically to the `brd-to-frd-agent` repo. Any change bumps `version` and must land as identical copies on both sides in the same change set. Do not edit one repo alone.
-
-### End-to-End Pipeline
-
-Four deterministic stages, executed in order. Each stage's output is durable in UC (Delta table for structured summary + UC Volume for JSON artifacts) so any downstream stage can be re-run without re-executing predecessors.
+Four deterministic stages, run in order. Each stage's output is durable (one table-store row + artifact-store file(s)) so any stage can be re-run without re-running its predecessors.
 
 ```
    ┌───────────┐    ┌──────────┐    ┌──────────────────┐    ┌────────────────┐
@@ -131,583 +39,272 @@ Four deterministic stages, executed in order. Each stage's output is durable in 
    └───────────┘    └──────────┘    └──────────────────┘    └────────────────┘
         ↓                ↓                    ↓                       ↓
    frd_documents    extractions/       frd_contracts +           frd_sttm_runs +
-     (Delta)        <doc>.json           contracts/               rendered/
-                    (UC Volume)         <doc>.contract.v2.json    <doc>.sttm.xlsx
-                                        (UC Volume)               (UC Volume)
-                                                                  reports/
-                                                                  <doc>.phase5.md
+  (table store)     <doc>.json      contracts/<doc>.contract     rendered/<doc>.sttm.xlsx
+                  (artifact store)      .v2.json (artifact)      reports/<doc>.phase5.md
+                                                                     (artifact store)
 ```
 
-**Human review** attaches between Contract Build and Render: gated ambiguities land in the contract JSON; a reviewer resolves them via the review app; Render is re-run and folds the resolutions in.
+Human review attaches between Contract Build and Render: gated ambiguities land in the contract JSON; a reviewer resolves them; Render re-runs and folds the resolutions in.
 
-#### Stage 1 — FRD Ingest
+### 3.1 Stage 1 — Ingest
 
-**Purpose.** Turn a source-format FRD (docx / pdf / markdown / text) into a single, faithful **markdown snapshot** captured in a Delta table, so extraction always sees the same normalized text and later grounding audits can be run against a stable string.
+**Purpose.** Turn a source-format FRD into one faithful **markdown snapshot**, stored as a table-store row, so extraction always sees normalized text and later grounding checks run against a stable string.
 
-**Conceptual input.** Files in a UC Volume (`frd_raw`). One file = one document.
+**Input.** Files in an artifact-store folder. One file = one document.
 
-**Conceptual output row (`frd_documents` Delta table).** One row per successfully ingested FRD:
+**Output row.** `doc_id` (stable — the source filename stem), `project_id` (pulled from the FRD's declared Project ID line if present), `source_file`, `file_type`, `char_count`, `heading_count`, `table_count`, `content` (normalized markdown), `parsed_at`.
 
-| Field           | Type       | Purpose |
-|-----------------|------------|---------|
-| `doc_id`        | string     | Stable per-document id (source filename stem) |
-| `project_id`    | string     | Pulled from the FRD's declared *Project ID* line if present |
-| `source_file`   | string     | UC-volume path of the raw file |
-| `file_type`     | string     | `docx` / `pdf` / `md` / `txt` |
-| `char_count`    | int        | Sanity check |
-| `heading_count` | int        | Sanity check (docx must have > 0) |
-| `table_count`   | int        | Diagnostic |
-| `content`       | string     | Normalized markdown |
-| `parsed_at`     | timestamp  | Ingest run time |
+**Behavior that must survive a rebuild:**
+- **Fidelity, not summarization.** Headings map from any style resembling "Heading N" (including client-custom names), with outline-level fallback when the style is unnamed. Tables render as pipe-format markdown; merged cells expand, nested tables flatten cell-by-cell. Word structured-document-tag content controls (`<w:sdt>`) are recursively unwrapped — many templates hide required fields inside them.
+- **Requirement IDs preserved verbatim** as bold markers so extraction can attribute rules back to them. The allowed ID-family list comes from the label contract, never hardcoded here.
+- **TOC noise dropped, but "Header"-styled body content kept** — the project-ID line is typically a Header style, not a body paragraph.
+- **Sanity gates, fail loud.** Reject the document if normalized content is under ~500 characters, or (docx) if zero headings were detected. Never pass an empty parse downstream.
 
-**Behavior worth preserving.**
+### 3.2 Stage 2 — LLM extraction
 
-- **Fidelity, not summarization.** Headings are mapped from any style whose name resembles "Heading N" (including client-custom `Document Heading N`). Outline-level fallback is used when the style is unnamed. Tables are rendered as pipe-format markdown, with merged cells expanded and nested tables flattened cell-by-cell. Word `<w:sdt>` content controls (structured document tags) are recursively unwrapped — many client templates hide required-fields inside them, and skipping SDTs silently loses content.
-- **Requirement identifiers preserved verbatim.** Lines of the form `REQ-###`, `SRQ-###`, `FR-###`, etc., are captured as bold markers so extraction can attribute rules back to them. The list of allowed families is *defined by the shared label contract*, not hardcoded here.
-- **TOC noise is dropped but "Header"-styled body content is kept.** In practice the first project-ID line is a Header, not a body paragraph; discarding all headers loses it.
-- **Sanity gates.** Reject the document if the normalized content is < 500 characters, or (for docx) if no headings were detected. Fail loudly rather than passing an empty parse downstream.
+**Purpose.** Convert normalized FRD prose into a structured, feed-level specification the rest of the pipeline can validate, audit, and render.
 
-**On LDP.** A materialized view / streaming table sourced from the `frd_raw` UC Volume, with a Python UDF or notebook step doing the docx/pdf normalization. The Volume-file trigger pattern (Auto Loader with `binaryFile`) is a good fit; parsing is best done inside a `@dlt.table` step to keep the artifact and its provenance in UC.
-
-#### Stage 2 — LLM Extraction
-
-**Purpose.** Convert normalized FRD prose into a structured **feed-level specification** (`FrdIngestionSpec`) that downstream stages can validate, audit, and render.
-
-**Conceptual output shape** (top-level container; every field is optional, meaning "not stated in the source"):
-
+**Output shape** (top-level container; every field optional — absence means "not stated in the source"):
 - `project`: `{ project_id, project_name, business_context_summary }`
 - `in_scope[]`, `out_of_scope[]`: string bullets
 - `assumptions_constraints_dependencies[]`: `{ name, description, acd_type: Assumption|Constraint|Dependency }`
 - `system_interfaces[]`, `open_items[]`: string bullets
-- `feeds[]` — the load-bearing entity, ~20 fields per feed grouped as:
-  - **Identity**: `feed_name`, `source_system`
-  - **Source file**: `file_name_patterns[]`, `file_format`, `delimiter`, `record_segments[]`
-  - **Scheduling**: `frequency`, `load_windows_sla[]`
-  - **Business scope**: `lobs[]`, `domain`, `sub_domain`
-  - **Storage location**: `landing_location`, `stage_target`, `standard_target` (each: `{ catalog, schema, tables[], load_strategy }`)
-  - **Rules**: `validation_rules[]`, `recycle_rule`
-  - **Lifecycle**: `history_backfill`, `archive_retention`
-  - **Sensitivity**: `phi_pii_notes`
-  - **Cross-reference**: `sttm_reference`
-  - **Provenance**: `requirement_ids[]`
+- `feeds[]` — the load-bearing entity, ~20 fields grouped as: **identity** (`feed_name`, `source_system`), **source file** (`file_name_patterns[]`, `file_format`, `delimiter`, `record_segments[]`), **scheduling** (`frequency`, `load_windows_sla[]`), **business scope** (`lobs[]`, `domain`, `sub_domain`), **storage location** (`landing_location`, `stage_target`, `standard_target`, each `{catalog, schema, tables[], load_strategy}`), **rules** (`validation_rules[]`, `recycle_rule`), **lifecycle** (`history_backfill`, `archive_retention`), **sensitivity** (`phi_pii_notes`), **cross-reference** (`sttm_reference`), **provenance** (`requirement_ids[]`).
 
-Every string is expected to appear **verbatim** in the source FRD or (for prose fields) to substantially reuse its tokens. See "Grounding Audit — Design Contract" below for the audit contract that enforces this.
+See §7 ("The extraction transport") for the request-shape rules this stage must follow — they are load-bearing, not stylistic.
 
-**Behavior worth preserving.**
+**Retrieval augmentation.** A **historical corpus** of previously approved FRD/STTM pairs (see §6) supplies few-shot exemplar blocks retrieved for the current FRD and included in the extraction prompt. This is a quality lever, not a correctness dependency — extraction must still work (just with fewer priors) when the corpus is empty or the current document has no close match.
 
-- **Request shape (design constraints spelled out in "Design Constraints a Rebuild Must Respect" below):** system prompt frames the extraction task tersely and forbids invention of identifiers, table names, schedules, or rules; user prompt is `instruction + JSON-schema-of-the-output-container + full FRD markdown`. The response is one JSON object. No tool use, no filesystem, no multi-turn reasoning, no subagents.
-- **Client-side validation is authoritative.** The JSON returned is parsed and validated against the container model with `extra="forbid"` semantics — unknown keys are an error, not a warning. There is **deliberately no re-ask / repair loop**: a validation failure raises immediately, naming the offending field. Silently retrying would blur the model-quality signal the first failure carries.
-- **Truncation is failure.** A `max_tokens` stop reason is treated as truncated JSON and raises; a refusal is likewise a hard failure.
-- **Provider gate.** Two provider paths exist: a **mock** path (fixture-based, local-only, zero cost) and a **live** path. The gate raises on unrecognized values rather than silently degrading. A mock+live cross-configuration is an error.
+**Output artifact.** One JSON file per document keyed by `doc_id`, plus an extraction-metadata sidecar recording provider, model, prompt/schema hashes, token usage, which exemplars were used, and SDK/job identifiers — written even for non-live (mock/replay) runs, because provenance must be reconstructable regardless of run mode.
 
-**Conceptual output artifact.** One JSON file per document (`extractions/<doc_id>.json`) written to a UC Volume, keyed to the `doc_id` from Stage 1.
+### 3.3 Stage 3 — Contract build (validate, enrich, audit, gate)
 
-**On Databricks Model Serving.** This is the module that changes most in the port; see "Target Architecture on Databricks Genie Code" and "Anthropic / Claude-Specific Adaptation Notes" below.
+**Purpose.** Turn the raw extraction JSON into a **contract**: structurally validated, ground-truthed against the FRD, with regex-derivable facts filled in deterministically, ambiguities gated for a human, and a global status stamped on the artifact.
 
-#### Stage 3 — Contract Build (Validate, Enrich, Audit, Gate)
-
-**Purpose.** Turn the raw extraction JSON into a **contract** — validated, ground-truthed against the FRD, with regex-derivable facts filled in deterministically, ambiguities gated for a human, and a global status stamped on the artifact.
-
-**Conceptual pipeline** (all pure Python; the LDP step is a plain transformation with no model calls):
+**Pipeline** (pure, deterministic — no model calls):
 
 ```
 raw_extraction_json
-    │
-    ├── validate()        # structural: pydantic-style extra="forbid", nested + root
-    │       ↳ FAIL → emit no contract; write frd_contracts row with status=FAIL
-    │
-    ├── enrich()          # deterministic seams the LLM should not own
-    │       ├── project_id: regex-lift from FRD; if agent said null, fill;
-    │       │              if agent disagrees, KEEP agent value and gate a
-    │       │              "disagreement" ambiguity carrying both candidates
-    │       └── region/LOB: regex-lift REG#/lob pairs; only fill feeds whose
-    │                      lobs list is empty — never clobber non-empty
-    │
-    ├── grounding_audit() # every extracted string vs FRD content
-    │       ├── STRICT   (verbatim substring on unicode-normalized text)
-    │       │            project_id, project_name, file_name_patterns,
-    │       │            record_segments, landing_location, lobs,
-    │       │            requirement_ids, sttm_reference,
-    │       │            stage_target.{catalog,schema,tables},
-    │       │            standard_target.{catalog,schema,tables}
-    │       │            → any failure ⇒ status FAIL
-    │       │
-    │       └── ADVISORY (token-overlap ≥ 0.75, tokens ≥ 4 chars)
-    │                    validation_rules, recycle_rule, load_windows_sla,
-    │                    history_backfill, archive_retention, phi_pii_notes,
-    │                    in_scope, out_of_scope, system_interfaces,
-    │                    open_items, ACD.description
-    │                    → any flag ⇒ status PASS_WITH_FLAGS, gated
-    │                                   with feed-scoped write-back context
-    │
-    └── attribution_check()  # cross-feed rule duplication
-            # if the same rule text (normalized) shows up on ≥ 2 feeds,
-            # emit an "attribution" ambiguity with candidates = feed names
+  ├─ validate()        structural: every object rejects unknown keys, nested + root
+  │        ↳ FAIL → emit no contract; record status=FAIL and stop
+  ├─ enrich()          deterministic seams the LLM should not own —
+  │        │           project_id: regex-lift from FRD; fill if the model said null;
+  │        │                        if the model disagrees, KEEP the model's value and
+  │        │                        gate a "disagreement" ambiguity carrying both
+  │        └─ region/LOB: regex-lift; only fill feeds whose lobs list is EMPTY —
+  │                        never clobber a non-empty model-supplied value
+  ├─ grounding_audit()  see §4 — the quality gate
+  └─ attribution_check() cross-feed rule duplication: if the same (normalized) rule
+           text appears on ≥2 feeds, emit an "attribution" ambiguity whose
+           candidates are the feed names
 ```
 
-**Verdict / status vocabulary.** Exactly three statuses, in strict priority order:
+**Status vocabulary — exactly three, strict priority order:**
 
-| Status              | Triggered by |
-|---------------------|--------------|
-| `FAIL`              | Structural validation failure **or** any strict-grounding failure. No contract emitted. |
-| `PASS_WITH_FLAGS`   | Any attribution or disagreement ambiguity, **or** any advisory-grounding flag. Contract emitted; review app receives gated items. |
-| `PASS`              | Clean — no strict failures, no advisory flags, no ambiguities. Contract emitted with an empty gate list. |
+| Status | Triggered by |
+|---|---|
+| `FAIL` | Structural validation failure, or any strict-grounding failure. No contract emitted. |
+| `PASS_WITH_FLAGS` | Any attribution/disagreement ambiguity, or any advisory-grounding flag. Contract emitted; gated items go to review. |
+| `PASS` | Clean. Contract emitted with an empty gate list. |
 
-**Ambiguity vocabulary.** Exactly three `kind` values, and they must be enforced by the schema itself (an "other" kind is prohibited — the taxonomy is a designed constraint, not a soft convention):
+**Ambiguity vocabulary — exactly three `kind`s, enforced at the schema level (no "other" escape hatch):**
 
-| Kind                  | What it represents |
-|-----------------------|--------------------|
-| `attribution`         | The same rule text appears on ≥ 2 feeds; a human must pick which feeds it applies to. Candidates = feed names. |
-| `disagreement`        | The regex-derived value differs from the model-extracted value for a strict field (today: `project_id`). Candidates = both values. |
-| `advisory_grounding`  | A prose field passed advisory grounding weakly (or was invented). Free-text edit required. No candidates. |
+| Kind | Represents | Candidates |
+|---|---|---|
+| `attribution` | Same rule text on ≥2 feeds; a human picks which feed(s) it belongs to | feed names |
+| `disagreement` | Regex-derived value differs from the model-extracted value on a strict field | both values |
+| `advisory_grounding` | A prose field passed advisory grounding weakly, or was invented | none — free-text edit |
 
-**Human resolution vocabulary.** Exactly three `resolution_type` values, and the reviewer's UI selects the right one **structurally**, not by kind name:
+**Resolution vocabulary — exactly three `resolution_type`s, chosen structurally by `has_candidates`, never by `kind` name:**
 
-| Resolution type  | Applies when          | What it stores |
-|------------------|-----------------------|-----------------|
-| `candidate_pick` | `has_candidates=true` | `chosen_candidate` (must be in the candidates list) |
-| `none_of_these`  | `has_candidates=true` | Explicit rejection; falls back to automatic behavior downstream |
-| `free_text`      | `has_candidates=false`| `rationale` (advisory-grounding edits) |
+| Type | Applies when | Stores |
+|---|---|---|
+| `candidate_pick` | `has_candidates=true` | `chosen_candidate` (must be in the candidate list) |
+| `none_of_these` | `has_candidates=true` | explicit rejection; automatic behavior falls back downstream |
+| `free_text` | `has_candidates=false` | `rationale` |
 
-A `free_text` submission on a candidate-having ambiguity is **malformed** and must be rejected by both client and server. This structural-pick-required policy must be enforced at both layers.
+A `free_text` submission against a candidate-having ambiguity is malformed and must be rejected at **both** client and server.
 
-**Ambiguity id.** A stable hash of `kind + text + context`, truncated (12 chars) and prefixed with the kind (e.g. `attribution-a1b2c3d4e5f6`). This is the **join key** for saved human resolutions across re-runs; changing the id scheme is a breaking change and requires migrating the review app's stored decisions.
+**Ambiguity id.** A stable hash of `kind + normalized-text + context`, truncated and prefixed with the kind (e.g. `attribution-a1b2c3d4e5f6`). This is the join key for saved human resolutions across re-runs — freeze the algorithm; changing it requires migrating every persisted decision.
 
-**Conceptual output artifact** (`contracts/<doc_id>.contract.v2.json`, plus a summary row into `frd_contracts` Delta):
+**Output artifact** (per document): a contract JSON carrying the flattened spec plus `_provenance: { enrichments[], ambiguities[], grounding: {strict_checked, strict_failed, advisory_checked, advisory_flagged} }`, and a table-store summary row (`doc_id, status, n_feeds, n_ambiguities, n_strict_failed, contract, audited_at`).
 
-```
-{
-  contract_name, generated_from_frd, generated_date, generator, status,
-  <flattened FrdIngestionSpec here>,
-  _provenance: {
-     enrichments: [...],
-     ambiguities: [ { id, kind, text, has_candidates, candidates[], context } ],
-     grounding: { strict_checked, strict_failed, advisory_checked, advisory_flagged }
-  }
-}
-```
+**Read the contract JSON, not the table-store row, downstream.** The table-store snapshot is pre-human-resolution; the artifact JSON is post-resolution. This is deliberate — later stages must read the artifact.
 
-`frd_contracts` Delta columns: `doc_id, status, n_feeds, n_ambiguities, n_strict_failed, contract, audited_at`.
+### 3.4 Stage 4 — Render + eval
 
-#### Stage 4 — Render + Eval (STTM Workbook)
+**Purpose.** Produce a client-dialect STTM `.xlsx` and an eval score against a golden reference workbook, after folding in human resolutions.
 
-**Purpose.** Produce a client-dialect STTM `.xlsx` and an eval score against a golden reference workbook, after folding in any human resolutions.
-
-**Conceptual pipeline** (all pure Python; no model calls):
+**Pipeline:**
 
 ```
-contract JSON  ─┐
-                ├── read reference workbook → build source dictionary
-reference xlsx ─┘
-                ├── apply_human_resolutions()   # AUTHORITATIVE; runs first
-                │       → resolution_audit entries: applied / not_applied / stale
-                │
-                ├── resolve_attribution()       # dictionary cross-check
-                │       → remove rules from feeds whose dictionary
-                │         columns don't reference them; CONFIRM-AND-CLEAR
-                │         when candidate feeds match dictionary-confirmed set
-                │         even at zero removals (the "D2" fix)
-                │
-                ├── derive_field_mappings()     # explicit contestable defaults
-                │       → 1:1 column mapping, datatype=String on both layers,
-                │         stage table by segment suffix (HDR/DTL/TRL),
-                │         standard catalog/schema from contract if stated
-                │
-                ├── render_workbook()           # dialect-aware
-                │       → sheet_per_table (per-feed MAPPING-<TABLE> sheets)
-                │       → single_sheet     (one wide sheet, CAQH-style)
-                │
-                └── evaluate_against_reference()
-                        → cell-level match rate across
-                          (schema, table, column, datatype) × 2 layers
+contract JSON ─┐
+               ├─ read the historical corpus for a matching prior STTM →
+reference xlsx ┘   build a source dictionary + (if matched) a layout template
+               │
+               ├─ apply_human_resolutions()   AUTHORITATIVE; runs first
+               │       → resolution_audit entries: applied / not_applied(reason) / stale
+               │
+               ├─ resolve_attribution()       dictionary cross-check
+               │       → remove rules from feeds the dictionary doesn't confirm;
+               │         CONFIRM-AND-CLEAR even at zero removals when the
+               │         remaining candidate set already equals the confirmed
+               │         set (§5, "the D2 fix" — do not skip this)
+               │
+               ├─ derive_field_mappings()     explicit, contestable defaults:
+               │       1:1 column mapping, datatype=String on both layers,
+               │       stage table chosen by record-segment suffix, standard
+               │       catalog/schema from the contract if stated
+               │
+               ├─ render()
+               │       if a historical template matched: render INTO that
+               │       workbook's own layout — sheets, band labels, headers,
+               │       widths, styles kept; its data rows removed; ours
+               │       written under the SAME headers via the logical roles
+               │       already recovered; a template column the contract
+               │       knows nothing about stays BLANK and is listed in
+               │       `_provenance.template_fill.unfilled_columns` (never
+               │       guessed); unused template sheets removed; extra
+               │       feeds get a copy of the lead sheet
+               │       else: fall back to a built-in freeform renderer
+               │       (sheet-per-table or single-wide-sheet dialect)
+               │
+               └─ evaluate_against_reference()
+                       cell-level match rate across (schema, table, column,
+                       datatype) × {stage, standard} layers
 ```
 
-**Two supported dialects** (both must survive the port; header-alias tables identify columns in either layout):
+**Precedence rule (critical).** Once a human resolution is structurally applicable, it is authoritative and is **never** re-decided by the automatic dictionary cross-check. Every non-application records a `reason_not_applied` (e.g. `stale` = the candidate no longer exists in the current candidate set).
 
-| Dialect             | Layout |
-|---------------------|--------|
-| `sheet_per_table`   | `FILE_DETAILS` + `VERSION_HISTORY` + one `MAPPING-<TABLE>` sheet per feed with three column blocks (Source Layout / Stage Layer / Standard Layer). |
-| `single_sheet`      | One wide sheet: metadata + one Source/Stage/Standard block. |
+**Output row** (per render): `doc_id, status, dialect, reference, n_resolutions, n_human_resolutions, n_human_resolutions_applied, eval_pct, eval_cells, rendered_path, run_at`. **Output artifacts:** the rendered workbook and a human-readable run report.
 
-**Precedence rule (critical).** Once a human resolution is structurally applicable, it is authoritative and is never re-decided by the automatic dictionary cross-check. Every non-application must record a `reason_not_applied` (e.g. `stale` = candidate no longer in the current candidate set).
+## 4. Grounding audit — the quality gate
 
-**Conceptual output row (`frd_sttm_runs` Delta table).** One row per render:
+Because the agent's entire quality claim rests here, it gets its own section.
 
-`doc_id, status, dialect, reference, n_resolutions, n_human_resolutions, n_human_resolutions_applied, eval_pct, eval_cells, rendered_path, run_at`.
+- **Strict fields** (identifiers, paths, patterns, table names): must appear **verbatim** as a substring of the unicode-normalized source content. Any failure elevates the whole contract to `FAIL`. Fields: `project_id`, `project_name`, `file_name_patterns`, `record_segments`, `landing_location`, `lobs`, `requirement_ids`, `sttm_reference`, `stage_target.{catalog,schema,tables}`, `standard_target.{catalog,schema,tables}`.
+- **Advisory fields** (prose): must overlap source prose at ≥0.75 token-overlap (tokens ≥4 chars, normalized). Failure elevates to `PASS_WITH_FLAGS` and captures structural write-back context (which feed, which field path, the original value) so a reviewer can edit in place. Fields: `validation_rules`, `recycle_rule`, `load_windows_sla`, `history_backfill`, `archive_retention`, `phi_pii_notes`, `in_scope`, `out_of_scope`, `system_interfaces`, `open_items`, ACD `.description`.
+- Run both paths in one call; return counts (`strict_checked`, `strict_failed`, `advisory_checked`, `advisory_flagged`) as a provenance banner.
+- **Calibrate the threshold against live model output on real documents, never against synthetic/mock extractions** — a mock that copies facts back from the FRD always grounds; it proves plumbing, not accuracy.
+- **Never relax the audit to make a run pass.** The fix is a better extraction, a better source document, or a reviewer's `free_text` correction — never a lowered threshold or an excluded field.
 
-**Artifacts also written to UC Volume:** `rendered/<doc_id>.sttm.xlsx`, `reports/<doc_id>.phase5.md` (a human-readable run report).
+## 5. Design constraints a rebuild must respect (hard-won)
 
-**Read the contract JSON, not the `frd_contracts` Delta.** The Delta snapshot is pre-human-resolutions; the JSON is post-resolutions. This is a deliberate design choice — the port must preserve it.
+- **Structured-output "grammar too large."** Provider-native schema-constrained decoding failed deterministically on this schema's shape (many optional properties, deeply nested nullable unions, every object rejecting unknown keys) — the server-side grammar compiler rejected it as too complex. Fix, and the constraint to keep: **send the JSON schema as text in the prompt; validate client-side.** Re-probe server-side structured output on whatever provider you target; if it fails on this same shape, fall back without hesitation — do **not** simplify the schema to satisfy a decoder, since the schema is the downstream contract.
+- **No repair loop.** A schema-invalid response is a model-quality signal that must stay visible. Never silently re-ask.
+- **Truncation is failure, not partial success.** A max-output-token stop reason (or a refusal) is a hard error; never parse truncated JSON. Size the output ceiling generously — truncation is fail-loud, so an over-generous ceiling costs nothing. (Reference measurement: ~700–800 output tokens per feed; size for 75+ feeds of headroom.)
+- **Confirm-and-clear on zero removals (the "D2" fix).** A *better* extraction can produce *fewer* dictionary removals in the render-attribution step — which, if unhandled, leaves the attribution ambiguity gated forever. Rule: when the ambiguity's candidate feeds equal the dictionary-confirmed feed set, clear the flag even at zero removals. Test all three shapes: clears at zero removals when confirmed; stays gated when inconclusive; partially clears on partial overlap.
+- **Ambiguity id stability.** The id scheme is the join key for every saved reviewer decision. Freeze it; a second migration means migrating every review app's stored decisions.
+- **Non-determinism is inherent, not a bug.** The same document through the same model can produce different gate shapes across runs at identical extraction quality and identical eval score. Do not choreograph a demo around a specific gate count; ship a replay-fixture escape hatch (a tracked run set that reproduces a known narrative offline, no live model call) for when a live run's shape doesn't cooperate. A zero-gate run is not a failure to demo — reframe it: "the agent flags what it isn't sure of; the dictionary auto-confirms what the data already proves; zero flags means nothing needed a human this run."
+- **Fail loud on ambiguous config, always.** Two providers configured at once, an unversioned label contract, a missing secret, mock-mode requested where a live run is required — all raise at startup or at the point of use. Never proceed on an implicit default in a pipeline whose output a client will act on.
+- **Mock/replay mode is plumbing proof, never a quality benchmark.** Keep it local-only (hard-disabled wherever a real workspace/production run would use it — an explicit mock request there should raise, not be silently ignored) and never use its always-grounds behavior to set thresholds.
 
-### Grounding Audit — Design Contract
+## 6. Historical corpus — quality lever, not a hard dependency
 
-Because the entire quality claim of the agent rests on this audit, it gets its own section.
+Every approved FRD/STTM pair becomes a template once harvested (see §8, sync):
+1. **Golden-pair eval** on every regeneration (excluding the document's own reference when checking itself).
+2. **Retrieved few-shot exemplars** in the stage-2 prompt (§3.2).
+3. **The matched workbook as stage-4's dictionary + layout** (template-fill rendering, §3.4).
 
-#### Rule categories
+Pairing between an FRD and its STTM is **name-based first** (a fixed naming convention — e.g. `FRD_<name>` ↔ `STTM_<name>` by matching the stem after each role's prefix), with a **deterministic similarity score as the fallback** only when name-pairing doesn't resolve. Thresholds for "is this a good-enough template match" must be calibrated against your actual document set — seed values from a small fixture corpus are not calibrated for a real corpus; recalibrate before relying on them and record the outcome.
 
-- **Strict fields** (identifiers, paths, patterns, table names, IDs): must appear **verbatim** as a substring of the (unicode-normalized) FRD content. Any failure elevates the whole contract to `FAIL`.
-- **Advisory fields** (prose rules, retention notes, PHI notes, scope bullets): must overlap the FRD prose at ≥ 0.75 token-overlap (tokens ≥ 4 chars, normalized). Failure elevates the contract to `PASS_WITH_FLAGS` and captures **structural write-back context** (feed index, field path, original value) so a reviewer can edit the offending prose in-place.
+## 7. The extraction transport — request shape
 
-#### Design constraint — calibrate against real model prose, not synthetic prose
+- **One prompt in, one JSON object out.** System prompt frames the task tersely and forbids inventing identifiers, table names, schedules, or rules. User prompt = instruction + JSON-schema-of-the-output-container + the full normalized document. No tool use, no multi-turn reasoning, no subagents.
+- **Client-side validation is authoritative**, with every object (root and nested) rejecting unknown keys.
+- **No repair loop; truncation is failure.** (Repeated from §5 because it governs this stage specifically.)
+- **Streaming only to avoid HTTP timeouts** at a large output-token ceiling — the response is consumed only after it completes; drop streaming if your transport doesn't need it at your ceiling.
+- **A provider gate that raises on unrecognized or conflicting values** — e.g. mock mode and a live provider both requested is a startup error, not a preference to silently resolve.
+- **Retries only on transient errors** (429/5xx-equivalent); never on a validation failure — that is a signal, not a fluke to smooth over.
+- **This reference implementation calls the Anthropic Claude API directly** (a specific model id, configured, not hardcoded); the transport pattern above is what must survive a swap to any other model host.
+- Reasoning/extended-thinking modes are worth trying on any given provider, but adopt one only if it measurably improves grounding on live prose — never merely because it's offered.
 
-Grounding thresholds and expectations should be measured against **outputs the current model actually produces on the current FRD**, not against hand-crafted synthetic mocks. Mock extractions in this repo copy real facts back from the FRD and therefore always ground; they prove plumbing works, not that the model is accurate. Historical grounding numbers from earlier schema/pipeline versions are not comparable and should not be treated as regression baselines. Any rebuild must re-baseline grounding on a live end-to-end run against the current schema before setting thresholds or writing test assertions.
+## 8. SharePoint sync — the system of record
 
-#### Design constraint — never relax the audit to make a run pass
+A document library (SharePoint via Microsoft Graph, or an equivalent document-library API) is this program's **system of record**: FRDs and approved STTMs live there; the pipeline's artifact store is a working mirror kept in step by a sync process.
 
-If a run flags advisory grounding, the fix is either (a) a better extraction, (b) a better source document, or (c) a reviewer's `free_text` correction. It is **not** to lower the threshold, exclude the field, or accept invented prose.
+- **Read-only by construction.** Nothing in the pipeline writes back to the library. There is no upload endpoint, no output-folder config. The hand-off is a **person** uploading a reviewed workbook to the library's STTM location; the next sync pulls it in and pairs it with its FRD. This has a real permissions consequence: the library-access grant needed is read-only on the one library/site, never write.
+- **The sync is both the initial load and the steady state.** It lists the FRD location and the STTM/reference location (which may be the same folder), downloads only what is new or changed (tracked by a per-item change token — id + etag/version + modified-time + size — recorded in a manifest next to the corpus index), removes the local copy of anything the library no longer has (**only** files the sync itself pulled in — a hand-staged local file is left alone), then rebuilds a **corpus index** (one entry per document, carrying a content hash) from what's now on disk. First run = bulk load; every later run = incremental, decided by comparing the manifest, not by a wall-clock "since last run" timestamp — this is more robust than a boot-time diff because it also catches a same-named file that changed in place.
+- **Trigger: process start-up, plus an on-demand manual trigger. No cron schedule.** Documents arrive irregularly and there is no review gate on a scheduled pull, so a fixed schedule buys nothing and only adds an unreviewed sync window. On start-up, list everything not yet mirrored locally and pull it in; the same worker backs the manual trigger. Guard against two sync workers racing on the manifest (a concurrency limit of 1, or equivalent locking).
+- **Naming-convention prefix filter.** If the library has a fixed naming convention (e.g., every FRD named `FRD_<name>`, every STTM `STTM_<name>`), listing can filter by prefix and pairing becomes exact-stem matching — similarity scoring stays only as the fallback for anything that doesn't fit the convention. Files that don't match the prefix are **counted** in the sync summary, never silently dropped.
+- **Fail-loud, both directions.** Missing configuration raises naming the remedy. A short/partial download is reported, never written. A missing or empty library location is a warning (not a hard failure — a routine sync tick must not page anyone), but a refused/unauthorized listing call is a hard failure. One bad file's download or parse is recorded per-file, never fatal to the whole sync.
+- **Credentials.** App-only/service credentials against the library API, secret excluded from any repr/log path. Prefer the narrowest available scope (a specific-site/specific-library read grant) over a tenant-wide read grant.
+- **Picker / UI consequence.** A document already paired with an approved reference in the corpus index is a different UI state than an unpaired one — see §11 for exactly what "different state" should mean and the one thing it must never mean (silently vanishing).
 
-### HITL (Human-in-the-Loop) Review Model
+## 9. The label contract
 
-#### What the reviewer sees
+A single versioned artifact (this reference implementation: a JSON file) names every parsing convention stage 1 depends on: section headings, the project-ID line pattern, the requirement-id family list, the "pending"/TBD placeholder string. Load it explicitly and **fail loudly** if it's missing or carries no version — never fall back to a hardcoded default. If this convention is shared with an upstream document-producing process, keep the copies byte-identical and bump the version together; if there is no such upstream process (a frozen convention), treat the file as a description of the input documents this agent parses, changed only when a real document stops matching it.
 
-Per ambiguity:
+## 10. Human-in-the-loop review model
 
-- **Identity**: stable id, kind, and (for attribution) the extracted rule text.
-- **Choices**: the candidate list (attribution / disagreement) *or* an editable free-text field (advisory grounding).
-- **Prior state**: any existing resolution, so the reviewer can see who resolved it, when, and what they picked.
-- **Provenance**: the feed(s) the ambiguity touches, and (for advisory grounding) the field path being edited.
+**What the reviewer sees**, per ambiguity: a stable id; the `kind`; for `attribution`/`disagreement`, a candidate list; for `advisory_grounding`, an editable free-text field seeded with the current value; any prior resolution (who, when, what was picked); and provenance (which feed(s), and for advisory grounding, the exact field path).
 
-#### What the reviewer can do
+**What the reviewer can do:** pick a candidate; reject all candidates (`none_of_these` — leaves it gated so the automatic dictionary cross-check can still resolve it); or edit prose with a rationale (`free_text`, advisory-grounding only).
 
-- **Pick a candidate** (attribution and disagreement only).
-- **Reject all candidates** with `none_of_these`, which leaves the ambiguity gated so downstream automatic behavior (dictionary cross-check for attribution) can still take effect.
-- **Edit prose** with `free_text` (advisory grounding only), supplying a rationale.
-
-#### State transitions
-
+**State machine:**
 ```
-       ┌────────────────────────────────────────────┐
-       ▼                                            │
-   (gated) ─pick──▶ candidate_pick ─re-render──▶ applied
+   (gated) ─pick───▶ candidate_pick ─re-render─▶ applied
        │
-       ├─reject─▶ none_of_these ─re-render──▶ dictionary-fallback
+       ├─reject──▶ none_of_these ─re-render─▶ dictionary-fallback
        │
-       └─edit──▶ free_text ─re-render──▶ prose_updated
+       └─edit────▶ free_text ─re-render─▶ prose_updated
 ```
 
-Resolutions are **upserted by `ambiguity_id`** into `_provenance.human_resolutions` on the contract JSON in place. On the next render, the resolution is applied first (authoritative), then the automatic dictionary cross-check runs on whatever remains. Every application produces a `resolution_audit` entry marking `applied`, `not_applied` (with reason), or `stale` (candidate no longer valid).
-
-#### Non-negotiables
-
-- **Structural-pick-required policy** enforced on both client and server. The server must reject a malformed submission (e.g. `free_text` on a candidate-having ambiguity) with 4xx, not silently accept-and-drop.
-- **Strict `doc_id` matching** on all detail/workbook endpoints — no fuzzy fallback to a similarly-named document.
-- **Composite key `<doc_id>::<ambiguity_id>`** in any client-side state so state does not leak between documents open in the same UI session.
-- **Empty vs unreadable are different.** A successful listing with no rows returns 200 + `[]`; an unreadable source returns 5xx. The client uses this to auto-switch tabs on first load without hiding real errors.
-
-### Design Constraints a Rebuild Must Respect (Hard-Won Lessons)
-
-These are the calibration decisions the current implementation paid for. A rebuild that ignores them will re-hit the same failure modes.
-
-#### Structured-output "grammar too large" — the D1 constraint
-
-Provider-native structured output (schema-constrained decoding) failed deterministically on this schema shape: many optional properties, deeply nested nullable unions, and `additionalProperties=false` everywhere. Server-side grammar compilers rejected it as too complex. The fix — and the constraint the rebuild must satisfy — is:
-
-> **Send the JSON schema as text in the prompt; validate on the client side with `extra="forbid"` semantics.**
-
-The rebuild target (Databricks Model Serving / AI Gateway with a Claude backing model, or a Foundation Model endpoint) may or may not have the same limit. Re-probe by attempting server-side structured output first; if it fails on the same shape, fall back to schema-in-prompt without hesitation. Do **not** simplify the schema shape to satisfy a decoder — the schema is the extraction contract with downstream consumers.
-
-#### Request shape — schema-in-prompt + streaming, no repair loop
-
-The current pattern is: **plain messages call, one shot, streaming for large output ceilings, client-side Pydantic-style validation, and no retry on validation errors**. This is deliberate:
-
-- **Streaming** avoids HTTP timeouts at large output-token ceilings; the request is otherwise identical to a non-streaming call.
-- **No repair loop**: a schema-invalid response is a model-output-shape signal that must be visible. Silent re-asking would mask the quality regression on the very first failure.
-- **`max_tokens` truncation is failure, not partial success.** Do not attempt to parse truncated JSON.
-- **No `thinking` / extended-thinking / betas / tool-use / subagents** are used today. The design commitment is "one prompt in, one JSON object out." Adaptive-thinking modes may be worth re-probing on the new platform, but must be introduced only if they measurably improve grounding on live prose — not because they are available.
-
-#### Output-token ceiling sizing
-
-Measured budget on a demo FRD is ~700–800 output tokens per feed. A safe ceiling gives ~75–90 feeds of headroom (currently 64 000). Set the ceiling high enough that a single-run FRD cannot truncate under normal conditions. Truncation is fail-loud, so the cost of an over-generous ceiling is zero.
-
-#### Ambiguity id stability
-
-The `ambiguity_id` scheme is the join key for saved reviewer decisions. It has already been migrated once; migrating again requires updating every persisted decision in every review-app data store. Freeze the algorithm (`kind + normalized-text + context → sha1 → first 12 chars`) unless there is a compelling reason to break resolution history.
-
-#### Confirm-and-clear on zero removals (the "D2" fix)
-
-A **better** extraction can produce **fewer** dictionary removals — which historically left the attribution ambiguity gated forever. The rule: when the ambiguity's candidate feeds equal the dictionary-confirmed feed set (even with zero removals from the LLM's picks), clear the flag. Skipping this check causes the demo pathological outcome "correct extraction → worse final status."
-
-#### Grounding calibrated against real prose
-
-See "Grounding Audit — Design Contract" above. Do not use mock extractions to set grounding thresholds; mocks are plumbing tests. Baseline against a live run on a real FRD.
-
-#### Mock mode is plumbing proof, not a benchmark
-
-The mock provider path exists to run the pipeline end-to-end without an LLM. It must remain local-only (guarded off in the workspace runtime) and must never be used to declare grounding quality. Configuration ambiguity (mock + live simultaneously) is a hard failure, not a preference.
-
-#### Determinism, or the lack of it, is a demo concern
-
-Three live runs on the same FRD produced three different gate shapes at identical extraction quality and identical eval scores. A rebuild's demo choreography must not depend on a specific gate count; the replay-fixture escape hatch is the reliable path for demos.
-
-#### Fail loud on ambiguous config
-
-Two providers configured at once, an unversioned label contract, a missing secret — all raise on startup rather than proceeding with an implicit default. The rebuild must adopt the same discipline; silent fallbacks in a compliance-sensitive pipeline are worse than a red startup.
-
-### Target Architecture on Databricks Genie Code
-
-#### Runtime shape
-
-- **Ingest**, **Extract**, **Contract Build**, **Render** as four LDP steps (materialized views / streaming tables) inside a single **Lakeflow Declarative Pipeline** owned by the FRD-STTM project.
-- **Unity Catalog** owns the three Delta tables (`frd_documents`, `frd_contracts`, `frd_sttm_runs`) and the artifact Volumes (`frd_raw`, `sttm_out`, `sttm_reference`).
-- **Databricks Model Serving** (Foundation Model API or external-model endpoint via AI Gateway) hosts the extraction call. The current Anthropic SDK client is replaced by a Model Serving HTTP call (or the `databricks-sdk` Serving client); the request/response shape stays the same in spirit (one prompt in, one JSON object out).
-- **Review app** stays as a Databricks App (FastAPI backend + React frontend). The existing `STTM_APP_MODE=databricks` code path is designed for exactly this deployment; the rebuild inherits it.
-- **Secrets** for external-model endpoints (only if going via AI Gateway to an external provider) live in a Databricks secret scope; the Foundation Model path removes the secret dependency entirely because workspace identity handles auth.
-- **Genie Code** is the authoring surface — pipeline steps are Genie Code notebooks or Python files under the LDP.
-
-#### Table & volume topology
-
-```
-Unity Catalog
-├── <catalog>.<schema>.frd_documents      (Delta, one row per ingested FRD)
-├── <catalog>.<schema>.frd_contracts      (Delta, one row per contract build)
-└── <catalog>.<schema>.frd_sttm_runs      (Delta, one row per render)
-
-UC Volumes
-├── /Volumes/<catalog>/<schema>/frd_raw           (input FRDs)
-├── /Volumes/<catalog>/<schema>/sttm_reference    (golden reference workbooks)
-└── /Volumes/<catalog>/<schema>/sttm_out
-        ├── extractions/<doc_id>.json
-        ├── contracts/<doc_id>.contract.v2.json
-        ├── rendered/<doc_id>.sttm.xlsx
-        └── reports/<doc_id>.phase5.md
-```
-
-#### Config surface (parameterize the pipeline; do not hardcode)
-
-| Setting             | Purpose |
-|---------------------|---------|
-| `catalog`, `schema` | UC target |
-| `raw_volume`, `out_volume`, `reference_volume` | UC Volumes |
-| `docs_table`, `contracts_table`, `runs_table`  | Delta table names |
-| `model`             | Model Serving endpoint name or Foundation Model id |
-| `max_tokens`        | Output ceiling (default ~64k; see "Output-token ceiling sizing" above) |
-| `max_retries`       | Transient-error retries only (429 / 5xx); never on validation errors |
-| `llm_provider`      | `mock` | `live`; unrecognized value raises |
-| `mock_extraction`   | Local-only escape hatch; hard-fails if enabled in workspace runtime |
-| `app_mode`          | `local` | `databricks` (review-app data access) |
-
-Genie Code / LDP pipeline **parameters** map cleanly to these names.
-
-### Acceptance Criteria — What "Done" Looks Like
-
-The current test suite is the strongest available specification of "correct behavior." A rebuild is not done until an equivalent suite is green. Grouped by theme:
-
-#### Grounding & enrichment
-
-- Unicode / markdown normalization round-trips: NFKC, smart-quote collapse, code-fence stripping.
-- Token-length filtering: single-character or short tokens do not distort advisory overlap.
-- Strict-substring detection: a value present verbatim in the FRD passes; a hallucinated identifier fails.
-- Advisory overlap at exactly the 0.75 threshold: on-boundary values pass; below-threshold values fail.
-- Empty values skip the audit (nothing to ground).
-- Grounding audit runs both strict and advisory paths in one call and returns structural write-back context for advisory flags.
-- Enrichment: project-id fill when agent said null; disagreement gated when agent value differs; LOB fill only for empty lobs; existing non-empty lobs never clobbered.
-
-#### Gating vocabulary
-
-- Clean spec → status `PASS`, empty gate list.
-- Schema-invalid spec → status `FAIL`, **no contract emitted**.
-- Strict-ungrounded spec → status `FAIL`.
-- Attribution / advisory-grounding conditions → status `PASS_WITH_FLAGS`.
-- Every emitted ambiguity validates against the `GatedAmbiguity` schema; unknown `kind` values are rejected at model level.
-- Provenance banner (`_provenance.grounding` counts) matches the actual audit results.
-- Human-readable run report includes each ambiguity's text and kind.
-
-#### Model contract
-
-- Round-trip serialization of every canonical spec fixture.
-- `extra="forbid"` at both root and every nested container.
-- `schema` alias round-trips (the field is a reserved word in Pydantic and requires aliasing).
-- `GatedAmbiguity` accepts exactly the three `kind` values; an "other" is rejected.
-- `HumanResolution` accepts exactly the three `resolution_type` values; unknown types are rejected.
-- Empty defaults (`feed_name is None`, empty lists) are legal — "not stated" is a first-class state.
-
-#### Label contract
-
-- File is present, parses, and carries a version.
-- Every section / requirement-family / project-id sub-key is present.
-- Project-id regex matches normalized text.
-- Digits pattern matches expected filenames.
-- Extraction schema still names every label the contract declares.
-- Missing file or missing version raises a specific `LabelContractError` — never a silent fallback.
-
-#### LLM extraction transport
-
-- Prompt embeds the schema (with field descriptions) and the document body.
-- Explicit-schema override path works (a caller can supply a subset schema).
-- Parse succeeds on valid JSON, fenced JSON (```json … ```), and JSON with permitted extra whitespace.
-- Parse fails on extra fields and on invalid JSON.
-- Happy-path against a fake client verifies model id, max_tokens, system prompt passthrough.
-- `max_tokens` and `refusal` stop reasons skip parsing and raise.
-- Validation failure propagates naming the offending field.
-
-#### Render attribution
-
-- **D2 confirm-and-clear:** zero removals + candidate feeds == dictionary-confirmed feeds → flag cleared.
-- Dictionary-inconclusive → flag stays gated (regression guard).
-- Partial overlap → flag partially cleared (regression guard).
-
-#### Review-app backend
-
-- Suffix format for new runs (backend-generated `<prefix>_<timestamp>`), collision uniquifier, subprocess env insulation.
-- Run lifecycle (launch / status / completion).
-- 409 on a second concurrent run.
-- Failed stage marks the run failed and surfaces the reason.
-- Missing API key blocks a live-provider run.
-- Path containment: no traversal, no touching curated paths.
-- `.docx` requirement on upload, size and type validation.
-- Replay discovery works; traversal is rejected.
-- Results payload shape: strip internal gate metadata not intended for clients.
-- Workbook download endpoint returns 404 for unknown `doc_id` and does not fuzzy-match.
-- Rule-text extraction from ambiguity context: word-boundary quoting, truncation.
-
-#### End-to-end demo scenarios (integration-level)
-
-- Live run against the demo FRD produces `PASS` or `PASS_WITH_FLAGS`, no strict-grounding failures, no hallucinated identifiers, and a golden-pair cell-eval near the demo baseline (~94%).
-- Replay run (no API key, tracked fixtures) reproduces the same rendered workbook byte-for-byte.
-- Mock provider run completes without an LLM and demonstrates plumbing only — the mock is not counted as a quality signal.
-
-### Anthropic / Claude-Specific Adaptation Notes
-
-Everything in this section is a rework item for the port to Databricks Model Serving / AI Gateway. Nothing else in the pipeline is provider-specific.
-
-1. **Model client.** The current `anthropic.Anthropic` client (streamed `messages` call with `model`, `max_tokens`, `system`, `messages` parameters) must be replaced by a **Databricks Model Serving** invocation — either the Foundation Model API for a Claude-family endpoint, an external-model endpoint via AI Gateway, or the `databricks-sdk` serving client. The request shape (system prompt + user prompt containing the schema and the FRD content) is preserved; only the transport changes.
-
-2. **Model identifier.** The default `claude-opus-4-8` referenced in the extraction notebook and job resource file is an **Anthropic-side model id**. On the Databricks target it becomes a **Serving endpoint name** (or Foundation Model id, depending on route). Update every configuration touchpoint that today reads this value — extraction notebook, job resource YAML, demo runbook, and any documentation. Treat "endpoint name" as configuration, not code.
-
-3. **Auth / secret scope.** Today the API key is loaded from a Databricks secret scope for workspace runs, and from an env var for local runs. On Foundation Model endpoints, **workspace identity handles auth** and the secret scope drops out entirely. If routing through AI Gateway to an external Anthropic key, the secret scope is retained, but its consumer is the Gateway, not the pipeline code.
-
-4. **SDK error taxonomy.** Today the code catches Anthropic-specific error classes on the extract path. Replace those catches with the equivalent Model Serving client error classes (or plain HTTP-status-based branching if calling REST directly). Preserve the semantic: transient (429/5xx) retries only, validation failures never retry.
-
-5. **Retry policy.** The current `max_retries=2` runs inside the Anthropic SDK. When the SDK is removed, an equivalent transient-only retry wrapper must be re-implemented at the transport layer — do not accidentally introduce retries on parse / validation failures.
-
-6. **Streaming.** Streaming is used today only to avoid HTTP timeouts at large `max_tokens` ceilings; the response is consumed only after completion. If the Model Serving endpoint supports non-streaming calls at this output size without timeouts, streaming can be dropped without behavior change. If not, use the endpoint's streaming variant.
-
-7. **Structured outputs.** Today the code sends the JSON schema **as text inside the prompt** because Anthropic's server-side `messages.parse(output_format=...)` failed on this schema shape with a "grammar too large" error. When the transport changes, **re-probe server-side structured output on the target endpoint** with the current schema (which cannot be simplified — see "Structured-output 'grammar too large' — the D1 constraint" above). If it works, adopt it and simplify the prompt; if it fails, keep the schema-in-prompt pattern intact.
-
-8. **Adaptive-thinking / extended-thinking.** The current implementation does **not** use `thinking`, `extended_thinking`, `betas`, message caching, computer use, or the agent SDK. If the Databricks target exposes an "adaptive thinking" or reasoning mode via AI Gateway, treat adopting it as a **measured experiment**, not a default. It must demonstrably improve grounding on live prose (see "Grounding calibrated against real prose" above) before it enters the production request shape.
-
-9. **Provider gate values.** The `STTM_LLM_PROVIDER` env var currently accepts `"anthropic"` / `"mock"` / empty. Under the port, `"anthropic"` becomes `"databricks"` (or the appropriate endpoint tag). The unrecognized-value-raises semantic is preserved.
-
-10. **Review-app subprocess env injection.** The review app's demo runner injects `ANTHROPIC_API_KEY` and `STTM_LLM_PROVIDER=anthropic` into subprocess environments. Under the port these become Databricks workspace credentials (if any) and the new provider tag. The env-insulation test that guards against touching curated paths must be updated but preserved in spirit.
-
-11. **`pyproject.toml`.** Remove `anthropic>=0.60` from core dependencies; add the `databricks-sdk` (already present in the `[ui]` extra — promote to core for the port) and any Model Serving client packages.
-
-12. **Documentation references.** The demo runbook, live E2E report, and defect catalogue all cite Anthropic-specific behaviors (D1 grammar-too-large, SSE-through-Databricks-Apps proxy, cost estimates per invocation). Retain them as historical context in an "archive" section of the docs, but the runbook that ships with the rebuild must reflect the Databricks-native cost model and observability surface (Model Serving usage tables, endpoint metrics) — not the Anthropic dashboard.
-
-### Where to read next
-
-**Local repo / Claude Code development only — none of these are reachable when only this SKILL.md is imported into the AmeriHealth Databricks workspace.** Everything needed for the actual build is inlined above; these are for engineers working in this checkout:
-
-- `README.md` — pipeline overview, run instructions (Databricks bundle + local), review-app setup, branching model. Start here if you have never run the agent.
-- `CLAUDE.md` — the working-notes file loaded into every session in this repo. Config doctrine, the widget-name mismatch between notebooks, provider-seam rules, fixture rules, known gaps. Read before making code changes.
-- `docs/DEMO_RUNBOOK.md` — how to run the client-facing demo in `review_app_react/` (choreography, non-determinism framing, contingency to replay, hard rules on real client documents).
-- `docs/NATIVE_REBUILD_SPEC.md` — the source this SKILL.md's Part A was merged from; kept as a standalone local copy, same content as above.
-- `docs/LIVE_E2E_2026-08-07.md` — the D2 incident and the numbers the demo runbook cites.
-- `contracts/frd_label_contract.json` — the shared upstream contract; treat as read-only unless you are coordinating a bump with the BRD→FRD repo.
-
----
-
-## Part B — The reusable pattern
-
-Everything below is the same design abstracted away from FRD/STTM and AmeriHealth Caritas. It is written so an engineer building an unrelated agent — extracting field-level clauses from insurance policies, extracting API contracts from RFCs, extracting billing codes from clinical notes, whatever — can apply the pattern directly.
-
-**Applicability check.** This pattern fits when *all* of these hold:
-
-- The **source is a document** (or a small set of documents), not a stream or a database.
-- The output is a **structured record** with a designed schema — a mapping, a spec, a set of typed fields — not free-form text.
-- The document contains prose *and* scattered facts (tables, IDs, patterns) that a regex or a lookup can verify.
-- Getting a field **wrong silently** is worse than **blocking on a question** — because a downstream consumer (another agent, a code generator, a compliance workflow, an ETL job) will act on it.
-- There exists **some form of ground truth** you can cross-check against: the source document itself for verbatim substrings, a dictionary / reference table for entity existence, a regex for identifiers.
-
-If the fit is weak on any of those, the pattern will over-engineer the problem. If all five hold, the pattern is worth stealing wholesale.
-
-### The five design commitments
-
-Every item in this section is essential — skip any and the pattern breaks.
-
-**1. Division of labor: LLM proposes, code verifies, human resolves. [essential]**
-
-The LLM only reads prose and scattered tables and returns a structured record. Every downstream check is deterministic Python. The LLM is never the arbiter of "did we get this right" — audits and cross-checks are. Everything you would normally ask the model to "double-check" becomes a code path with a test.
-
-**2. Grounding audit as the quality gate — two categories, one call. [essential]**
-
-Every extracted string is audited against the source text before the record is trusted. Split fields into two rule categories:
-
-- **Strict fields** — identifiers, paths, table names, well-formed patterns. Must appear **verbatim** in the (unicode-normalized) source. Any failure → the whole record is `FAIL`, nothing downstream sees it.
-- **Advisory fields** — prose rules, notes, descriptions. Must overlap the source at a fixed token-overlap threshold (start at 0.75 with tokens ≥ 4 chars; **calibrate against live model output on real documents**, never against synthetic mocks). Any flag → status `PASS_WITH_FLAGS`, with structural write-back context (which record, which field, original value) so a reviewer can edit in place.
-
-Run both paths in one function call; return counts (`strict_checked`, `strict_failed`, `advisory_checked`, `advisory_flagged`) alongside the flags. Emit them as a provenance banner on the record. Never relax a threshold to make a run pass — the fix is a better extraction, a better document, or a reviewer edit.
-
-**3. Three statuses, three ambiguity kinds, three resolution types. Enforce the vocabularies at the schema level. [essential]**
-
-Statuses (strict priority):
-
-| Status              | Triggered by |
-|---------------------|--------------|
-| `FAIL`              | Structural validation failure or any strict-grounding failure. No record emitted downstream. |
-| `PASS_WITH_FLAGS`   | Any ambiguity or advisory-grounding flag. Record emitted; review UI receives gated items. |
-| `PASS`              | Clean. Record emitted, empty gate list. |
-
-Ambiguity kinds — pick a small closed set that covers your problem, and prohibit an "other" escape. In the FRD case: `attribution` (same value applies to multiple entities), `disagreement` (regex-derived vs model-derived differ on a strict field), `advisory_grounding` (prose failed advisory audit). Yours may be different — but the *closed-set* discipline is not.
-
-Resolution types — pick the resolution **structurally** from `has_candidates`, not from `kind`. Three suffice: `candidate_pick`, `none_of_these`, `free_text`. Reject the malformed combinations at both client and server (a `free_text` on a candidate-having ambiguity is a 4xx). This is what stops the review UI from silently accepting resolutions that render nothing downstream.
-
-**4. Deterministic seams the LLM should not own. [essential]**
-
-Any fact a regex, a lookup, or a dictionary cross-check can compute more reliably than the LLM should be owned by code, not the model — but the model still gets to see and disagree:
-
-- If a strict identifier can be regex-lifted from the source, do it. If the model returned `null`, fill from the regex. If the model returned a different value, **keep the model's value and gate a `disagreement`** carrying both candidates. Do not silently overwrite.
-- If a per-entity attribute can be derived from a reference dictionary (an authoritative list of columns/entities the record must reference), the derivation is authoritative when it can prove itself, and gated when it cannot.
-- Reserve enrichment for the seams. Never clobber a non-empty model-supplied field with a heuristic.
-
-The **precedence rule** at the resolution step is: human resolution first (authoritative, never re-decided), then the deterministic cross-check on whatever remains. Every non-application of a human resolution produces an audit entry (`applied` / `not_applied` with reason / `stale` if the candidate is no longer valid).
-
-**5. The confirm-and-clear-on-zero-removals rule (the D2 fix). [essential]**
-
-If your dictionary cross-check "resolves" an ambiguity by *removing* misattributed items, a **better** extraction produces **fewer removals** — and historically leaves the flag gated forever. The rule: when the ambiguity's candidate set equals the dictionary-confirmed set, clear the flag even at zero removals. Skip this and you get "correct extraction → worse final status" the first time the model gets sharper. Regression-test the three shapes: clear at zero removals when confirmed, stay gated when inconclusive, partially clear on partial overlap.
-
-### The extraction transport — request shape **[essential]**
-
-- **One prompt in, one JSON object out.** System prompt frames the task tersely and forbids invention of identifiers, table names, schedules, or rules. User prompt = `instruction + JSON-schema-of-the-output + full source content`. No tool use, no multi-turn, no subagents. Extended-thinking / reasoning modes may be worth trying, but must be introduced only if they measurably improve grounding on live prose — not because they are available.
-- **Client-side validation is authoritative, with `extra="forbid"` semantics everywhere (root and every nested container).** Unknown keys are an error, not a warning.
-- **No repair loop.** A schema-invalid response raises immediately, naming the offending field. Silently re-asking would mask the exact model-quality regression you need to see.
-- **Truncation is failure.** A `max_tokens` stop reason (or a refusal) is a hard error. Do not attempt to parse truncated JSON. Set the output-token ceiling generously.
-- **Streaming only to avoid HTTP timeouts** at large output-token ceilings; the response is consumed after completion. If your platform doesn't need streaming at your ceiling, drop it.
-- **Provider gate raises on unrecognized values.** Providing two providers at once (e.g. `mock` + `live`) is a startup error, not a preference.
-
-### If server-side structured output ("grammar too large") fails **[essential]**
-
-Provider-native structured output can fail deterministically on schemas with many optional properties, deeply nested nullable unions, and `additionalProperties=false` throughout. That was our D1 constraint on Anthropic's `messages.parse`. Two rules:
-
-1. Try it first. If it works on your schema, use it and drop the schema-in-prompt scaffolding.
-2. If it fails, **fall back to schema-in-prompt without hesitation. Do not simplify the schema shape to satisfy a decoder** — the schema is your contract with downstream consumers.
-
-### Mock mode discipline **[essential]**
-
-Build a mock provider path — a hand-authored fixture record per source document, keyed by the same `doc_id` the live path would use. Use it to exercise everything downstream of extraction (audits, gating, review UI, rendering) without an LLM. Two rules:
-
-1. **Local-only.** Guarded off in the workspace runtime; a real production run can never silently skip the model call.
-2. **Not a benchmark.** Mocks that copy facts back from the source always ground. They prove plumbing; they say nothing about extraction quality. Baseline any grounding threshold or eval target on a live run against real documents.
-
-### Non-determinism is a demo-choreography concern **[essential]**
-
-Same document, same model, same threshold → different gate shapes across runs, at identical extraction quality and identical downstream eval scores. This is inherent to the pattern (LLM sampling meets a strict audit), not a bug. Consequences for anyone shipping this to a client:
-
-- **Do not choreograph a demo on a specific gate count.** Any live run must render its actual state honestly.
-- **Ship replay fixtures.** A tracked run set that reproduces the flag-then-confirm narrative in one click, offline, with no API key. Zero-cost fallback if the live run's shape doesn't cooperate on demo day.
-- **A zero-gate run is not a boring run.** Reframe: "the agent flags what it isn't sure of; the dictionary auto-confirms what the data proves; anything else waits for a human. Zero means nothing needed a human this time — which is itself the point."
-
-### Review-app non-negotiables **[essential]**
-
-- Composite key `<doc_id>::<ambiguity_id>` in client-side state so nothing leaks between documents open in the same session.
-- Strict `doc_id` matching on all detail/workbook endpoints. **No fuzzy fallback to a similarly-named document** — this is the class of bug that ships wrong data to production.
-- Empty vs unreadable are different at the API layer: a successful listing with no rows is `200 + []`; an unreadable source is `5xx`. The client uses this to auto-switch tabs on first load without hiding real errors.
-- The `ambiguity_id` scheme (a stable hash of `kind + normalized-text + context`) is the join key for saved reviewer decisions. Migrating the algorithm requires migrating every persisted decision — freeze it early.
-
-### Acceptance criteria — treat the test suite as your spec **[essential]**
-
-The strongest specification of "correct behavior" for this pattern is the test suite. This repo's own "Acceptance Criteria" section above groups the tests by theme (grounding & enrichment, gating vocabulary, model contract, label contract, LLM extraction transport, render/attribution, review-app backend, end-to-end demo scenarios). A rebuild is not done until an equivalent suite is green.
-
-### Porting to a new platform — this pattern is being re-targeted right now *(incidental — swap freely)*
-
-This exact pattern is currently being ported from Python-notebooks + Anthropic-SDK + FastAPI-review-app to **Databricks-native** (Genie Code + Lakeflow Declarative Pipelines + Unity Catalog + Model Serving). This repo's own "Target Architecture on Databricks Genie Code" section above is the target-architecture description for that port; "Anthropic / Claude-Specific Adaptation Notes" is the list of Anthropic-specific rework items (client, model id, secret scope, error taxonomy, retry policy, streaming, structured-outputs re-probe on the new endpoint, thinking modes, provider-gate values, subprocess env injection, `pyproject.toml`, docs). It is a working example of what "port this pattern to a new platform" actually costs — go read it before you assume swapping providers is a one-liner. What survives the port is the pipeline shape, the vocabularies, the audit design, and the HITL model. What changes is transport and identity.
+Resolutions are **upserted by ambiguity id** in place on the contract artifact. On the next render, the resolution applies first (authoritative); the dictionary cross-check runs only on what remains. Every application records an audit entry: `applied` / `not_applied(reason)` / `stale`.
+
+**Non-negotiables:**
+- Structural-pick-required policy enforced on **both** client and server — reject a malformed submission (e.g. `free_text` on a candidate-having ambiguity) with a 4xx, never silently accept-and-drop.
+- **Strict document-id matching** on every detail/download endpoint — no fuzzy fallback to a similarly-named document. This is the exact bug class that ships the wrong data to production.
+- **Composite key `<doc_id>::<ambiguity_id>`** in any client-side state, so state never leaks between two documents open in the same session.
+- **Empty vs. unreadable are different HTTP outcomes.** A successful listing with zero rows is 200+`[]`; an unreadable source is 5xx. The reviewer UI relies on this to switch views automatically on first load without ever masking a real error as "just empty."
+
+## 11. What the picker/UI should show
+
+- A document already paired with an **approved** reference in the corpus index presents that approved artifact (download + library link) rather than inviting a fresh (billed) generation — regeneration is available but is a deliberate two-step action, gated the same way a first-time generation is, and any such re-run is automatically eval'd against the existing approved artifact, which is never overwritten by the automatic path.
+- An **unpaired** document is presented for generation.
+- **A revised document whose paired reference predates the revision** (detectable via the content-hash/change-token the sync already tracks) should be surfaced distinctly, not silently presented as if the pairing were still current — this is the one gap the reference implementation had not yet closed at time of writing; a rebuild has no excuse to reproduce that gap since the fingerprint to detect it already exists in the index.
+- If you introduce **any policy that keeps a paired document generatable regardless of its pairing state** (e.g., a small, explicit allow-list for a specific event), keep it: (a) explicit and narrowly scoped (by document id, not a global toggle), (b) visibly time-boxed if it's temporary, and (c) removed or expired deliberately rather than left as silent permanent behavior — do not let a one-time exception become an undocumented permanent rule. Record such a decision in your equivalent of this repo's CLAUDE.md, not only in code.
+
+## 12. Governance and audit
+
+- **Every governed action has a named actor and an audit event, or it does not happen.** Governed actions: start a run, record a resolution, re-render, download a workbook (the hand-off boundary — this is where a generated STTM leaves the governed system, since the pipeline never writes back to the library), start a sync, upload. Identity comes from whatever the hosting platform injects for an authenticated caller (this reference implementation: reverse-proxy-forwarded headers); in a networked/production deployment, a request missing that identity is a hard 401 (an explicit operator-only escape hatch may record actor `unknown`, never silently proceed as if authenticated); a local/dev mode may record the OS user instead.
+- **Audit events are append-only, written before the action, and a failed write blocks the action.** One record per event (this reference implementation: one JSON file per event in an artifact-store "events" path, mirrored locally). Never log document content in an event — only who, what action, on which id, when.
+- **Provenance is hashes and ids, never file names.** A document's content hash should match everywhere it's referenced: the ingest record, the corpus index, the run manifest, the extraction-metadata sidecar. A rendered workbook's content hash should match between the run record and the download event.
+- **The run log is append + schema-evolve, never overwrite** — it is the record of every render, including who triggered it, by what path (interactive/job/manual), with what provider/model, and the input/output document hashes.
+- **Classification/tagging is a separate, hand-run step — never a pipeline side effect.** Whatever you use to classify data sensitivity and register ownership (this reference implementation: Unity Catalog tags feeding a data-governance catalog) should be applied by a deliberate, privileged, idempotent job — not embedded in the four pipeline stages.
+- **Access model: may-run implies may-read, one tier.** Whoever is allowed to trigger the pipeline is allowed to read its inputs/outputs; there is no separate "can view but not run" tier. Reserve write/manage-level grants for an owner/steward role distinct from the run-capable group.
+- **Leave every non-technical governance decision recorded as a decision, not resolved in code**: data ownership/stewardship, the model vendor's data-handling posture, retention period, and exactly who gets the run-capable grant. A rebuild that invents defaults for these silently is doing someone else's job badly; write down what was decided and by whom.
+
+## 13. Config surface
+
+Parameterize, never hardcode, at minimum: the document-store/artifact-store locations (raw FRDs, reference workbooks, output), the three table-store names, the model identifier, the output-token ceiling, retry count (transient errors only), the provider selector (raising on an unrecognized value), a mock/replay toggle (hard-disabled outside local/dev), and the app's local-vs-networked mode switch (identity/audit behavior differs by mode, per §12). If your runtime supports two different configuration surfaces (e.g., a notebook-widget system and environment variables), give every knob both, with one deterministically overriding the other, and use the **same underlying name** across surfaces unless a genuine constraint forces a mismatch — and if it does, document the mapping explicitly rather than leaving two names to drift apart silently.
+
+## 14. Data handling discipline
+
+If the source documents carry real client content: never let real documents (raw or derived) live in the source repository — treat any anonymized fixture material as something produced through one deliberate, mandated anonymization tool path, not ad hoc redaction, and keep working/generated artifacts in the artifact store (or a gitignored local scratch path) rather than tracked in version control. A synthetic-fixture generator that produces structurally valid but content-free documents is worth building early — it lets the full pipeline run offline, in CI, and in a fresh environment with zero client material and zero network access.
+
+## 15. Acceptance criteria — treat a test suite as the real spec
+
+A rebuild is not done until an equivalent suite is green, grouped by theme:
+
+- **Grounding & enrichment.** Unicode/markdown normalization round-trips (NFKC, smart-quote collapse, code-fence stripping); short tokens don't distort advisory overlap; a verbatim value passes strict grounding and a hallucinated one fails; advisory overlap right at the 0.75 boundary in both directions; empty values skip the audit; one grounding call returns both strict and advisory results plus write-back context; enrichment fills only on model-null (project id) or model-empty (lobs), never clobbers.
+- **Gating vocabulary.** Clean spec → `PASS`, empty gate list. Schema-invalid → `FAIL`, no contract emitted. Strict-ungrounded → `FAIL`. Attribution/advisory conditions → `PASS_WITH_FLAGS`. Every ambiguity validates against its schema; an unknown `kind` is rejected. The provenance banner's counts match the actual audit run.
+- **Model contract.** Round-trip serialization of every canonical fixture; every object rejects unknown keys at every nesting level; a `GatedAmbiguity` accepts exactly the three kinds; a `HumanResolution` accepts exactly the three resolution types; empty/absent fields are legal first-class states, not errors.
+- **Label contract.** Present, parses, carries a version; every declared convention is actually used by the parser; a missing file or missing version raises a specific error, never a silent fallback.
+- **Extraction transport.** Prompt embeds the schema and the document body; parse succeeds on plain and fenced JSON, fails on extra fields and invalid JSON; a fake-client happy path checks model id, output ceiling, and system-prompt passthrough are all wired correctly; a truncation or refusal stop reason skips parsing and raises; a validation failure propagates naming the offending field.
+- **Render attribution.** The D2 confirm-and-clear case (zero removals, candidates == confirmed set → cleared); the inconclusive case (stays gated); the partial-overlap case (partially cleared).
+- **Review-app backend.** Concurrent-run rejection (409); a failed stage marks the run failed and surfaces why; missing credentials block a live run; path containment (no traversal, no touching curated storage); upload validation (type, size); strict-id lookups reject fuzzy matches; a results payload strips internal-only gate metadata before it reaches a client.
+- **End-to-end scenarios.** A live run on a real-shaped document produces `PASS` or `PASS_WITH_FLAGS` with no strict failures and no hallucinated identifiers, at an eval score near your calibrated baseline; a replay run (no live model call, tracked fixtures) reproduces byte-for-byte; a mock run completes and is understood by everyone involved to prove plumbing only.
+
+## 16. Do-not list (condensed)
+
+- Do not let the LLM self-certify — every claim it makes gets audited by code.
+- Do not add a repair/retry loop on a validation failure — only on transient transport errors.
+- Do not relax a grounding threshold, exclude a field, or accept invented prose to make a run pass.
+- Do not skip the confirm-and-clear-at-zero-removals check — it is the one case where a *better* model output would otherwise produce a *worse* final status.
+- Do not add a write path back to the source document library "for convenience" — the whole permission and audit model assumes read-only.
+- Do not put a schedule on the sync or the pipeline job unless you also build a review gate for an unattended run — until then, start-up + manual trigger is the correct trigger set, not a placeholder for "should add a cron later."
+- Do not move classification/tagging into the pipeline stages — it is a separate, hand-run, privileged step.
+- Do not silently default on ambiguous configuration (two providers, missing version, missing secret) — raise, naming the remedy.
+- Do not fuzzy-match a document id anywhere a specific document's data could leak into another document's view.
+- Do not treat a mock/replay run's grounding success as a quality signal.
