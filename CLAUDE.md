@@ -128,7 +128,13 @@ src/frdsttm/            models.py (FrdIngestionSpec, GatedAmbiguity,
                         exemplars.py (retrieved-exemplar prompt blocks)
 context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
                         ACFC-style deck; built by scripts/build_architecture_deck.py
-                        from scripts/deck_assets/) and
+                        from scripts/deck_assets/),
+                        FRD_to_STTM_Agent_System_Architecture.pptx (ONE slide,
+                        dark Palantir/Blueprint-style system architecture for
+                        engineers + execs; built by
+                        scripts/build_architecture_onepager.py — regenerate it
+                        there, never edit the .pptx by hand; python-pptx +
+                        pillow are deck-building deps, not runtime), and
                         FRD_to_STTM_Agent_Screens.html (self-contained
                         walkthrough of every review-app screen, captured
                         2026-08-22 against a synthetic corpus). No client

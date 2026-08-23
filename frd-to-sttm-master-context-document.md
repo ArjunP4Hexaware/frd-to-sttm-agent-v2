@@ -419,5 +419,6 @@ work is fully done — inflates local per-stage wall clock only.
 | Live-run record + transport defects | `docs/LIVE_E2E_2026-08-07.md` |
 | Demo choreography | `docs/DEMO_RUNBOOK.md` (predates the SharePoint-first surface — verify against §5) |
 | App deploy prerequisites | `app.yaml` (repo root) comments, `CLAUDE.md` "Deploy blockers", `review_app_react/README.md` "Databricks Apps deployment" |
-| What the agent looks like to a user | `context/FRD_to_STTM_Agent_Screens.html` (every screen, 2026-08-22) and `context/FRD_to_STTM_Agent_Architecture.pptx` (the two-slide deck; `scripts/build_architecture_deck.py`) |
+| What the agent looks like to a user | `context/FRD_to_STTM_Agent_Screens.html` (every screen, 2026-08-22) and `context/FRD_to_STTM_Agent_Architecture.pptx` (the two-slide ACFC-style deck; `scripts/build_architecture_deck.py`) |
+| How the agent actually works, on one slide | `context/FRD_to_STTM_Agent_System_Architecture.pptx` (dark Blueprint-palette system diagram, 2026-08-22; regenerate with `scripts/build_architecture_onepager.py`) |
 | Program-wide context | `../amerihealth-agents/amerihealth-project-master-context-document.md` — umbrella folder on the original Mac ONLY (this repo sits beside it since 2026-08-22); not in git |
