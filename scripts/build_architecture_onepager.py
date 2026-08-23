@@ -62,14 +62,14 @@ OUT_DEFAULT = REPO / "context" / "FRD_to_STTM_Agent_System_Architecture.pptx"
 # enough for text on white. Blueprint shades throughout, except Claude orange.
 CANVAS = "ffffff"
 CARD, RAISED, HAIR, HAIR2 = "f6f7f9", "edeff2", "d3d8de", "c5cbd3"
-T_MUTED, T_SEC, T_PRI = "738091", "404854", "1c2127"
+T_MUTED, T_SEC, T_PRI = "5f6b7c", "2f343c", "1c2127"
 INK = "111418"
 LLM, LLM_DIM, LLM_TINT = "d97757", "a04d2c", "fbeee8"   # Claude orange — the one model call
 CODE, CODE_DIM = "00a396", "007067"                     # deterministic code
 HUMAN, HUMAN_DIM = "d1980b", "866103"                   # a person
 EXT, EXT_DIM = "7961db", "5642a6"                       # external system
 
-SANS, MONO = "Calibri", "Courier New"
+SANS, MONO = "Calibri", "Consolas"   # Courier New renders too thin in PowerPoint (screenshot 2026-08-22 9:03 PM)
 W_IN, H_IN = 13.333, 7.5
 SEED = 20260822
 
@@ -388,13 +388,13 @@ def add_image(slide, path, x, y, w, h):
     slide.shapes.add_picture(str(path), Inches(x + (w - pw) / 2), Inches(y + (h - ph) / 2), Inches(pw), Inches(ph))
 
 
-CHIP_CHAR, CHIP_PAD = 0.092, 0.36   # Courier New 8.5 pt + tracking, measured in QA
+CHIP_CHAR, CHIP_PAD = 0.086, 0.4    # Calibri Bold 8.5 pt caps + 1 pt tracking, measured in QA
 
 
 def chip(slide, x, y, text, *, color=T_SEC, border=HAIR2, size=8.5):
     w = CHIP_CHAR * len(text) + CHIP_PAD
-    add_rect(slide, x, y, w, 0.3, fill=None, line=border, line_w=0.75, radius=0.5)
-    add_text(slide, x, y + 0.07, w, 0.2, [(text.upper(), {})], size=size, color=color, font=MONO,
+    add_rect(slide, x, y, w, 0.3, fill=None, line=border, line_w=1.0, radius=0.5)
+    add_text(slide, x, y + 0.07, w, 0.2, [(text.upper(), {})], size=size, color=color, font=SANS, bold=True,
              spacing=1.0, align=PP_ALIGN.CENTER)
     return x + w + 0.12
 
@@ -425,7 +425,7 @@ def build(out: Path) -> Path:
     # ----- header ------------------------------------------------------------
     add_text(s, 0.6, 0.46, 9, 0.24,
              [("HEXAWARE  ·  AMERIHEALTH CARITAS  ·  AI-IN-ENGINEERING  ·  AGENT 01 / 03", {})],
-             size=9, color=T_MUTED, font=MONO, spacing=1.6)
+             size=9, color=T_MUTED, font=SANS, bold=True, spacing=1.4)
     add_text(s, 0.6, 0.72, 9.5, 0.6, [("FRD → STTM Agent", {"color": INK, "bold": True, "size": 30}),
                                       ("    system architecture", {"color": T_MUTED, "size": 16})], size=30)
     add_text(s, 0.6, 1.28, 12.1, 0.3,
@@ -456,7 +456,7 @@ def build(out: Path) -> Path:
     for x, w, acc, icon, idx, title, cap, thumb in nodes:
         add_rect(s, x, TOP, w, NH, fill=CARD, line=HAIR, radius=0.035)
         add_dot(s, x + 0.26, TOP + 0.3, 0.11, acc)
-        add_text(s, x + 0.44, TOP + 0.19, 1.0, 0.24, [(idx, {})], size=9, color=DIM[acc], font=MONO, spacing=1.4)
+        add_text(s, x + 0.44, TOP + 0.19, 1.0, 0.24, [(idx, {})], size=9, color=DIM[acc], font=MONO, bold=True, spacing=1.2)
         add_text(s, x + 0.24, TOP + 0.46, w - 0.4, 0.34, [(title, {})], size=14.5, color=T_PRI, bold=True)
         if icon:
             add_icon(s, icon, x + w - 0.52, TOP + 0.16, 0.3)
@@ -478,7 +478,7 @@ def build(out: Path) -> Path:
         add_rect(s, x, sy, sw, 0.5, fill=(LLM_TINT if is_llm else RAISED), line=(LLM if is_llm else HAIR2),
                  line_w=(1.25 if is_llm else 0.75), radius=0.1)
         add_text(s, x, sy + 0.07, sw, 0.18, [(idx, {})], size=8.5, color=(LLM_DIM if is_llm else CODE_DIM), font=MONO,
-                 align=PP_ALIGN.CENTER)
+                 bold=True, align=PP_ALIGN.CENTER)
         add_text(s, x, sy + 0.24, sw, 0.22, [(name, {})], size=9.5, color=(LLM_DIM if is_llm else T_PRI), bold=is_llm,
                  align=PP_ALIGN.CENTER)
         if i < 3:
@@ -490,7 +490,7 @@ def build(out: Path) -> Path:
     # connectors between nodes
     mid = TOP + 0.6
     for i in range(4):
-        add_line(s, nodes[i][0] + nodes[i][1] + 0.02, mid, nodes[i + 1][0] - 0.02, mid, color=T_MUTED, width=1.0, head=True)
+        add_line(s, nodes[i][0] + nodes[i][1] + 0.02, mid, nodes[i + 1][0] - 0.02, mid, color=T_SEC, width=1.25, head=True)
 
     # the human return loop
     ly = TOP + NH + 0.26
@@ -500,7 +500,7 @@ def build(out: Path) -> Path:
     add_line(s, sx, ly, sx, TOP + NH + 0.02, color=HUMAN, width=1.25, dash="dash", head=True)
     add_text(s, 1.2, ly + 0.08, 9.6, 0.26,
              [("the reviewer uploads the approved STTM   →   the next sync pairs it   →   it becomes a template", {})],
-             size=9, color=HUMAN_DIM, font=MONO, align=PP_ALIGN.CENTER)
+             size=9.5, color=HUMAN_DIM, font=SANS, bold=True, align=PP_ALIGN.CENTER)
 
     # ----- footer --------------------------------------------------------------
     FY = 6.3
@@ -513,7 +513,7 @@ def build(out: Path) -> Path:
              [("Grounding checks, gate status, pairing verdicts, template choice and eval scores are computed in code, "
                "never by the model. Fail loud — no silent mock, no silent live, no stale copies.", {})], size=10, color=T_SEC)
     add_text(s, W_IN - 5.4, FY + 0.2, 4.8, 0.22,
-             [("staging · 2026-08-22 · verified offline · live deploy pending", {})], size=8.5, color=T_MUTED, font=MONO,
+             [("staging · 2026-08-22 · verified offline · live deploy pending", {})], size=8.5, color=T_MUTED, font=SANS,
              align=PP_ALIGN.RIGHT)
 
     out.parent.mkdir(parents=True, exist_ok=True)

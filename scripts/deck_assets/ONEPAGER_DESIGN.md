@@ -64,9 +64,9 @@ sharpening what is already there, never adding another element.
 | Human — shape / text | `d1980b` / `866103` | `f0b726` / `866103` |
 | External system — shape / text | `7961db` / `5642a6` | `9881f3` / `634dbf` |
 | Icons | `scripts/deck_assets/icons_light` (`404854`) | `icons_dark` (`c5cbd3`) |
-| Headings / body / identifiers | Calibri Bold / Calibri / Courier New ≥ 8.5 pt | same |
+| Headings / body / identifiers / small labels | Calibri Bold / Calibri / **Consolas Bold** (stage + node ids) / **Calibri Bold caps, tracked** (chips, header line, loop caption) | Courier New for ids + labels |
 
-Rule that made the light version work: every accent has a *shape* shade
+Two rules that made the light version work: (1) thin monospace (Courier New) at 8–9 pt renders nearly invisible in PowerPoint on white — PowerPoint screenshot 2026-08-22 9:03 PM — so small labels are bold Calibri caps and ids bold Consolas, and the secondary/muted text shades were darkened to `2f343c` / `5f6b7c`; (2) every accent has a *shape* shade
 (dots, borders, dashed loop) and a *text* shade two steps darker, because
 the bright Blueprint accents that glow on black fail contrast on white.
 
