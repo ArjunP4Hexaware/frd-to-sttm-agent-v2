@@ -12,7 +12,8 @@
 # (run-scoped tables/volumes are tagged by prefix). Idempotent.
 #
 #   databricks bundle run frd_sttm_uc_governance -t <target> \
-#     --params data_owner="<name or group>",data_steward="<name>",retention_policy="<policy>"
+#     --params data_owner="<name or group>",data_steward="<name>",retention_policy="<policy>",\
+#              reviewer_group="<Entra group of the client's BSAs>",app_name="<deployed app name>"
 #
 # The defaults are PLACEHOLDERS that read as placeholders ("UNASSIGNED — set
 # data_owner") — never a plausible-looking guess.
@@ -39,6 +40,15 @@ resources:
           default: "undecided — see docs/AI_GOVERNANCE.md"
         - name: sensitivity
           default: confidential
+        # Access model (decided 2026-08-23): ONE group — the client's BSAs, an
+        # Entra ID group synced into Databricks — may run the agent, and it is
+        # exactly the group that may READ the agent's data. Blank = grants
+        # skipped (never a guessed group). app_name = the deployed App to
+        # grant CAN USE on; blank = the CLI command is printed instead.
+        - name: reviewer_group
+          default: ""
+        - name: app_name
+          default: ""
 
       email_notifications:
         on_failure:
@@ -57,3 +67,5 @@ resources:
               data_steward: "{{job.parameters.data_steward}}"
               retention_policy: "{{job.parameters.retention_policy}}"
               sensitivity: "{{job.parameters.sensitivity}}"
+              reviewer_group: "{{job.parameters.reviewer_group}}"
+              app_name: "{{job.parameters.app_name}}"

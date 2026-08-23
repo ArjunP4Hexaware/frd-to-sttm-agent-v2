@@ -490,3 +490,34 @@ def test_uc_governance_plan_covers_every_asset_and_reads_as_placeholders(monkeyp
     assert any("cat.sch.sttm_audit" in s and s.startswith("ALTER VOLUME") for s in scoped)  # always present
     out = capsys.readouterr().out
     assert "LOCAL MODE" in out and "nothing executed" in out
+
+
+def test_uc_governance_access_model_grants_read_only_to_one_group(monkeypatch):
+    """Access model (2026-08-23): the group that may RUN == the group that may
+    READ. Grants are USE + READ VOLUME only, on the read volumes that exist;
+    never WRITE/MANAGE, never demo_raw; blank group => no grants at all."""
+    import runpy
+    monkeypatch.setenv("CATALOG", "cat")
+    monkeypatch.setenv("SCHEMA", "sch")
+    monkeypatch.setenv("REVIEWER_GROUP", "client-bsa group")
+    monkeypatch.setenv("APP_NAME", "frd-sttm-review")
+    ns = runpy.run_path(str(Path(__file__).resolve().parent.parent / "notebooks" / "90_uc_governance.py"))
+    grants = [s for s in ns["plan"]() if s.startswith("GRANT")]
+    assert grants[0] == "GRANT USE CATALOG ON CATALOG cat TO `client-bsa group`"
+    assert grants[1] == "GRANT USE SCHEMA ON SCHEMA cat.sch TO `client-bsa group`"
+    read = [s for s in grants if "READ VOLUME" in s]
+    assert {s.split("VOLUME cat.sch.")[1].split(" ")[0] for s in read} == {
+        "frd_raw", "sttm_reference", "sttm_out_app", "sttm_audit"}
+    text = "\n".join(grants)
+    assert "WRITE VOLUME" not in text and "MANAGE" not in text and "demo_raw" not in text
+    # grants come LAST (after the objects exist / are tagged) and only on present volumes
+    full = ns["plan"](volumes={"frd_raw"})
+    assert all(s.startswith("GRANT") for s in full[-3:]) and full[-1].endswith("cat.sch.sttm_audit TO `client-bsa group`")
+    assert not any("sttm_reference" in s and s.startswith("GRANT") for s in full)
+    # blank group => nothing granted, never a guess
+    assert not any(s.startswith("GRANT") for s in ns["plan"](reviewer_group=""))
+    assert ns["access_statements"]("", {"frd_raw"}) == []
+    # the App CAN USE side: SDK path guarded, CLI fallback names the group + app
+    cli = ns["app_permission_cli"]("client-bsa group", "frd-sttm-review")
+    assert "update-permissions frd-sttm-review" in cli and '"CAN_USE"' in cli and "client-bsa group" in cli
+    assert ns["grant_app_can_use"]("", "x").startswith("app permission: skipped")

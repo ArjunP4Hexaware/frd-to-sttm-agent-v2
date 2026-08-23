@@ -3,7 +3,7 @@
     .venv/bin/pip install python-pptx pillow     # deck-building only, not runtime deps
     .venv/bin/python scripts/build_architecture_onepager.py [output.pptx]
 
-Default output: context/FRD_to_STTM_Agent_System_Architecture.pptx
+Default output: context/FRD-to-STTM-Agent-Solution-Architecture.pptx
 
 ONE slide, TOP-DOWN since v5 (technology layers with official logos — SharePoint /
 Word / Excel / Entra ID → Databricks: Unity Catalog · Jobs (Claude on 02) · Apps
@@ -58,7 +58,7 @@ REPO = Path(__file__).resolve().parent.parent
 ASSETS = REPO / "scripts" / "deck_assets"
 ICONS = ASSETS / "icons_light"
 GEN = ASSETS / "onepager_generated"
-OUT_DEFAULT = REPO / "context" / "FRD_to_STTM_Agent_System_Architecture.pptx"
+OUT_DEFAULT = REPO / "context" / "FRD-to-STTM-Agent-Solution-Architecture.pptx"
 
 # --- Signal Light theme (see ONEPAGER_DESIGN.md; white canvas since v4) --------
 # Each accent has a SHAPE shade (dots, borders, lines) and a DIM shade dark

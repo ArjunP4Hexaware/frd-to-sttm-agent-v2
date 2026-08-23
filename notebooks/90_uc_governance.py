@@ -15,6 +15,18 @@
 # MAGIC 3. `SET TAGS` on every known table + volume, and on the document-text
 # MAGIC    column of the documents tables — owner, steward, sensitivity, data
 # MAGIC    class, source system, content kind, retention policy.
+# MAGIC 4. **Access model (decided 2026-08-23, Arjun):** the people who may RUN
+# MAGIC    the agent are exactly the people who may READ the data it touches —
+# MAGIC    one group (the client's BSAs, an Entra ID group synced into
+# MAGIC    Databricks). With `reviewer_group` set: `GRANT USE CATALOG / USE
+# MAGIC    SCHEMA / READ VOLUME` on the read volumes (frd_raw, sttm_reference,
+# MAGIC    sttm_out_app, the audit volume) to that group, and — with `app_name`
+# MAGIC    set — `CAN USE` on the Databricks App to the same group (Permissions
+# MAGIC    API via the SDK; falls back to printing the CLI command). Nothing
+# MAGIC    else: no WRITE VOLUME, no MANAGE (those stay with the data owner /
+# MAGIC    steward), no secret scopes, no jobs — the app's service principal
+# MAGIC    does the work on the user's behalf. View = run: there is no second
+# MAGIC    tier. Blank `reviewer_group` = grants skipped, never a guessed group.
 # MAGIC
 # MAGIC Run-scoped tables/volumes the review app creates (`frd_documents_demo_*`,
 # MAGIC `sttm_out_app/<suffix>`) are tagged by PREFIX — run this after a batch
@@ -59,8 +71,18 @@ RETENTION_POLICY = _param("retention_policy", "undecided — see docs/AI_GOVERNA
 # PHI flag column). They are not expected to CONTAIN member data, but the tag
 # says "treat as if it might" until a data-handling review says otherwise.
 SENSITIVITY = _param("sensitivity", "confidential")
+# Access model: the ONE group that may run the agent == may read its data.
+# Blank = skip the grants (no guessed group name). `app_name` = the deployed
+# Databricks App to grant CAN USE on (blank = print the CLI command instead).
+REVIEWER_GROUP = _param("reviewer_group", "").strip()
+APP_NAME = _param("app_name", "").strip()
 
 FQ = f"{CATALOG}.{SCHEMA}"
+
+# Volumes the reviewer group may READ: inputs, past runs, the audit trail.
+# demo_raw is deliberately absent (per-run staging the app's SP writes), as
+# is any WRITE VOLUME / MANAGE — those stay with owner/steward.
+READ_VOLUMES = ("frd_raw", "sttm_reference", "sttm_out_app")   # + AUDIT_VOLUME, added in access_statements
 
 # --------------------------------------------------------------------------- #
 # The asset inventory — what the agent reads and writes, and what each IS.
@@ -187,11 +209,42 @@ def base_of(table: str) -> str | None:
     return None
 
 
-def plan(tables: list[str] | None = None, volumes: set[str] | None = None) -> list[str]:
+def _principal(name: str) -> str:
+    # Group names may contain spaces / hyphens / '@'; backticks are the UC quoting.
+    return "`" + name.replace("`", "``") + "`"
+
+
+def access_statements(group: str, volumes: set[str]) -> list[str]:
+    """The reviewer group's grants: USE on catalog + schema, READ VOLUME on
+    each read volume that exists. READ only — the app's service principal
+    holds the write side. Empty group -> no statements."""
+    if not group:
+        return []
+    g = _principal(group)
+    stmts = [f"GRANT USE CATALOG ON CATALOG {CATALOG} TO {g}",
+             f"GRANT USE SCHEMA ON SCHEMA {FQ} TO {g}"]
+    for v in (*READ_VOLUMES, AUDIT_VOLUME):
+        if v in volumes:
+            stmts.append(f"GRANT READ VOLUME ON VOLUME {FQ}.{v} TO {g}")
+    return stmts
+
+
+def app_permission_cli(group: str, app_name: str) -> str:
+    """The equivalent CLI for CAN USE on the App (what the SDK call below
+    does) — printed when app_name is blank or the SDK call is unavailable."""
+    return (f"databricks apps update-permissions {app_name or '<app-name>'} --json "
+            f"'{{\"access_control_list\": [{{\"group_name\": \"{group}\", "
+            f"\"permission_level\": \"CAN_USE\"}}]}}'")
+
+
+def plan(tables: list[str] | None = None, volumes: set[str] | None = None,
+         reviewer_group: str | None = None) -> list[str]:
     """Every statement, in order, for the objects that EXIST (`tables` /
     `volumes` as listed in the workspace; None = assume the curated set).
     Pure; tested offline. The audit volume is always created first, so it is
-    always present to tag."""
+    always present to tag and to grant. `reviewer_group` (None = the widget)
+    appends the access-model grants last."""
+    group = REVIEWER_GROUP if reviewer_group is None else reviewer_group
     stmts = [f"CREATE VOLUME IF NOT EXISTS {FQ}.{AUDIT_VOLUME}"]
     present = set(volumes) if volumes is not None else set(VOLUMES)
     present.add(AUDIT_VOLUME)
@@ -202,7 +255,30 @@ def plan(tables: list[str] | None = None, volumes: set[str] | None = None) -> li
         base = base_of(t)
         if base is not None:
             stmts += table_statements(t, base)
+    stmts += access_statements(group, present)
     return stmts
+
+
+def grant_app_can_use(group: str, app_name: str) -> str:
+    """CAN USE on the Databricks App for the reviewer group, via the
+    Permissions API (adds; never replaces the existing ACL). Returns a
+    one-line outcome. Any failure returns the CLI to run by hand instead of
+    raising — the SQL half of the access model must not be rolled back by a
+    permissions-API hiccup, and the operator sees exactly what is left."""
+    if not (group and app_name):
+        return "app permission: skipped (set both reviewer_group and app_name) — " + app_permission_cli(group, app_name)
+    try:
+        from databricks.sdk import WorkspaceClient
+        from databricks.sdk.service.apps import AppAccessControlRequest, AppPermissionLevel
+
+        WorkspaceClient().apps.update_permissions(
+            app_name=app_name,
+            access_control_list=[AppAccessControlRequest(group_name=group,
+                                                         permission_level=AppPermissionLevel.CAN_USE)])
+        return f"app permission: CAN USE on app {app_name!r} granted to group {group!r}"
+    except Exception as exc:  # noqa: BLE001 — reported with the manual remedy, never fatal
+        return (f"app permission: NOT applied ({type(exc).__name__}: {exc}) — run by hand: "
+                + app_permission_cli(group, app_name))
 
 
 # COMMAND ----------
@@ -223,11 +299,18 @@ if IS_DATABRICKS:
     statements = plan(existing_tables, existing_volumes)
     for sql in statements:
         spark.sql(sql)
+    n_grants = len(access_statements(REVIEWER_GROUP, existing_volumes | {AUDIT_VOLUME}))
     print(f"governance: {len(statements)} statement(s) applied on {FQ} "
           f"({len([t for t in existing_tables if base_of(t)])} table(s), "
-          f"{len([v for v in VOLUMES if v in existing_volumes or v == AUDIT_VOLUME])} volume(s))")
+          f"{len([v for v in VOLUMES if v in existing_volumes or v == AUDIT_VOLUME])} volume(s), "
+          f"{n_grants} grant(s) to {REVIEWER_GROUP or '<no reviewer_group: grants skipped>'})")
+    print(grant_app_can_use(REVIEWER_GROUP, APP_NAME))
     display(spark.sql(f"SHOW VOLUMES IN {FQ}"))
 else:
     print(f"# LOCAL MODE — plan for {FQ} (nothing executed):")
     for sql in plan():
         print(sql)
+    if REVIEWER_GROUP:
+        print("# app permission (not SQL): " + app_permission_cli(REVIEWER_GROUP, APP_NAME))
+    else:
+        print("# reviewer_group blank: access-model grants skipped (set REVIEWER_GROUP / the widget)")

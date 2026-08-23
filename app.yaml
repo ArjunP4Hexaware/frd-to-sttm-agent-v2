@@ -50,6 +50,10 @@ command: ["python", "review_app_react/backend/app.py"]
 #     request; a request without them is refused (401). Only set
 #     STTM_REQUIRE_IDENTITY=0 as a deliberate operator override (events are
 #     then recorded under actor "unknown").
+#   - ACCESS MODEL (2026-08-23): CAN USE on this App is granted to exactly
+#     the group that may READ the agent's volumes (the client's BSAs) —
+#     `bundle run frd_sttm_uc_governance --params reviewer_group=<Entra
+#     group>,app_name=<this app's name>` does both. Nobody else gets CAN USE.
 env:
   - name: "STTM_APP_MODE"
     value: "databricks"

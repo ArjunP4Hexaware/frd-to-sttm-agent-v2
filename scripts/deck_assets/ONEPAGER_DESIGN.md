@@ -4,8 +4,17 @@
 >
 > **v4 (2026-08-22, Arjun): the canvas is WHITE.** The philosophy below was written for the dark v3 and still governs; the theme table at the end is the light spec now in force, with the dark values kept for reference.
 
-Applies to `context/FRD_to_STTM_Agent_System_Architecture.pptx`, built by
-`scripts/build_architecture_onepager.py`. Written 2026-08-22 using the
+Applies to `context/FRD-to-STTM-Agent-Solution-Architecture.pptx`, built by
+`scripts/build_architecture_onepager.py` (renamed 2026-08-23 from
+`FRD_to_STTM_Agent_System_Architecture.pptx`), and — same theme, same helpers,
+same background — to `context/FRD-to-STTM-Agent-Data-Governance-Architecture.pptx`,
+built by `scripts/build_governance_onepager.py` (2026-08-23; one slide for a
+non-technical reader on how governance is implemented). **That slide reads
+LEFT → RIGHT, deliberately not the solution architecture's top-down bands
+(Arjun, 2026-08-23):** four stations in the order a document travels (01
+enters · 02 opened · 03 generated · 04 decided), the audit trail as a bar
+under all four, the two boundary crossings under stations 03/04, and the
+Collibra register as a tall column on the right that everything flows into. Written 2026-08-22 using the
 canvas-design, algorithmic-art, brand-guidelines and theme-factory skills;
 the theme below is the theme-factory "custom theme" Arjun chose over the
 Tech Innovation and Midnight Galaxy presets.
@@ -92,6 +101,7 @@ never recoloured. Sources (all fetched 2026-08-22):
 | `claude.png` / `anthropic.png` | Claude / Anthropic | Wikimedia Commons `Claude_AI_logo.svg`, `Anthropic_logo.svg` |
 | `fastapi.png` / `react.png` | FastAPI / React | Wikimedia Commons `FastAPI_logo.svg`, `React-icon.svg` |
 | `json.png` | JSON | Wikimedia Commons `JSON_vector_logo.svg` |
+| `collibra.png` | Collibra (full-colour wordmark) | Wikimedia Commons `File:Collibra-Logo-RGB-FullColor.png` (fetched 2026-08-23, trimmed with Pillow) |
 
 SVGs were rasterised at 512 px with sharp (`scratch icons/raster.js`) and
 trimmed with Pillow. Trademarks belong to their owners; the slide is an

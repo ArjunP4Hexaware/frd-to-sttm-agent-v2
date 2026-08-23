@@ -184,7 +184,8 @@ src/frdsttm/            models.py (FrdIngestionSpec, GatedAmbiguity,
 context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
                         ACFC-style deck; built by scripts/build_architecture_deck.py
                         from scripts/deck_assets/),
-                        FRD_to_STTM_Agent_System_Architecture.pptx (ONE slide,
+                        FRD-to-STTM-Agent-Solution-Architecture.pptx (renamed
+                        2026-08-23 from FRD_to_STTM_Agent_System_Architecture.pptx; ONE slide,
                         TOP-DOWN technology layers with official logos since v5
                         (scripts/deck_assets/logos/, sources listed in the design doc);
                         "Signal" theme, white canvas — philosophy + theme spec in
@@ -192,7 +193,19 @@ context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
                         scripts/build_architecture_onepager.py — regenerate it
                         there, never edit the .pptx by hand; python-pptx +
                         pillow are deck-building deps, not runtime; the
-                        background is a seeded flow-field the script draws), and
+                        background is a seeded flow-field the script draws),
+                        FRD-to-STTM-Agent-Data-Governance-Architecture.pptx (ONE slide
+                        for a NON-TECHNICAL reader, 2026-08-23: how governance is
+                        implemented — the Collibra register fed by Unity Catalog tags,
+                        the five controls (who / what data / where from / what
+                        happened / who decides) each naming its technology, the
+                        governed flow with its two boundary crossings; reads
+                        LEFT→RIGHT on purpose — four stations in document order,
+                        audit bar beneath, Collibra register column on the right
+                        (Arjun 2026-08-23: not the solution deck's top-down bands);
+                        same Signal theme + helpers; built by
+                        scripts/build_governance_onepager.py — regenerate there,
+                        never edit by hand; Collibra mark from Commons), and
                         FRD_to_STTM_Agent_Screens.html (self-contained
                         walkthrough of every review-app screen, captured
                         2026-08-22 against a synthetic corpus). No client
@@ -487,6 +500,14 @@ and auditable* without changing what it does. The rules that now hold:
 - **Deploy prerequisite added:** volume `sttm_audit` exists (the governance
   job creates it) with READ+WRITE VOLUME for the app's service principal —
   without it every governed action in the deployed App is a 502 by design.
+- **Access model (decided 2026-08-23, Arjun): may RUN == may READ.** The
+  client's BSAs are ONE Entra-synced group; `90_uc_governance` with
+  `reviewer_group` + `app_name` grants it USE CATALOG/SCHEMA + READ VOLUME
+  on `frd_raw` / `sttm_reference` / `sttm_out_app` / `sttm_audit` and
+  CAN USE on the App (SDK `apps.update_permissions`; CLI fallback printed).
+  Never WRITE VOLUME / MANAGE to users (owner + steward only); never
+  `demo_raw`, secret scopes or jobs (the app SP does those). View = run, no
+  second tier. Do not key app access on MANAGE — it is the admin privilege.
 - **Open human decisions live in docs/AI_GOVERNANCE.md §8** (owner/steward,
   Anthropic data path vs the client's BAA posture, retention, access model,
   git-history purge). Do not "resolve" them in code; record the decision.

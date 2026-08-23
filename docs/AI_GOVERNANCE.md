@@ -20,6 +20,7 @@ placeholders rather than guessing.*
 | Steward (day-to-day) | **UNASSIGNED** — `data_steward`. |
 | Builder | Hexaware (reference implementation); the client rebuilds in its own environment from this blueprint. |
 | Users | Data-engineering reviewers who open the review app, pick an FRD, review gated ambiguities, download the STTM and upload it to SharePoint. |
+| Who may run it | The client's BSAs — one Entra ID group with `READ VOLUME` on the agent's volumes and `CAN USE` on the App (control #17). View = run. |
 | Automation level | **Assisted, human-in-the-loop.** Nothing leaves the governed boundary without a person: every run is started by a named person, every gated ambiguity is resolved by a named person, and the hand-off (download → manual SharePoint upload) is a person's action. The repo never writes to SharePoint. |
 | Proposed risk tier | Limited / internal-tooling: affects engineering work products (mapping specs), not members, claims or decisions about people. Output is reviewed before use. Re-assess if it ever writes directly to a system of record or feeds CodeGen without review. |
 | Model / provider | Anthropic Claude, `claude-opus-4-8` (job parameter `model` in `resources/frd_sttm_job.yml`), structured outputs against the Pydantic schema `FrdIngestionSpec` (`src/frdsttm/models.py`, mirrored in `schema/sttm_extraction_schema.json`). Anthropic-only by program decision. **No fine-tuning** (settled; master context §7a). |
@@ -104,7 +105,8 @@ are placeholders that *read* as placeholders until set.
 | 13 | **Run insulation.** App runs write only to `demo_<ts>`-suffixed tables/volumes; curated paths are unreachable. | `demo._new_suffix`, `jobs_runner.job_parameters` | `tests/test_demo_backend.py`, `test_demo_jobs_runner.py` |
 | 14 | **Secrets never in repo/logs.** Secret scopes; `SharePointConfig.__repr__` excludes the secret; API key presence reported as a boolean only. | everywhere keys are read | grep |
 | 15 | **Classification lives in Unity Catalog.** Comments + tags on every asset; separate APPLY-TAG-holding step, not a pipeline side-effect. | `notebooks/90_uc_governance.py`, `resources/frd_sttm_governance_job.yml` | Catalog Explorer / Collibra harvest |
-| 16 | **No client documents in the repo.** Working tree clean since 2026-08-22; anonymisation tooling mandated for fixtures. | repo CLAUDE.md "Fixtures & data rules" | git history purge still pending (§8) |
+| 16 | **No client documents in the repo.** Working tree clean since 2026-08-22; history purged 2026-08-23. | repo CLAUDE.md "Fixtures & data rules" | `git log --all -- local_dev_fixtures/` is empty |
+| 17 | **Access model: may run == may read.** One group — the client's BSAs (an Entra ID group synced into Databricks) — gets `USE CATALOG/SCHEMA` + `READ VOLUME` on `frd_raw`, `sttm_reference`, `sttm_out_app`, `sttm_audit`, and `CAN USE` on the App. Nothing else: no `WRITE VOLUME`/`MANAGE` (owner + steward only), no secret scopes, no jobs — the app's service principal does the work. View = run; no second tier. Leaving the group removes app and data access in one step; past actions stay attributed. | `notebooks/90_uc_governance.py` (`reviewer_group`, `app_name`; `access_statements`, `grant_app_can_use`), `resources/frd_sttm_governance_job.yml` | `SHOW GRANTS ON VOLUME …frd_raw`; `databricks apps get-permissions <app>` |
 
 ---
 
@@ -193,10 +195,18 @@ app, registering the asset describes something that does not exist yet.
    accumulate. Decide retention for (a) run artifacts, (b) the audit trail
    (usually longer), (c) the container's local mirror; then implement — set
    `retention_policy` in the tags when decided.
-4. **Access model.** App-only SharePoint credentials + app-level access
-   mean any user who can open the app can generate an STTM for any FRD in
-   the folder. Within one client library this may be intended; confirm and
-   record it (or scope the folder / app users accordingly).
+4. **Access model — DECIDED 2026-08-23 (Arjun): may run == may read.**
+   Intended runners are the client's BSAs; anyone who may view past runs
+   may start one. Implemented as control #17: one Entra-synced group gets
+   READ on the read volumes + `CAN USE` on the App via
+   `frd_sttm_uc_governance --params reviewer_group=…,app_name=…`. Not
+   `MANAGE` (admin-level; would make every BSA an owner of PHI-tagged
+   volumes). The app's SP still holds the real volume privileges — the
+   group grant is what makes "can open the app" and "can see the data"
+   coincide (a convention enforced by group discipline, not per-request
+   checks; on-behalf-of enforcement via `X-Forwarded-Access-Token` remains
+   available if that ever proves insufficient). What remains: the client
+   names the group and the deployed app name.
 5. **Git history — DONE 2026-08-23.** `demo_frd.docx`, `demo_sttm.xlsx`
    and `local_dev_fixtures/` were removed from every commit
    (`git filter-repo`), `main` + `staging` force-pushed. Remaining: ask

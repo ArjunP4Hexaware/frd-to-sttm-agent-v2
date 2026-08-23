@@ -81,7 +81,10 @@ presentation of both agents still stands after it). Everything needed is on
    frd_sttm_uc_governance`** (2026-08-23: creates the `sttm_audit` volume
    and tags every asset; grant the app SP READ+WRITE VOLUME on
    `sttm_audit` — without it every governed action in the deployed App is
-   a 502 by design) — then `databricks apps deploy`. After the first live
+   a 502 by design; pass `reviewer_group=<the BSAs' Entra group>,
+   app_name=<deployed app name>` to grant that ONE group READ on the
+   volumes + CAN USE on the App — may run == may read, decided 2026-08-23)
+   — then `databricks apps deploy`. After the first live
    run: `GET /api/demo/audit` shows `run.started` / `run.finished` under
    your email, and `frd_sttm_runs` has `triggered_by` = you.
 7. In parallel from step 1: chase the **Entra ID app registration**
@@ -503,5 +506,6 @@ work is fully done — inflates local per-stage wall clock only.
 | Demo choreography | `docs/DEMO_RUNBOOK.md` (predates the SharePoint-first surface — verify against §5) |
 | App deploy prerequisites | `app.yaml` (repo root) comments, `CLAUDE.md` "Deploy blockers", `review_app_react/README.md` "Databricks Apps deployment" |
 | What the agent looks like to a user | `context/FRD_to_STTM_Agent_Screens.html` (every screen, 2026-08-22) and `context/FRD_to_STTM_Agent_Architecture.pptx` (the two-slide ACFC-style deck; `scripts/build_architecture_deck.py`) |
-| How the agent actually works, on one slide | `context/FRD_to_STTM_Agent_System_Architecture.pptx` (dark Blueprint-palette system diagram, 2026-08-22; regenerate with `scripts/build_architecture_onepager.py`) |
+| How the agent actually works, on one slide | `context/FRD-to-STTM-Agent-Solution-Architecture.pptx` (light Signal-theme system diagram, 2026-08-22, renamed 2026-08-23; regenerate with `scripts/build_architecture_onepager.py`) |
+| How governance is implemented, on one slide, for a non-technical reader | `context/FRD-to-STTM-Agent-Data-Governance-Architecture.pptx` (2026-08-23; Collibra register ← Unity Catalog tags, the five controls, the governed flow; regenerate with `scripts/build_governance_onepager.py`; long form in `docs/AI_GOVERNANCE.md`) |
 | Program-wide context | `../amerihealth-agents/amerihealth-project-master-context-document.md` — umbrella folder on the original Mac ONLY (this repo sits beside it since 2026-08-22); not in git |
