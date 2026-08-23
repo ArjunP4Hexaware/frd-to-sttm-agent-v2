@@ -20,10 +20,17 @@
 # MAGIC **Zero model calls.** Ingest-all is not extract-all: the billed
 # MAGIC extraction happens only when a person asks for a mapping in the app.
 # MAGIC
-# MAGIC **Scheduled.** `resources/frd_sttm_sync_job.yml` runs this on a cron so
-# MAGIC a newly approved FRD — or an STTM a reviewer uploads after finishing it
-# MAGIC in the app — appears in the volumes and gets paired without anyone
-# MAGIC doing anything. The app's Corpus panel triggers the same job on demand.
+# MAGIC **Triggered by the app (decided 2026-08-22 late evening — NOT a
+# MAGIC schedule).** The review app runs this when it STARTS UP and on its
+# MAGIC "Sync now" control, so whatever is in SharePoint — a newly approved FRD,
+# MAGIC or an STTM a reviewer uploaded after finishing it — is in the volumes
+# MAGIC and paired by the time anyone looks. In databricks mode the app triggers
+# MAGIC `resources/frd_sttm_sync_job.yml` (this notebook) via the Jobs API.
+# MAGIC
+# MAGIC **Naming convention.** Every FRD in the library is `FRD_<name>.<ext>`,
+# MAGIC every STTM `STTM_<name>.xlsx` (`frd_name_prefix` / `sttm_name_prefix`
+# MAGIC widgets; blank disables the filter). Files without the prefix are
+# MAGIC counted as ignored in the summary, never silently dropped.
 # MAGIC
 # MAGIC **`sync_mode`**: `sync` (the above) or `reindex` (step 3 only — rebuild
 # MAGIC the index from whatever the volumes already hold, no network; the path
@@ -34,8 +41,8 @@
 # MAGIC configuration raises naming both remedies; a Graph refusal on the
 # MAGIC LISTING raises; a single failed download or unparsable FRD is reported
 # MAGIC in the summary (`skipped`) and the rest of the corpus still builds.
-# MAGIC An EMPTY library is a warning, not a failure: a scheduled sync against
-# MAGIC a library nobody has populated yet must not page anyone.
+# MAGIC An EMPTY library is a warning, not a failure: a start-up sync against
+# MAGIC a library nobody has populated yet must not break the app.
 
 # COMMAND ----------
 
@@ -73,6 +80,8 @@ RAW_VOLUME = _param("raw_volume", "frd_raw")
 REFERENCE_VOLUME = _param("reference_volume", "sttm_reference")
 
 SYNC_MODE = _param("sync_mode", "sync").strip().lower()
+FRD_NAME_PREFIX = _param("frd_name_prefix", "FRD_").strip()
+STTM_NAME_PREFIX = _param("sttm_name_prefix", "STTM_").strip()
 if SYNC_MODE not in ("sync", "reindex"):
     raise ValueError(
         f"sync_mode must be 'sync' or 'reindex', got {SYNC_MODE!r}. "
@@ -156,11 +165,12 @@ else:
     summary = sync_from_sharepoint(
         client, frd_dir=RAW_DIR, reference_dir=REFERENCE_DIR,
         reference_folder=cfg.sttm_folder, thresholds=THRESHOLDS, now_iso=NOW,
+        frd_prefix=FRD_NAME_PREFIX, reference_prefix=STTM_NAME_PREFIX,
     )
     _print_summary(summary)
     if summary["frd_listed"] == 0:
         print(
             f"\nWARNING: no FRDs in {cfg.library}/{cfg.frd_folder or '<root>'} — "
-            "nothing to map yet. (Not an error: a scheduled sync against an "
+            "nothing to map yet. (Not an error: a start-up sync against an "
             "empty folder is a normal state.)"
         )

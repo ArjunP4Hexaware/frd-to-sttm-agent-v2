@@ -40,23 +40,33 @@ Databricks App in the Hexaware environment by Monday 2026-08-24** —
 replay-only. The three deploy blockers are the last entries under "Known
 gaps" below; verify each rather than assuming it still holds.
 
-**Architecture decision 2026-08-22 (late evening, Arjun) — DECIDED, NOT YET
-IN CODE:** the SharePoint → Unity Catalog sync runs **when the app starts
+**Architecture decision 2026-08-22 (late evening, Arjun) — IMPLEMENTED the
+same evening:** the SharePoint → Unity Catalog sync runs **when the app starts
 up** (and on "Sync now"), not on a cron schedule. On start-up the backend
 lists the library, imports every FRD and STTM that is not already in the
 volumes, re-pairs and re-indexes. The library's naming convention is now
 known: **every FRD is `FRD_<name>.docx`, every STTM is `STTM_<name>.xlsx`**,
 so listing can filter by prefix and pairing is `FRD_X` ↔ `STTM_X` by the
-stem after the prefix (similarity stays the fallback). What this means for
-the code, in order: (1) a start-up hook in `review_app_react/backend` that
-runs the same `frdsttm.sync` path the "Sync now" button uses (local mode:
-in-process; databricks mode: the sync job via the Jobs API, then the mirror);
-(2) the schedule in `resources/frd_sttm_sync_job.yml` goes — the job stays
-only as the databricks-mode execution target for start-up and "Sync now";
-(3) `frdsttm/sync.py` pairing gets the prefix rule first, the older
-`<doc_id>.sttm.xlsx` / `<doc> STTM.xlsx` patterns and similarity after it;
-(4) `00_sharepoint_sync` remains the implementation. Wherever this file
-still says "scheduled" / "every 15 min", read it as the pre-decision code.
+stem after the prefix (similarity stays the fallback). How it is built:
+(1) `corpus_routes.start_sync_on_startup()`, called from `app.py`'s FastAPI
+lifespan — non-blocking daemon thread, the same worker as "Sync now", state
+visible in the Corpus panel (`trigger: "startup"`); local mode with a wired
+tenant → the sync in-process, local mode with NO tenant → a network-free
+reindex, databricks mode → the sync job via the Jobs API then the mirror;
+`STTM_SYNC_ON_STARTUP=0` disables it. (2) `resources/frd_sttm_sync_job.yml`
+has NO `schedule` (the `sync_cron` / `sync_schedule_pause_status` variables
+are gone); the job is the databricks-mode execution target only, or a hand
+run. (3) `similarity.name_key` strips role tokens at both ends, so
+`FRD_X` ↔ `STTM_X` name-pairs (the older `.sttm.xlsx` / `… STTM.xlsx`
+shapes still do too; similarity last). (4) `sync.sync_from_sharepoint`
+takes `frd_prefix` / `reference_prefix` — the notebook widgets
+`frd_name_prefix` / `sttm_name_prefix` and the app env vars
+`STTM_FRD_NAME_PREFIX` / `STTM_STTM_NAME_PREFIX` default them to `FRD_` /
+`STTM_` (blank disables); files without the prefix are COUNTED in the
+summary (`frd_ignored` / `reference_ignored`), never silently dropped.
+Tests: `test_sync.py` (name_key + prefix filter), `test_corpus_routes.py`
+(four start-up cases + the lifespan wiring). Unproven live like everything
+SharePoint (no tenant yet).
 
 Two hand-off contracts matter:
 
@@ -120,10 +130,10 @@ notebooks/01..04_*.py   the four core entry points — dual-mode (plain local
                         detection, widgets ↔ env vars, Spark ↔ deltalake)
 notebooks/00_sharepoint_sync.py     SharePoint FRD + STTM folders → frd_raw +
                         sttm_reference volumes → corpus_index.json (READ;
-                        run on app START-UP + "Sync now" per the 2026-08-22
-                        late decision — the code still carries the scheduled
-                        job frd_sttm_sharepoint_sync; incremental via
-                        sync_manifest.json)
+                        run on app START-UP + "Sync now" — no schedule
+                        (2026-08-22 late); in databricks mode the app triggers
+                        the job frd_sttm_sharepoint_sync; incremental via
+                        sync_manifest.json; FRD_*/STTM_* prefix filter)
 notebooks/00_sharepoint_fetch.py    SharePoint library → frd_raw (read; the
                         pipeline job's own fetch for a stand-alone full run)
                         — there is NO publish notebook: the repo never writes
@@ -165,15 +175,15 @@ context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
 contracts/frd_label_contract.json   the versioned FRD label contract — now a
                         frozen input, no longer mirrored anywhere (see
                         "Upstream" above)
-tests/                  offline (no LLM/network/Spark); 195 as of
-                        2026-08-22 (late evening; +17 in test_render_rules.py
-                        for rule placement + audit rows) — run `pytest` for
+tests/                  offline (no LLM/network/Spark); 206 as of
+                        2026-08-22 (late evening; +17 rule placement/audit rows,
+                        +11 start-up sync / prefix pairing) — run `pytest` for
                         the live count rather than trusting a number here
 schema/sttm_extraction_schema.json   the extraction contract (mirrors models)
 databricks.yml + resources/frd_sttm_job.yml   asset bundle, job frd_sttm_pipeline
-resources/frd_sttm_sync_job.yml   the sync job (cron `sync_cron` in databricks.yml —
-                        SCHEDULE TO BE REMOVED per the 2026-08-22 late decision;
-                        the job becomes the start-up / "Sync now" target only)
+resources/frd_sttm_sync_job.yml   the sync job — NO schedule (2026-08-22 late):
+                        the databricks-mode target of the app's start-up sync
+                        and "Sync now", or a hand `bundle run`
 resources/frd_sttm_render_job.yml the render-only job (stage 04 over an existing
                         run suffix) that the human-in-the-loop re-render triggers
                         in databricks mode — no re-extraction, nothing billed
@@ -322,10 +332,10 @@ the parsing stage.
   local copy of anything that left the library (only files IT synced — a
   hand-staged file is left alone), then rebuilds `corpus_index.json` with a
   `content_sha256` per document. First tick = bulk load; every later tick =
-  incremental. TRIGGER (decided 2026-08-22 late): app START-UP and "Sync
-  now" — not a schedule; `resources/frd_sttm_sync_job.yml` still carries
-  `sync_cron` (default every 15 min, UTC; `max_concurrent_runs: 1`) until the
-  code catches up. `sync_mode=reindex`
+  incremental. TRIGGER: app START-UP (`corpus_routes.start_sync_on_startup`
+  via `app.py`'s lifespan) and "Sync now" — not a schedule;
+  `resources/frd_sttm_sync_job.yml` has none (`max_concurrent_runs: 1` kept
+  so two instances cannot race on the manifest). `sync_mode=reindex`
   rebuilds the index from the volumes without touching SharePoint — the
   path for an unwired tenant and for the synthetic smoke fixture. Zero
   model calls. Empty library = warning, not failure (a scheduled tick must
@@ -541,9 +551,9 @@ checkout; treat each as unproven until you have seen it work.
   `Sites.Selected` READ consent actually granting what is needed, the
   site/drive resolution shape and eTag format on a real tenant. (There is
   no upload behaviour left to verify.)
-- **The sync job has never been deployed (2026-08-22)** — and its schedule
-  is now slated for removal (start-up sync decision); the job remains the
-  databricks-mode execution path for start-up and "Sync now".
+- **The sync job has never been deployed (2026-08-22)** — it has no schedule
+  (start-up sync decision, implemented the same evening); it is the
+  databricks-mode execution path for the app's start-up sync and "Sync now".
   `resources/frd_sttm_sync_job.yml` parses and the notebook runs locally in
   both modes, but `databricks bundle validate` could not be run from this
   checkout (expired CLI token) and no workspace has executed it. The

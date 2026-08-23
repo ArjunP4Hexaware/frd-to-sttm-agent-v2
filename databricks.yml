@@ -73,19 +73,6 @@ variables:
       2026-08-22; the former 05_sharepoint_publish is gone), so the app
       registration needs a READ grant only.
     default: ""
-  sync_cron:
-    description: >-
-      Quartz cron (UTC) for frd_sttm_sharepoint_sync -- how often the
-      volumes are brought in step with SharePoint and the corpus re-paired.
-      Every 15 minutes by default; a tick with nothing new downloads
-      nothing (eTag/modified/size change detection).
-    default: "0 0/15 * * * ?"
-  sync_schedule_pause_status:
-    description: >-
-      UNPAUSED in a workspace with a wired tenant; PAUSED where there is
-      none (the dev target overrides this), so an unconfigured sync does not
-      fail every tick and mail the notification address.
-    default: UNPAUSED
   sharepoint_tenant_id:
     description: Entra ID tenant id for the app registration (app-only auth).
     default: ""
@@ -106,7 +93,7 @@ targets:
   dev:
     mode: development
     default: true
-    variables:
-      # No tenant is wired in the dev workspace; trigger the sync by hand
-      # (databricks bundle run frd_sttm_sharepoint_sync) or from the app.
-      sync_schedule_pause_status: PAUSED
+    # No tenant is wired in the dev workspace: the app's start-up sync and
+    # "Sync now" fall back to reindex / 503 there, and the sync job has no
+    # schedule to pause (decided 2026-08-22 late evening) -- trigger it by
+    # hand with `databricks bundle run frd_sttm_sharepoint_sync` if needed.

@@ -20,9 +20,13 @@ command: ["python", "review_app_react/backend/app.py"]
 # Live-run execution in this mode goes through the Jobs API (see
 # review_app_react/backend/jobs_runner.py): the app triggers the bundle-deployed
 # frd_sttm_pipeline job, so artifacts land natively in Unity Catalog and
-# survive an App restart. "Sync now" triggers the bundle-deployed
-# frd_sttm_sharepoint_sync job the same way (its schedule runs without the
-# app). Workspace prerequisites the deploy must verify:
+# survive an App restart. The app syncs SharePoint -> Unity Catalog when it
+# STARTS (and on "Sync now") by triggering the bundle-deployed
+# frd_sttm_sharepoint_sync job the same way -- the job has no schedule of
+# its own (decided 2026-08-22 late evening). STTM_SYNC_ON_STARTUP=0 turns
+# the start-up sync off; STTM_FRD_NAME_PREFIX / STTM_STTM_NAME_PREFIX
+# (default FRD_ / STTM_) are the library's naming convention. Workspace
+# prerequisites the deploy must verify:
 #   - the three bundle jobs are deployed, and STTM_DEMO_JOB_NAME /
 #     STTM_SYNC_JOB_NAME / STTM_RENDER_JOB_NAME below match their names AS
 #     DEPLOYED (a dev-mode bundle target prefixes them, e.g.

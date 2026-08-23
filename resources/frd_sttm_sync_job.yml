@@ -2,18 +2,17 @@
 # sttm_reference volumes in step with the AmeriHealth SharePoint library and
 # rebuilds the corpus index — notebooks/00_sharepoint_sync.py, one task.
 #
-# Why a separate, SCHEDULED job rather than a task in frd_sttm_pipeline:
-# the pipeline runs when a person asks for a mapping (billed, per document);
-# the sync runs whether or not anyone is using the app, so a newly approved
-# FRD — or an STTM a reviewer uploaded after finishing it in the app — is
-# in Databricks and paired before anyone looks. Zero model calls, so the
-# schedule costs compute only. The review app's "Sync now" triggers THIS job
-# via the Jobs API (backend/jobs_runner.py) — one implementation.
+# Why a separate job rather than a task in frd_sttm_pipeline: the pipeline
+# runs when a person asks for a mapping (billed, per document); the sync is
+# model-free and runs whenever the review app STARTS UP and on its "Sync
+# now" control — the app triggers THIS job via the Jobs API
+# (backend/jobs_runner.py) in databricks mode, one implementation.
 #
-# Schedule: ${var.sync_cron} (Quartz, UTC), paused/unpaused per target via
-# ${var.sync_schedule_pause_status}. The dev target PAUSES it (see
-# databricks.yml): a dev workspace with no tenant wired would otherwise fail
-# every tick and mail the notification address.
+# NO SCHEDULE (decided 2026-08-22 late evening, replacing the 15-minute
+# cron): the person opening the app is the reason a fresh corpus matters,
+# so the app syncs at start-up instead of a background job anyone has to
+# babysit. Run it by hand with `databricks bundle run
+# frd_sttm_sharepoint_sync` when needed.
 #
 # Read scope only. The job never writes to SharePoint — see
 # src/frdsttm/sharepoint.py. The client SECRET is deliberately absent from
@@ -43,6 +42,12 @@ resources:
         # (no network) — what the app's "Rebuild index" control passes.
         - name: sync_mode
           default: sync
+        # The library's naming convention: every FRD is FRD_<name>.<ext>,
+        # every STTM STTM_<name>.xlsx. Blank disables the filter.
+        - name: frd_name_prefix
+          default: "FRD_"
+        - name: sttm_name_prefix
+          default: "STTM_"
         - name: sharepoint_host
           default: ${var.sharepoint_host}
         - name: sharepoint_site_path
@@ -58,13 +63,8 @@ resources:
         - name: sharepoint_client_id
           default: ${var.sharepoint_client_id}
 
-      schedule:
-        quartz_cron_expression: ${var.sync_cron}
-        timezone_id: UTC
-        pause_status: ${var.sync_schedule_pause_status}
-
-      # One sync at a time: a slow tick must never overlap the next one and
-      # race on the manifest/index files.
+      # One sync at a time: two app instances (or a hand run) must never
+      # overlap and race on the manifest/index files.
       max_concurrent_runs: 1
 
       email_notifications:
@@ -82,6 +82,8 @@ resources:
               raw_volume: "{{job.parameters.raw_volume}}"
               reference_volume: "{{job.parameters.reference_volume}}"
               sync_mode: "{{job.parameters.sync_mode}}"
+              frd_name_prefix: "{{job.parameters.frd_name_prefix}}"
+              sttm_name_prefix: "{{job.parameters.sttm_name_prefix}}"
               sharepoint_host: "{{job.parameters.sharepoint_host}}"
               sharepoint_site_path: "{{job.parameters.sharepoint_site_path}}"
               sharepoint_library: "{{job.parameters.sharepoint_library}}"

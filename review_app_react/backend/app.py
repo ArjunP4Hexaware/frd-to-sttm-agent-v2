@@ -24,6 +24,7 @@ Deployed:    this same app also serves the frontend's built static assets
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -36,11 +37,23 @@ from pydantic import BaseModel
 import ambiguity_parsing as ap
 import data_access as da
 from corpus_routes import router as corpus_router
+from corpus_routes import start_sync_on_startup
 from demo import router as demo_router
 from orchestration import router as orchestration_router
 from sharepoint_routes import router as sharepoint_router
 
-app = FastAPI(title="FRD->STTM Gated Ambiguity Review")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # Sync SharePoint -> Unity Catalog when the app starts (decided
+    # 2026-08-22 late evening; replaces the cron schedule). Non-blocking:
+    # the worker runs in a daemon thread and the Corpus panel shows its
+    # state. STTM_SYNC_ON_STARTUP=0 disables it. Never raises.
+    start_sync_on_startup()
+    yield
+
+
+app = FastAPI(title="FRD->STTM Gated Ambiguity Review", lifespan=_lifespan)
 app.include_router(orchestration_router)
 app.include_router(demo_router)
 app.include_router(sharepoint_router)

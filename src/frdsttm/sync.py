@@ -3,7 +3,10 @@ frdsttm.sync — keep the FRD and STTM volumes in step with SharePoint, and
 rebuild the corpus index from whatever the volumes hold.
 
 This is the "set-up, then stay in sync" half of the agent (decided
-2026-08-22, replacing the app's one-shot corpus *bootstrap*):
+2026-08-22, replacing the app's one-shot corpus *bootstrap*). It runs when
+the review app STARTS UP and on its "Sync now" control (decided 2026-08-22
+late evening — not on a schedule; the bundle job is only the databricks-mode
+execution target):
 
     SharePoint FRD folder  ──list/download──▶  frd_raw volume
     SharePoint STTM folder ──list/download──▶  sttm_reference volume
@@ -17,8 +20,12 @@ Two entry points, both deterministic and model-free:
   size, recorded in ``sync_manifest.json`` next to the corpus index), delete
   local copies of items that left the library, then reindex. The first run
   is the bulk load; every later run is the incremental "stay in sync".
-  Scheduled as a Databricks job (resources/frd_sttm_sync_job.yml) and
-  triggered on demand from the review app's Corpus panel — same code.
+  Triggered by the review app at start-up and from its Corpus panel; in
+  databricks mode that trigger runs the bundle job
+  (resources/frd_sttm_sync_job.yml, no schedule) — same code either way.
+  The library names every FRD ``FRD_<name>.<ext>`` and every STTM
+  ``STTM_<name>.xlsx``; ``frd_prefix`` / ``reference_prefix`` filter the
+  listings to that convention and COUNT what they ignore.
 - ``reindex``: rebuild the corpus index from the files already in the two
   volumes, touching no network. What the sync ends with; also the offline
   path when a tenant is not wired yet (smoke fixtures, local development).
@@ -51,6 +58,17 @@ MANIFEST_NAME = "sync_manifest.json"
 MANIFEST_VERSION = 1
 
 REFERENCE_SUFFIXES = {".xlsx"}
+
+# The library's naming convention (learned 2026-08-22): every FRD is
+# ``FRD_<name>.<ext>``, every STTM ``STTM_<name>.xlsx``. These are the
+# prefixes the CALLERS (00_sharepoint_sync widget, the app's env var) pass by
+# default; the library function itself defaults to NO filter so a library
+# that predates the convention still syncs by suffix alone. A set prefix is
+# matched case-insensitively and every listed file that lacks it is counted
+# in the summary (``frd_ignored`` / ``reference_ignored``) — visible, never
+# silent.
+FRD_NAME_PREFIX = "FRD_"
+REFERENCE_NAME_PREFIX = "STTM_"
 
 # Same sanitiser the review app applies to uploads: a library file name is
 # attacker-adjacent input and must never escape the destination directory.
@@ -195,28 +213,47 @@ def _sync_folder(client, items, kind: str, dest_dir: Path, manifest: dict,
     manifest["items"] = kept
 
 
+def filter_by_prefix(items, prefix: str) -> tuple[list, int]:
+    """Keep the items whose name starts with ``prefix`` (case-insensitive);
+    return (kept, ignored_count). An empty prefix keeps everything."""
+    if not prefix:
+        return list(items), 0
+    p = prefix.lower()
+    kept = [i for i in items if str(i.name).lower().startswith(p)]
+    return kept, len(items) - len(kept)
+
+
 def sync_from_sharepoint(client, *, frd_dir: str | Path, reference_dir: str | Path,
                          reference_folder: str | None, thresholds: dict,
                          now_iso: str, frd_suffixes=SUPPORTED_SUFFIXES,
-                         reference_suffixes=REFERENCE_SUFFIXES) -> dict:
+                         reference_suffixes=REFERENCE_SUFFIXES,
+                         frd_prefix: str = "", reference_prefix: str = "") -> dict:
     """One sync pass: list → download new/changed → drop departed → reindex.
 
     ``client`` is a frdsttm.sharepoint.SharePointClient (or a test stub with
     ``list_documents(suffixes=, folder=)`` and ``download_item(item_id)``).
     ``reference_folder`` None means the client's configured FRD folder.
-    Graph failures on the LISTING propagate (the caller maps them); per-item
-    download failures are collected in ``skipped``.
+    ``frd_prefix`` / ``reference_prefix`` (e.g. ``FRD_`` / ``STTM_``) restrict
+    each listing to the library's naming convention; ignored files are
+    counted in the summary. Graph failures on the LISTING propagate (the
+    caller maps them); per-item download failures are collected in
+    ``skipped``.
     """
     frd_dir, reference_dir = Path(frd_dir), Path(reference_dir)
     frd_dir.mkdir(parents=True, exist_ok=True)
     reference_dir.mkdir(parents=True, exist_ok=True)
 
-    frd_items = client.list_documents(suffixes=set(frd_suffixes))
-    ref_items = client.list_documents(suffixes=set(reference_suffixes), folder=reference_folder)
+    frd_items, frd_ignored = filter_by_prefix(
+        client.list_documents(suffixes=set(frd_suffixes)), frd_prefix)
+    ref_items, ref_ignored = filter_by_prefix(
+        client.list_documents(suffixes=set(reference_suffixes), folder=reference_folder),
+        reference_prefix)
 
     manifest = load_manifest(reference_dir)
     summary = {
         "frd_listed": len(frd_items), "reference_listed": len(ref_items),
+        "frd_ignored": frd_ignored, "reference_ignored": ref_ignored,
+        "frd_prefix": frd_prefix, "reference_prefix": reference_prefix,
         "frd_downloaded": 0, "frd_unchanged": 0, "frd_removed": 0,
         "reference_downloaded": 0, "reference_unchanged": 0, "reference_removed": 0,
     }

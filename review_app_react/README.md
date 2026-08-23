@@ -7,9 +7,10 @@ as a **Databricks App**. One surface since 2026-08-21, reshaped 2026-08-22:
 ## What a user does
 
 1. **Select FRD.** The picker is the *corpus index* — what the SharePoint
-   sync (`notebooks/00_sharepoint_sync.py`, scheduled job
-   `frd_sttm_sharepoint_sync`, or the panel's "Sync from SharePoint now…")
-   has landed in Unity Catalog and paired (exact name match first,
+   sync (`notebooks/00_sharepoint_sync.py`; run when the app STARTS and
+   from the panel's "Sync from SharePoint now…" — no schedule, decided
+   2026-08-22 late evening) has landed in Unity Catalog and paired (name
+   first — the library's `FRD_<name>` ↔ `STTM_<name>` convention —
    deterministic similarity second).
    - **FRDs without an STTM** → `Generate STTM` → billed-run confirmation
      (~1 model call, ~$0.15) → the real 01→04 pipeline → results.
@@ -38,8 +39,9 @@ as a **Databricks App**. One surface since 2026-08-21, reshaped 2026-08-22:
   run the same code in-process / as a subprocess.
 - `databricks` (the deployed App): the container never runs notebooks.
   Runs trigger the bundle job `frd_sttm_pipeline` via the Jobs API
-  (`backend/jobs_runner.py`); "Sync now" triggers `frd_sttm_sharepoint_sync`
-  and then mirrors `frd_raw` + `sttm_reference` down; re-render triggers
+  (`backend/jobs_runner.py`); the start-up sync and "Sync now" trigger
+  `frd_sttm_sharepoint_sync` and then mirror `frd_raw` + `sttm_reference`
+  down; re-render triggers
   `frd_sttm_render` over the same run suffix. Artifacts land natively in
   Unity Catalog and are mirrored to the container as a rehydratable cache.
 
@@ -71,7 +73,8 @@ cd ../backend && DATABRICKS_APP_PORT=8020 ../../.venv/bin/python app.py
 A fresh clone has no documents: `python tools/make_synthetic_smoke_fixture.py`
 then "Rebuild index…" in the UI gives you a synthetic corpus to click
 through. No SharePoint config → the picker still lists the volumes; only
-"Sync now" is disabled.
+"Sync now" is disabled, and the start-up sync falls back to a reindex
+(`STTM_SYNC_ON_STARTUP=0` turns it off entirely).
 
 ## Databricks Apps deployment
 

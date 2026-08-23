@@ -274,9 +274,44 @@ def test_safe_name_never_escapes_the_volume():
     ("Community Risk FRD.docx", "Community Risk FRD.sttm.xlsx"),
     ("Community_Risk_FRD", "community-risk-STTM.xlsx"),
     ("claim_intake_frd", "claim_intake_sttm.xlsx"),
+    # the library's convention (learned 2026-08-22): FRD_<name> <-> STTM_<name>
+    ("FRD_Community Risk.docx", "STTM_Community Risk.xlsx"),
+    ("FRD_claim_intake.docx", "STTM_claim_intake.xlsx"),
+    ("frd_Member_Risk", "sttm-member-risk.xlsx"),
+    # mixed: a prefixed FRD and the renderer's own suffix convention
+    ("FRD_Member Risk.docx", "FRD_Member Risk.sttm.xlsx"),
 ])
 def test_name_key_matches_the_naming_conventions(a, b):
     assert name_key(a) == name_key(b) != ""
+
+
+def test_prefix_filter_keeps_convention_files_and_counts_the_rest(dirs):
+    """FRD_* / STTM_* are synced; files without the prefix are ignored AND
+    counted (never silently dropped); pairing happens by the stem."""
+    from frdsttm.sync import FRD_NAME_PREFIX, REFERENCE_NAME_PREFIX
+    lib = FakeLibrary()
+    lib.add_frd("f1", "FRD_member_risk.txt", frd_text("member_risk", MEMBER_COLS))
+    lib.add_frd("f2", "notes about the project.txt", frd_text("claim_intake", CLAIM_COLS))
+    lib.add_sttm("r1", "STTM_member_risk.xlsx", wb_bytes("member_risk", MEMBER_COLS))
+    lib.add_sttm("r2", "scratch.xlsx", wb_bytes("claim_intake", CLAIM_COLS))
+    frd_dir, ref_dir = dirs
+    out = sync_from_sharepoint(lib, frd_dir=frd_dir, reference_dir=ref_dir,
+                               reference_folder="STTMs", thresholds=_th(),
+                               now_iso="2026-08-22T12:00:00+00:00",
+                               frd_prefix=FRD_NAME_PREFIX, reference_prefix=REFERENCE_NAME_PREFIX)
+    assert out["frd_listed"] == 1 and out["frd_ignored"] == 1
+    assert out["reference_listed"] == 1 and out["reference_ignored"] == 1
+    assert (frd_dir / "FRD_member_risk.txt").is_file()
+    assert not (frd_dir / "notes_about_the_project.txt").exists()
+    assert not (ref_dir / "scratch.xlsx").exists()
+    pair = out["index"]["pairs"]["FRD_member_risk"]
+    assert pair["reference"] == "STTM_member_risk.xlsx" and pair["matched_by"] == "name"
+
+
+def test_no_prefix_means_no_filter(library, dirs):
+    out = _sync(library, dirs)
+    assert out["frd_ignored"] == 0 and out["reference_ignored"] == 0
+    assert out["frd_prefix"] == "" and out["reference_prefix"] == ""
 
 
 def test_name_key_keeps_distinct_documents_distinct():

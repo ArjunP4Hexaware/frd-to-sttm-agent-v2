@@ -208,9 +208,11 @@ def score_match(frd_feat: dict, wb_feat: dict) -> dict:
 # --------------------------------------------------------------------------- #
 # corpus pairing (FRD ↔ its own existing STTM)
 # --------------------------------------------------------------------------- #
-# Trailing name tokens that say WHAT a file is, not WHICH document it is.
-# "Community Risk FRD.docx" and "Community Risk FRD.sttm.xlsx" — or
-# "Community Risk STTM.xlsx" — all key to "communityrisk".
+# Name tokens that say WHAT a file is, not WHICH document it is — at EITHER
+# end. The library's convention (learned 2026-08-22) is a prefix: every FRD
+# is "FRD_<name>.docx" and every STTM "STTM_<name>.xlsx", so those key to the
+# same "<name>"; the renderer's own suffix convention ("<doc>.sttm.xlsx") and
+# the older "Community Risk STTM.xlsx" shapes still key the same way.
 _NAME_ROLE_TOKENS = {"sttm", "frd", "mapping", "mappings"}
 
 
@@ -218,7 +220,8 @@ def name_key(name: str) -> str:
     """Normalised identity of a document name for exact-name pairing.
 
     Strips every extension (``.sttm.xlsx`` included), lower-cases, splits on
-    non-alphanumerics, and drops trailing role tokens. Empty when nothing
+    non-alphanumerics, and drops role tokens at both ends (``FRD_`` /
+    ``STTM_`` prefixes, ``… FRD`` / ``… STTM`` suffixes). Empty when nothing
     identifying is left, so it can never match another empty key.
     """
     stem = str(name)
@@ -230,6 +233,8 @@ def name_key(name: str) -> str:
     tokens = [t for t in re.split(r"[^a-z0-9]+", stem.lower()) if t]
     while tokens and tokens[-1] in _NAME_ROLE_TOKENS:
         tokens.pop()
+    while tokens and tokens[0] in _NAME_ROLE_TOKENS:
+        tokens.pop(0)
     return "".join(tokens)
 
 
@@ -241,9 +246,9 @@ def pair_corpus(frd_feats: dict, wb_feats: dict, thresholds: dict) -> dict:
              "unmapped": [doc_id...], "unpaired_references": [name...]}.
 
     Name match (``matched_by: "name"``) is definitive: an STTM whose name
-    keys to exactly one FRD — the naming convention the renderer itself
-    emits (``<doc_id>.sttm.xlsx``) and the one a reviewer follows when they
-    upload a finished workbook — is that FRD's STTM, whatever the content
+    keys to exactly one FRD — the library's ``FRD_<name>`` ↔ ``STTM_<name>``
+    convention, the renderer's own ``<doc_id>.sttm.xlsx``, or a reviewer's
+    ``<name> STTM.xlsx`` — is that FRD's STTM, whatever the content
     score says; confidence is "high" and the score is still recorded for
     display. Ambiguous keys (two FRDs or two workbooks sharing one key)
     are NOT name-paired — they fall through to similarity, never guessed.

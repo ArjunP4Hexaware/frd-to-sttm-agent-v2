@@ -44,6 +44,15 @@ def configured(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _legacy_unprefixed_library(monkeypatch):
+    """The FakeLibrary here predates the FRD_/STTM_ convention; the app's
+    default prefixes would (correctly) ignore every file in it. The
+    start-up/prefix tests below set the real prefixes explicitly."""
+    monkeypatch.setattr(cr, "FRD_NAME_PREFIX", "")
+    monkeypatch.setattr(cr, "STTM_NAME_PREFIX", "")
+
+
+@pytest.fixture(autouse=True)
 def _reset_sync_state():
     with cr._sync_lock:
         cr._sync.update(state="idle", mode=None, started_at=None, finished_at=None,
@@ -220,3 +229,68 @@ def test_config_probe_reports_folders_or_unavailable(client, configured, dirs, m
         monkeypatch.delenv(k, raising=False)
     body = client.get("/api/demo/corpus/config").json()
     assert body["available"] is False and body["mode"] == "local"
+
+
+# --------------------------------------------------------------------------- #
+# start-up sync (decided 2026-08-22 late evening: sync when the app starts)
+# --------------------------------------------------------------------------- #
+def test_startup_sync_runs_the_real_sync_when_a_tenant_is_wired(client, configured, dirs, library, monkeypatch):
+    monkeypatch.setattr(cr, "SYNC_ON_STARTUP", True)
+    state = cr.start_sync_on_startup()
+    assert state["state"] == "running" and state["mode"] == "sync" and state["trigger"] == "startup"
+    state = _wait_sync(client)
+    assert state["state"] == "done"
+    preloaded, reference = dirs
+    assert (preloaded / "member_risk.txt").is_file()
+    assert (reference / "member_risk.sttm.xlsx").is_file()
+    assert client.get("/api/demo/corpus").json()["built"] is True
+
+
+def test_startup_sync_falls_back_to_reindex_without_a_tenant(client, dirs, monkeypatch):
+    for k in ENV:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(cr, "SYNC_ON_STARTUP", True)
+    preloaded, reference = dirs
+    preloaded.mkdir(parents=True)
+    (preloaded / "member_risk.txt").write_bytes(frd_text("member_risk", MEMBER_COLS))
+    state = cr.start_sync_on_startup()
+    assert state["mode"] == "reindex" and state["trigger"] == "startup"
+    state = _wait_sync(client)
+    assert state["state"] == "done" and state["summary"]["n_frds"] == 1
+
+
+def test_startup_sync_respects_the_off_switch(client, configured, dirs, library, monkeypatch):
+    monkeypatch.setattr(cr, "SYNC_ON_STARTUP", False)
+    assert cr.start_sync_on_startup() is None
+    assert client.get("/api/demo/corpus/sync").json()["state"] == "idle"
+
+
+def test_startup_sync_applies_the_library_naming_convention(client, configured, dirs, monkeypatch):
+    """With the default FRD_/STTM_ prefixes, a start-up sync imports exactly
+    the convention files and pairs them by stem."""
+    monkeypatch.setattr(cr, "SYNC_ON_STARTUP", True)
+    monkeypatch.setattr(cr, "FRD_NAME_PREFIX", "FRD_")
+    monkeypatch.setattr(cr, "STTM_NAME_PREFIX", "STTM_")
+    lib = FakeLibrary()
+    lib.add_frd("f1", "FRD_member_risk.txt", frd_text("member_risk", MEMBER_COLS))
+    lib.add_frd("f2", "readme.txt", frd_text("claim_intake", CLAIM_COLS))
+    lib.add_sttm("r1", "STTM_member_risk.xlsx", wb_bytes("member_risk", MEMBER_COLS))
+    monkeypatch.setattr(spr, "build_client", lambda cfg: lib)
+    cr.start_sync_on_startup()
+    state = _wait_sync(client)
+    assert state["state"] == "done"
+    assert state["summary"]["frd_ignored"] == 1 and state["summary"]["n_pairs"] == 1
+    frds = client.get("/api/demo/corpus/frds").json()["frds"]
+    assert [f["doc_id"] for f in frds] == ["FRD_member_risk"]
+    assert frds[0]["reference"] == "STTM_member_risk.xlsx" and frds[0]["matched_by"] == "name"
+
+
+def test_app_lifespan_kicks_off_the_startup_sync(monkeypatch):
+    """app.py wires start_sync_on_startup into the FastAPI lifespan — and
+    the hook never blocks or raises the server's start-up."""
+    import app as backend_app
+    calls = []
+    monkeypatch.setattr(backend_app, "start_sync_on_startup", lambda: calls.append("startup"))
+    with TestClient(backend_app.app):
+        pass
+    assert calls == ["startup"]

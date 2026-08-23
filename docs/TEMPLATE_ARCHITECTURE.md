@@ -7,8 +7,9 @@ ACFC rebuilder needs; the code is the authority on details.
 ## The idea in one paragraph
 
 Every **approved FRD→STTM pair is a template**. The SharePoint **sync**
-(`frdsttm/sync.py`; the scheduled `frd_sttm_sharepoint_sync` job and the
-app's "Sync now") lands every FRD and STTM it can reach in SharePoint in
+(`frdsttm/sync.py`; run when the app starts and on its "Sync now" — no
+schedule since 2026-08-22 late evening; the `frd_sttm_sharepoint_sync` job
+is the databricks-mode execution target) lands every FRD and STTM it can reach in SharePoint in
 the `frd_raw` / `sttm_reference` volumes — bulk on its first tick,
 incrementally after — pairs them deterministically, and stores the result
 as a corpus index in Unity Catalog (the reference volume). When an
@@ -55,7 +56,7 @@ one extraction call per document (stage 02). Everything else is plain code:
 | `frdsttm/similarity.py` | src | features, scores, pairing, template decision, thresholds |
 | `frdsttm/corpus.py` | src | `corpus_index.json` (v2) build/load, pairs, unmapped, `content_sha256` per document |
 | `frdsttm/sync.py` | src | SharePoint → volumes → index: incremental download (eTag/modified/size via `sync_manifest.json`), departed-file removal, `reindex()` |
-| `notebooks/00_sharepoint_sync.py` + `resources/frd_sttm_sync_job.yml` | job | the scheduled sync (cron `sync_cron`, default 15 min); `sync_mode=sync|reindex` |
+| `notebooks/00_sharepoint_sync.py` + `resources/frd_sttm_sync_job.yml` | job | the sync (triggered at app start-up / "Sync now"; no schedule); `sync_mode=sync|reindex`; `frd_name_prefix` / `sttm_name_prefix` |
 | `frdsttm/exemplars.py` | src | retrieved-exemplar prompt block + provenance |
 | 02 `sttm_exemplars` | notebook | exemplar block into the live prompt; sidecar `<doc>.exemplars.json` |
 | 04 template decision | notebook | mode → dictionary → render; cross eval; `_provenance.template_decision` |
@@ -71,7 +72,7 @@ reference STTMs in `sttm_reference`, exactly the volumes the pipeline
 already scans. No new tables: the index is one JSON artifact, rebuilt
 idempotently on every sync tick. In the deployed App the container keeps a
 mirror of both volumes for listing/staging, refreshed after "Sync now" and
-lazily (`STTM_CORPUS_REFRESH_SECONDS`) so scheduled ticks show up.
+lazily (`STTM_CORPUS_REFRESH_SECONDS`) so another instance's sync shows up.
 
 **Pairing (2026-08-22 evening).** `similarity.pair_corpus` pairs by exact
 **name** first — `name_key()` strips extensions (`.sttm.xlsx` included)

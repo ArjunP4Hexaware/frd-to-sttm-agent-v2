@@ -10,15 +10,20 @@ reshaped 2026-08-22 around the sync (src/frdsttm/sync.py):
                                            the ONLY list the picker offers
 - POST /api/demo/corpus/sync             — "Sync now": run the SharePoint sync
                                            (or a network-free reindex), 202
+- start_sync_on_startup()                 — the SAME sync, kicked off by app.py's
+                                           lifespan when the app starts (2026-08-22
+                                           late decision: no schedule)
 - GET  /api/demo/corpus/sync             — progress of that background run
 - GET  /api/demo/corpus/references/{name}— an approved STTM from the reference
                                            volume, for the "already mapped" view
 - GET  /api/demo/corpus/config           — can a sync be offered, which folders
 
 What "mapped" means here: the corpus index pairs each FRD with its STTM
-(exact name match first, deterministic similarity second), built over what
-the frd_raw and sttm_reference volumes hold. The index is written by the
-scheduled `frd_sttm_sharepoint_sync` job (or its on-demand trigger below);
+(name first — the library's `FRD_<name>` ↔ `STTM_<name>` convention —
+deterministic similarity second), built over what the frd_raw and
+sttm_reference volumes hold. The index is written by the sync this module
+starts at app START-UP and on "Sync now" (in databricks mode that is the
+bundle job `frd_sttm_sharepoint_sync`, which has no schedule of its own);
 the app only ever READS it. There is no SharePoint lookup on the request
 path any more, and nothing here writes to SharePoint — the reviewer
 uploads a finished STTM to the library's STTM folder themselves; the next
@@ -30,9 +35,9 @@ Mode behavior follows the rest of the backend (STTM_APP_MODE):
 - databricks: "Sync now" triggers the bundle-deployed sync JOB via the Jobs
   API (jobs_runner), waits for it, then mirrors both volumes down to the
   container so the picker lists exactly what Unity Catalog holds and runs
-  can stage from a local copy. The scheduled ticks need no app involvement:
-  the app re-mirrors lazily when its local index is missing or older than
-  STTM_CORPUS_REFRESH_SECONDS.
+  can stage from a local copy. The app also re-mirrors lazily when its
+  local index is missing or older than STTM_CORPUS_REFRESH_SECONDS (another
+  app instance, or a manual job run, may have synced).
 """
 
 from __future__ import annotations
@@ -75,9 +80,18 @@ REFERENCE_VOLUME = os.environ.get("STTM_REFERENCE_VOLUME", "sttm_reference")
 REFERENCE_DIR = LOCAL_ROOT / REFERENCE_VOLUME
 
 # databricks mode: how stale the container's mirror of the volumes may get
-# before a read re-mirrors from Unity Catalog (the scheduled sync writes
-# there without telling the app). Small files; cheap.
+# before a read re-mirrors from Unity Catalog (another instance or a manual
+# job run may have written there). Small files; cheap.
 CORPUS_REFRESH_SECONDS = int(os.environ.get("STTM_CORPUS_REFRESH_SECONDS", "120"))
+
+# The library's naming convention (learned 2026-08-22): every FRD is
+# FRD_<name>.<ext>, every STTM STTM_<name>.xlsx. Blank disables the filter.
+FRD_NAME_PREFIX = os.environ.get("STTM_FRD_NAME_PREFIX", "FRD_").strip()
+STTM_NAME_PREFIX = os.environ.get("STTM_STTM_NAME_PREFIX", "STTM_").strip()
+
+# Sync when the app starts (decided 2026-08-22 late evening, replacing the
+# cron schedule). "0"/"false"/"no" turns it off — local dev and tests.
+SYNC_ON_STARTUP = os.environ.get("STTM_SYNC_ON_STARTUP", "1").strip().lower() not in ("0", "false", "no")
 
 # Same accessor shape the notebooks' _param has, so thresholds resolve from
 # the same-named env vars here and from widgets there.
@@ -155,6 +169,7 @@ _sync_lock = threading.Lock()
 _sync: dict = {
     "state": "idle",           # idle | running | done | failed
     "mode": None,
+    "trigger": None,           # startup | request
     "started_at": None,
     "finished_at": None,
     "error": None,
@@ -204,6 +219,7 @@ def _sync_worker(mode: str, client, reference_folder: str | None) -> None:
             result = sync_from_sharepoint(
                 client, frd_dir=PRELOADED_DIR, reference_dir=REFERENCE_DIR,
                 reference_folder=reference_folder, thresholds=_thresholds(), now_iso=_now(),
+                frd_prefix=FRD_NAME_PREFIX, reference_prefix=STTM_NAME_PREFIX,
             )
             index = result["index"]
             summary = {**_strip_index(result), "mode": "sync",
@@ -252,14 +268,51 @@ def corpus_sync(body: SyncRequest) -> dict:
         cfg, client = _client()
         reference_folder = cfg.sttm_folder
 
+    return _start_sync(body.mode, client, reference_folder, trigger="request")
+
+
+def _start_sync(mode: str, client, reference_folder: str | None, *, trigger: str) -> dict:
     with _sync_lock:
         if _sync["state"] == "running":
             raise HTTPException(status_code=409, detail="a sync is already running")
-        _sync.update(state="running", mode=body.mode, started_at=_now(),
+        _sync.update(state="running", mode=mode, trigger=trigger, started_at=_now(),
                      finished_at=None, error=None, run_page_url=None, summary=None)
-    threading.Thread(target=_sync_worker, args=(body.mode, client, reference_folder),
+    threading.Thread(target=_sync_worker, args=(mode, client, reference_folder),
                      daemon=True).start()
     return _sync_snapshot()
+
+
+def start_sync_on_startup() -> dict | None:
+    """Run the sync when the app starts (app.py's lifespan calls this).
+
+    Decided 2026-08-22 late evening, replacing the cron schedule: the person
+    opening the app is the reason a fresh corpus matters, so the app brings
+    Unity Catalog in step with SharePoint the moment it starts — in the
+    background, never blocking first paint; the Corpus panel shows the same
+    running/done/failed state as "Sync now".
+
+    - databricks mode: trigger the sync JOB and mirror (same worker).
+    - local mode with a wired tenant: the sync in-process.
+    - local mode with NO tenant configured: a network-free REINDEX, so the
+      picker reflects whatever the volumes hold (this is not an error — an
+      unwired tenant is the ordinary dev state).
+    - STTM_SYNC_ON_STARTUP=0: do nothing, return None.
+    Never raises: a start-up failure is recorded in the sync state, not
+    thrown into the server's lifespan.
+    """
+    if not SYNC_ON_STARTUP:
+        return None
+    mode, client, reference_folder = "sync", None, None
+    if not IS_DATABRICKS_APP:
+        try:
+            cfg, client = _client()
+            reference_folder = cfg.sttm_folder
+        except HTTPException:
+            mode = "reindex"   # no tenant wired (503) / sign-in refused (502): index the volumes
+    try:
+        return _start_sync(mode, client, reference_folder, trigger="startup")
+    except HTTPException:
+        return _sync_snapshot()  # a sync is already running — fine
 
 
 @router.get("/api/demo/corpus/sync")
