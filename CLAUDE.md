@@ -11,6 +11,18 @@
 > repo; it lives in the umbrella folder, which this repo was moved OUT of on
 > 2026-08-22 (it now sits beside it, not inside it). This CLAUDE.md remains
 > authoritative for this repo where the derived documents disagree with it.
+>
+> **Where the work happens since 2026-08-23 (Arjun's decision): on Arjun's
+> personal MacBook Air, working clone `~/Desktop/career/frd-to-sttm-agent`
+> — the work is NOT moving to the Hexaware laptop.** Consequences: the
+> umbrella folder and the program-wide master context document are NOT on
+> this machine (copy by hand if needed); the clone was made blobless after
+> the 2026-08-23 history purge; and `~/Desktop` is iCloud-synced, which
+> produces Finder conflict copies named `<file> 2.<ext>` when files change
+> quickly — they are stale snapshots: delete them, never commit them (five
+> appeared on 2026-08-23; moving the clone out of `~/Desktop` would stop it).
+> Arjun's global CLAUDE.md rule "this laptop is not for company code" is
+> relaxed for THIS repo only, by him, on that date.
 
 ## Purpose & pipeline position
 

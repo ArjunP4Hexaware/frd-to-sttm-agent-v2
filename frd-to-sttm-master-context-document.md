@@ -1,6 +1,6 @@
 # FRD-to-STTM Agent — Master Context Document
 
-**Last verified: 2026-08-22, late evening — after TEMPLATE FILL (04 renders into the chosen template's own layout; §12 top entry), the start-up-sync + `FRD_`/`STTM_` naming change (IMPLEMENTED, offline-tested), the rule-placement / audit-row fix in 04 and the first successful CodeGen round trip on synthetic documents.** Read this end to end at the start
+**Last verified: 2026-08-23 — after the GOVERNANCE PASS (identity, audit trail, provenance, UC classification, access model; §12 top entry), the git-history purge of client documents, the deck rename + the new data-governance one-pager, and Arjun's decision that the work stays on his personal MacBook Air (`~/Desktop/career/frd-to-sttm-agent`), not the Hexaware laptop.** Read this end to end at the start
 of any session in this repo (≈8–10 minutes; §§1–3 alone are the 2-minute
 version). It is the single get-up-to-speed document for THIS agent only, and
 it is **tracked in git deliberately** so it travels with every clone — unlike
@@ -47,11 +47,12 @@ feature set, no cuts** (Arjun, 2026-08-22 — superseding the earlier
 presentation of both agents still stands after it). Everything needed is on
 `staging` as of commit `dd2c0eb` + `fe23849`, verified **offline only**.
 
-### The ordered Monday checklist (Hexaware laptop)
+### The ordered Monday checklist (Arjun's MacBook Air — decided 2026-08-23: the work does not move to the Hexaware laptop; the Databricks workspace, Entra ID and GitHub are all reached from here)
 
-1. Clone/pull `staging`. `python -m venv .venv && pip install -e
-   ".[local,dev,ui]"`; `cd review_app_react/frontend && npm install && npm
-   run build`. Fill `.env` from `.env.example`: the `SHAREPOINT_*` vars
+1. The clone at `~/Desktop/career/frd-to-sttm-agent` is on `staging` with a
+   `.venv` (py3.12, `.[local,dev,ui]`) already built — `git pull`, then
+   `cd review_app_react/frontend && npm install && npm run build`. Fill
+   `.env` from `.env.example`: the `SHAREPOINT_*` vars
    (tenant, client id/secret, host, site path, library, FRD folder,
    reference/STTM folder — there is no output folder), `ANTHROPIC_API_KEY`.
 2. Offline sanity with zero client content:
