@@ -420,13 +420,10 @@ def build(out: Path) -> Path:
 
     # ----- header ------------------------------------------------------------
     add_text(s, L, 0.38, 9, 0.24,
-             [("HEXAWARE  ·  AMERIHEALTH CARITAS  ·  AI-IN-ENGINEERING  ·  AGENT 01 / 03", {})],
+             [("HEXAWARE  ·  AMERIHEALTH CARITAS  ·  AGENT 01 / 03", {})],
              size=9, color=T_MUTED, font=SANS, bold=True, spacing=1.4)
-    add_text(s, L, 0.6, 9.5, 0.55, [("FRD → STTM Agent", {"color": INK, "bold": True, "size": 28}),
-                                    ("    system architecture", {"color": T_MUTED, "size": 15})], size=28)
-    add_text(s, L, 1.12, 12.1, 0.26,
-             [("Top to bottom: the technologies the agent runs on, and what flows between them — "
-               "FRD in, audited STTM and contract out, a person in the loop.", {})], size=11.5, color=T_SEC)
+    add_text(s, L, 0.62, 9.5, 0.55, [("FRD → STTM Agent", {"color": INK, "bold": True, "size": 28}),
+                                    ("    solution architecture", {"color": T_MUTED, "size": 15})], size=28)
 
     # ----- band A: system of record ------------------------------------------------
     AY, AH = 1.5, 1.12
@@ -458,7 +455,7 @@ def build(out: Path) -> Path:
     # ----- band B: data platform ---------------------------------------------------
     add_rect(s, L, BY, W, BH, fill=CARD, line=HAIR, radius=0.025)
     band_label(s, L + 0.25, BY + 0.12, "Data platform", CODE_DIM)
-    add_logo(s, "databricks", L + 0.25, BY + 0.34, 1.45, 0.4)
+    add_logo(s, "databricks", L + 0.25, BY + 0.3, 1.5, 0.48)
     add_text(s, L + 1.85, BY + 0.36, 6.5, 0.3,
              [("Databricks", {"bold": True, "color": T_PRI, "size": 12}),
               ("   — Jobs run the pipeline, Apps serve the reviewer, Unity Catalog holds every file and table.", {})],
@@ -495,7 +492,7 @@ def build(out: Path) -> Path:
         if i < 3:
             add_line(s, x + sw + 0.01, sy + 0.36, x + sw + sgap - 0.01, sy + 0.36, color=T_MUTED, width=0.75, head=True)
     # Claude beside stage 02
-    add_logo(s, "claude", c2x + 0.18, sy + 0.82, 0.95, 0.21)
+    add_logo(s, "claude", c2x + 0.18, sy + 0.8, 1.0, 0.26)
     add_text(s, c2x + 1.22, sy + 0.8, c2w - 1.4, 0.26,
              [("Anthropic API — one call per document, in stage 02; everything else is deterministic code.", {})],
              size=8.5, color=T_SEC)
@@ -553,9 +550,6 @@ def build(out: Path) -> Path:
              [("the model proposes", {"color": LLM_DIM, "bold": True}), ("     ·     ", {"color": HAIR2}),
               ("deterministic code audits and decides", {"color": CODE_DIM, "bold": True}), ("     ·     ", {"color": HAIR2}),
               ("a person resolves", {"color": HUMAN_DIM, "bold": True})], size=11)
-    add_text(s, R - 4.8, FY + 0.08, 4.8, 0.22,
-             [("staging · 2026-08-22 · verified offline · live deploy pending", {})], size=8.5, color=T_MUTED, font=SANS,
-             align=PP_ALIGN.RIGHT)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(out))
