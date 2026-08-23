@@ -81,6 +81,7 @@ print(f"raw:   {RAW_DIR}\ntable: {TABLE}\npreview: {PREVIEW_DIR}")
 
 # COMMAND ----------
 
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -128,6 +129,12 @@ for p in sorted(raw.iterdir()):
         "doc_id": p.stem,
         "project_id": infer_project_id(p.name),
         "source_file": p.name,
+        # Provenance: the fingerprint of the SOURCE BYTES this row was parsed
+        # from (docs/AI_GOVERNANCE.md). Same hash the corpus index and the
+        # app's run manifest record, so a row, an index entry and a run can
+        # be joined on exactly-which-document without trusting file names —
+        # a revised FRD under the same name is a different sha.
+        "content_sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
         "file_type": p.suffix.lower().lstrip("."),
         "char_count": len(md),
         "heading_count": sum(1 for l in md.splitlines() if l.startswith("#")),
@@ -166,6 +173,7 @@ if IS_DATABRICKS:
         T.StructField("doc_id", T.StringType(), False),
         T.StructField("project_id", T.StringType(), True),
         T.StructField("source_file", T.StringType(), False),
+        T.StructField("content_sha256", T.StringType(), False),
         T.StructField("file_type", T.StringType(), False),
         T.StructField("char_count", T.LongType(), False),
         T.StructField("heading_count", T.LongType(), False),

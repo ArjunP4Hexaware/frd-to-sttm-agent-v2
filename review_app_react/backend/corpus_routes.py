@@ -48,10 +48,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+import audit
+import identity as ident
 import jobs_runner
 from demo import IS_DATABRICKS_APP, LOCAL_ROOT, PRELOADED_DIR, _rel
 from sharepoint_routes import _client, _client_secret, _param
@@ -239,8 +241,14 @@ class SyncRequest(BaseModel):
     mode: str = "sync"
 
 
+# The actor a start-up sync is recorded under: nobody clicked it, the
+# platform (or an operator restart) did. Distinct from identity.ACTOR_UNKNOWN
+# on purpose — "the app itself, on start-up" is a known actor.
+STARTUP_IDENTITY = {"actor": "system:startup", "source": "startup"}
+
+
 @router.post("/api/demo/corpus/sync", status_code=202)
-def corpus_sync(body: SyncRequest) -> dict:
+def corpus_sync(body: SyncRequest, request: Request) -> dict:
     """"Sync now" / "Rebuild index": start one background sync and return
     its state (poll GET /api/demo/corpus/sync).
 
@@ -260,6 +268,7 @@ def corpus_sync(body: SyncRequest) -> dict:
     if body.mode not in SYNC_MODES:
         raise HTTPException(status_code=400,
                             detail=f"mode must be one of {SYNC_MODES}, got {body.mode!r}")
+    who = ident.resolve_identity(request)
 
     client, reference_folder = None, None
     if body.mode == "sync" and not IS_DATABRICKS_APP:
@@ -268,15 +277,26 @@ def corpus_sync(body: SyncRequest) -> dict:
         cfg, client = _client()
         reference_folder = cfg.sttm_folder
 
-    return _start_sync(body.mode, client, reference_folder, trigger="request")
+    return _start_sync(body.mode, client, reference_folder, trigger="request", identity=who)
 
 
-def _start_sync(mode: str, client, reference_folder: str | None, *, trigger: str) -> dict:
+def _start_sync(mode: str, client, reference_folder: str | None, *, trigger: str,
+                identity: dict | None = None) -> dict:
+    identity = identity or STARTUP_IDENTITY
     with _sync_lock:
         if _sync["state"] == "running":
             raise HTTPException(status_code=409, detail="a sync is already running")
         _sync.update(state="running", mode=mode, trigger=trigger, started_at=_now(),
                      finished_at=None, error=None, run_page_url=None, summary=None)
+    # Recorded before the worker starts; a failed audit write in databricks
+    # mode means the sync does not run (fail-closed, like every governed
+    # action). The sync rewrites the corpus volumes — that is worth an actor.
+    try:
+        audit.record("corpus.sync.started", identity, mode=mode, trigger=trigger)
+    except audit.AuditWriteError as exc:
+        with _sync_lock:
+            _sync.update(state="failed", finished_at=_now(), error=str(exc))
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     threading.Thread(target=_sync_worker, args=(mode, client, reference_folder),
                      daemon=True).start()
     return _sync_snapshot()
@@ -310,9 +330,10 @@ def start_sync_on_startup() -> dict | None:
         except HTTPException:
             mode = "reindex"   # no tenant wired (503) / sign-in refused (502): index the volumes
     try:
-        return _start_sync(mode, client, reference_folder, trigger="startup")
+        return _start_sync(mode, client, reference_folder, trigger="startup",
+                           identity=STARTUP_IDENTITY)
     except HTTPException:
-        return _sync_snapshot()  # a sync is already running — fine
+        return _sync_snapshot()  # a sync is already running (409), or the audit write failed (502) — recorded in state
 
 
 @router.get("/api/demo/corpus/sync")

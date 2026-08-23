@@ -203,6 +203,12 @@ def job_parameters(suffix: str) -> dict[str, str]:
         "contracts_table": f"frd_contracts_{table_suffix}",
         "runs_table": f"frd_sttm_runs_{table_suffix}",
         "sharepoint_fetch_mode": "skip",
+        # Provenance (docs/AI_GOVERNANCE.md): who asked for this run and the
+        # app's own run id, stamped by 04 on the runs table. Declared as
+        # job parameters in resources/frd_sttm_job.yml; the caller overrides
+        # triggered_by per request via start_job_run(..., triggered_by=).
+        "triggered_by": "unknown",
+        "run_label": suffix,
     }
 
 
@@ -220,9 +226,12 @@ def stage_frd(w, suffix: str, frd_path: Path) -> str:
     return dest
 
 
-def start_job_run(w, job_id: int, suffix: str) -> int:
+def start_job_run(w, job_id: int, suffix: str, triggered_by: str | None = None) -> int:
     """run_now with the insulated parameters; returns the run id."""
-    return _run_now(w, job_id, job_parameters(suffix))
+    params = job_parameters(suffix)
+    if triggered_by:
+        params["triggered_by"] = triggered_by
+    return _run_now(w, job_id, params)
 
 
 def sync_job_parameters(mode: str) -> dict[str, str]:
@@ -238,7 +247,8 @@ def start_sync_job(w, job_id: int, mode: str = "sync") -> int:
     return _run_now(w, job_id, sync_job_parameters(mode))
 
 
-RENDER_JOB_PARAMETERS = ("catalog", "schema", "contracts_table", "runs_table", "out_volume")
+RENDER_JOB_PARAMETERS = ("catalog", "schema", "contracts_table", "runs_table", "out_volume",
+                         "triggered_by", "run_label")
 
 
 def render_job_parameters(suffix: str) -> dict[str, str]:
@@ -249,8 +259,21 @@ def render_job_parameters(suffix: str) -> dict[str, str]:
     return {k: full[k] for k in RENDER_JOB_PARAMETERS}
 
 
-def start_render_job(w, job_id: int, suffix: str) -> int:
-    return _run_now(w, job_id, render_job_parameters(suffix))
+def start_render_job(w, job_id: int, suffix: str, triggered_by: str | None = None) -> int:
+    params = render_job_parameters(suffix)
+    if triggered_by:
+        params["triggered_by"] = triggered_by
+    params["run_label"] = f"{suffix}:rerender"
+    return _run_now(w, job_id, params)
+
+
+def upload_run_manifest(w, suffix: str, payload: bytes) -> str:
+    """Put the app-level run manifest (demo.run_manifest) next to the
+    artifacts in the run's UC out dir, so the durable copy is
+    self-describing without the app."""
+    dest = f"{out_dir_for(suffix)}/run_manifest.json"
+    w.files.upload(dest, payload, overwrite=True)
+    return dest
 
 
 def upload_contract(w, suffix: str, doc_id: str, payload: bytes) -> str:

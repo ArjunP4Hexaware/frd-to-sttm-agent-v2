@@ -44,6 +44,15 @@ resources:
           default: frd_sttm_runs
         - name: sharepoint_fetch_mode
           default: fetch
+        # Provenance (docs/AI_GOVERNANCE.md). The review app overrides both
+        # per run (jobs_runner.job_parameters): who asked for the run, and
+        # the app's run id. A hand `bundle run` leaves the defaults — which
+        # is itself a recorded fact ("triggered_by=manual"). 04 stamps them
+        # on the runs table next to the job run id ({{job.run_id}}).
+        - name: triggered_by
+          default: manual
+        - name: run_label
+          default: ""
         # SharePoint knobs for the fetch task. The client SECRET is
         # deliberately absent -- it resolves from the secret scope inside the
         # notebook, never from a job parameter. There is no output-folder
@@ -126,6 +135,7 @@ resources:
               max_retries: "2"
               secret_scope: sttm_agent
               secret_key: anthropic_api_key
+              job_run_id: "{{job.run_id}}"
 
         - task_key: contract_build
           depends_on:
@@ -162,3 +172,6 @@ resources:
               runs_table: "{{job.parameters.runs_table}}"
               reference_volume: sttm_reference
               out_volume: "{{job.parameters.out_volume}}"
+              triggered_by: "{{job.parameters.triggered_by}}"
+              run_label: "{{job.parameters.run_label}}"
+              job_run_id: "{{job.run_id}}"

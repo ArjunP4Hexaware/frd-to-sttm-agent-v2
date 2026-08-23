@@ -157,6 +157,12 @@ notebooks/00_sharepoint_fetch.py    SharePoint library → frd_raw (read; the
                         pipeline job's own fetch for a stand-alone full run)
                         — there is NO publish notebook: the repo never writes
                         to SharePoint (2026-08-22; 05_sharepoint_publish removed)
+notebooks/90_uc_governance.py     Unity Catalog governance set-up (2026-08-23):
+                        creates the audit volume, COMMENTs + TAGs every
+                        table/volume the agent touches (owner, steward,
+                        sensitivity, data class, retention) — run BY HAND via
+                        `bundle run frd_sttm_uc_governance` by someone with
+                        APPLY TAG; local mode prints the plan. Idempotent.
 notebooks/_models.py, _local_tables.py, _mock_extractions.py,
   _contract_build.py, _sharepoint.py   thin re-export SHIMS — the real code
                         lives in src/frdsttm/; %run and local imports both
@@ -194,9 +200,9 @@ context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
 contracts/frd_label_contract.json   the versioned FRD label contract — now a
                         frozen input, no longer mirrored anywhere (see
                         "Upstream" above)
-tests/                  offline (no LLM/network/Spark); 213 as of
-                        2026-08-22 (late evening; +17 rule placement/audit rows,
-                        +11 start-up sync / prefix pairing, +7 template fill) —
+tests/                  offline (no LLM/network/Spark); 234 as of
+                        2026-08-23 (+21 governance: identity, audit trail,
+                        provenance, UC plan) —
                         run `pytest` for the live count rather than trusting
                         a number here
 schema/sttm_extraction_schema.json   the extraction contract (mirrors models)
@@ -207,6 +213,20 @@ resources/frd_sttm_sync_job.yml   the sync job — NO schedule (2026-08-22 late)
 resources/frd_sttm_render_job.yml the render-only job (stage 04 over an existing
                         run suffix) that the human-in-the-loop re-render triggers
                         in databricks mode — no re-extraction, nothing billed
+resources/frd_sttm_governance_job.yml  the governance set-up job (90_uc_governance),
+                        hand-run, no schedule, not triggered by the app
+docs/AI_GOVERNANCE.md   the governance record (2026-08-23): AI asset/model
+                        card, data flow, data inventory + classification,
+                        controls map (each control → code → how to verify),
+                        the provenance chain, audit-trail SQL, what to register
+                        in the client's Collibra, and the OPEN human decisions
+                        (owner/steward, Anthropic data path/BAA, retention,
+                        access model, git-history purge). Keep it current.
+review_app_react/backend/identity.py + audit.py   (2026-08-23) who-is-calling
+                        (Databricks Apps X-Forwarded-* headers; 401 without them
+                        in databricks mode) and the append-only audit trail (one
+                        JSON per event in volume STTM_AUDIT_VOLUME, fail-closed);
+                        see the Governance section below
 app.yaml + requirements.txt   the Databricks App manifest, AT THE REPO ROOT
                         (2026-08-22 evening): the App deploys from the repo root
                         because the backend imports src/frdsttm and reaches
@@ -422,6 +442,58 @@ to detect it now exists).
   API has no fine-tuning surface; reasoning in the master context document
   §7a. Settled; do not re-open.
 
+## Governance (added 2026-08-23 — docs/AI_GOVERNANCE.md is the full record)
+
+The client runs Collibra; the governance pass made the agent *describable
+and auditable* without changing what it does. The rules that now hold:
+
+- **Every governed action has a named actor and an audit event, or it does
+  not happen.** Governed = start run, record resolution, re-render, download
+  a workbook (the HAND-OFF — the repo never writes to SharePoint, so the
+  download is where a generated STTM leaves the governed boundary), start a
+  sync, upload. `identity.py` reads the Databricks Apps forwarded headers
+  (`X-Forwarded-Email` / `-Preferred-Username` / `-User`); in databricks
+  mode a request without them is a 401 (`STTM_REQUIRE_IDENTITY=0` is the
+  operator-only escape hatch → actor `unknown`); local mode records the OS
+  user with `source: local`. `audit.py` writes ONE JSON FILE PER EVENT to
+  `/Volumes/<cat>/<sch>/<STTM_AUDIT_VOLUME>/events/` (+ a local mirror)
+  BEFORE the action; a failed volume write is the caller's 502 and the
+  action is not performed. `GET /api/demo/audit` lists; `read_files(...,
+  format => 'json')` queries. Never document content in an event. The
+  `X-Forwarded-Access-Token` header is never read.
+- **Provenance is hashes and ids, never file names.** `frd_documents.
+  content_sha256` (01) = the corpus index's = the run manifest's `frd_sha256`
+  (02's `extraction_meta` sidecar carries it too); `frd_sttm_runs.
+  rendered_sha256` (04) = `workbook.downloaded.sha256`. `extractions/<doc>.
+  extraction_meta.json` (02) records provider, model, `system_prompt_sha256`,
+  `schema_sha256`, usage, exemplars, SDK version, job run id — written for
+  mock runs too. `<set>/run_manifest.json` (app) records who/which bytes/
+  mode/job run/outcome and is uploaded next to the artifacts in databricks
+  mode. `HumanResolution.resolved_by` is the actor (was always None).
+- **`frd_sttm_runs` is APPEND + mergeSchema, never overwrite** — it is the
+  render log. New columns: `run_label`, `triggered_by`, `job_run_id`,
+  `provider`, `model`, `system_prompt_sha256`, `input/output_tokens`,
+  `frd_sha256`, `rendered_sha256`. `triggered_by` / `run_label` are job
+  parameters on BOTH job ymls (the app overrides them per run; a hand run
+  records `manual`), `job_run_id` is `{{job.run_id}}`; local subprocess
+  mode passes `TRIGGERED_BY` / `RUN_LABEL` env vars — `_param` reads both.
+  The Jobs API rejects undeclared parameters: add a parameter to
+  `jobs_runner.job_parameters` / `RENDER_JOB_PARAMETERS` ONLY together with
+  the yml.
+- **Classification is a separate, hand-run, APPLY-TAG step**
+  (`90_uc_governance` / `frd_sttm_uc_governance`), not a pipeline
+  side-effect; defaults read as placeholders (`UNASSIGNED — set
+  data_owner`). Do not move tagging into 01/03/04.
+- **Deploy prerequisite added:** volume `sttm_audit` exists (the governance
+  job creates it) with READ+WRITE VOLUME for the app's service principal —
+  without it every governed action in the deployed App is a 502 by design.
+- **Open human decisions live in docs/AI_GOVERNANCE.md §8** (owner/steward,
+  Anthropic data path vs the client's BAA posture, retention, access model,
+  git-history purge). Do not "resolve" them in code; record the decision.
+- Tests: `tests/test_governance.py` (+ `tests/conftest.py` points the audit
+  store at tmp for the whole suite — no test writes into
+  local_dev_fixtures/).
+
 ## Branching model
 
 All development happens on `staging`. `main` is the deployment branch;
@@ -435,8 +507,12 @@ the `local_dev_fixtures/` inputs, and the demo replay set
 (`local_dev_fixtures/sttm_out_live_e2e_20260807b/`, the post-fix live E2E run
 described in docs/LIVE_E2E_2026-08-07.md) were deleted from the working tree
 and `git rm`'d on Arjun's instruction that no client documents — raw or
-derived — live in the repository. They remain in git history until a purge
-is decided. Consequences: a fresh clone has no preloaded FRD, no offline
+derived — live in the repository. **PURGED FROM GIT HISTORY 2026-08-23**
+(`git filter-repo --invert-paths` over `demo_frd.docx`, `demo_sttm.xlsx`,
+`local_dev_fixtures/`; `main` + `staging` force-pushed; every commit SHA
+changed — any clone made before then must be re-cloned, not pulled; the
+old root commits remain fetchable from GitHub by raw SHA until GitHub
+Support purges them on request). Consequences: a fresh clone has no preloaded FRD, no offline
 replay set and no reference workbook; the replay tests in
 `tests/test_demo_backend.py` skip (they already guarded on the set being
 present); a local run needs you to drop an FRD into

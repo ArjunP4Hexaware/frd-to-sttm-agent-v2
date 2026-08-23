@@ -96,6 +96,9 @@ MAX_TOKENS = int(_param("max_tokens", "64000"))
 MAX_RETRIES = int(_param("max_retries", "2"))
 SECRET_SCOPE = _param("secret_scope", "sttm_agent")
 SECRET_KEY = _param("secret_key", "anthropic_api_key")
+# Provenance: the Databricks job run id ({{job.run_id}} in the job yml);
+# blank on a local/subprocess run. Stamped on the extraction_meta sidecar.
+JOB_RUN_ID = _param("job_run_id", "")
 
 if IS_DATABRICKS:
     DOCS_TABLE = f"{CATALOG}.{SCHEMA}.{DOCS_TABLE_NAME}"
@@ -316,18 +319,26 @@ SYSTEM_PROMPT = (
 
 # COMMAND ----------
 
+def _doc_row(r) -> dict:
+    # content_sha256 is 01's provenance column (added with the governance
+    # pass); a table written before it still loads, with None.
+    try:
+        sha = r["content_sha256"]
+    except (KeyError, ValueError, IndexError):
+        sha = None
+    return {"doc_id": r["doc_id"], "source_file": r["source_file"],
+            "content": r["content"], "content_sha256": sha}
+
+
 if IS_DATABRICKS:
-    docs = [
-        {"doc_id": r["doc_id"], "source_file": r["source_file"], "content": r["content"]}
-        for r in spark.table(DOCS_TABLE).select("doc_id", "source_file", "content").collect()
-    ]
+    _tbl = spark.table(DOCS_TABLE)
+    _cols = ["doc_id", "source_file", "content"] + (
+        ["content_sha256"] if "content_sha256" in _tbl.columns else [])
+    docs = [_doc_row(r) for r in _tbl.select(*_cols).collect()]
 else:
     from _local_tables import read_table
 
-    docs = [
-        {"doc_id": r["doc_id"], "source_file": r["source_file"], "content": r["content"]}
-        for r in read_table(LOCAL_ROOT / "warehouse", CATALOG, SCHEMA, DOCS_TABLE_NAME)
-    ]
+    docs = [_doc_row(r) for r in read_table(LOCAL_ROOT / "warehouse", CATALOG, SCHEMA, DOCS_TABLE_NAME)]
 print(f"{len(docs)} document(s) in {DOCS_TABLE}")
 assert docs, f"No documents in {DOCS_TABLE} — run 01_frd_ingest first."
 
@@ -359,7 +370,9 @@ if EXEMPLARS_MODE != "off" and not (MOCK_EXTRACTION or USE_MOCK):
 
 # COMMAND ----------
 
+import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -374,6 +387,7 @@ total_input = total_output = 0
 results = []
 
 for d in docs:
+    exemplar_block = None
     if MOCK_EXTRACTION or USE_MOCK:
         from _mock_extractions import mock_spec_for
 
@@ -429,6 +443,43 @@ for d in docs:
     u = response.usage
     total_input += u.input_tokens
     total_output += u.output_tokens
+
+    # Provenance sidecar (docs/AI_GOVERNANCE.md): exactly which model, which
+    # prompt + schema (by fingerprint), over which input bytes, at what
+    # cost, produced this extraction. Facts the extraction JSON itself
+    # cannot carry and the runs table (04) reads back. Written for mock
+    # runs too — "provider: mock" is a reviewable fact, not an omission.
+    meta = {
+        "doc_id": d["doc_id"],
+        "source_file": d["source_file"],
+        "content_sha256": d.get("content_sha256"),
+        "provider": ACTIVE_PROVIDER,
+        "model": ACTIVE_MODEL if ACTIVE_PROVIDER != "mock" else None,
+        "max_tokens": MAX_TOKENS,
+        "system_prompt_sha256": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
+        "schema_sha256": hashlib.sha256(
+            json.dumps(FrdIngestionSpec.model_json_schema(by_alias=True), sort_keys=True).encode("utf-8")
+        ).hexdigest(),
+        "stop_reason": response.stop_reason,
+        "usage": {
+            "input_tokens": getattr(u, "input_tokens", 0),
+            "output_tokens": getattr(u, "output_tokens", 0),
+            "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", None),
+            "cache_creation_input_tokens": getattr(u, "cache_creation_input_tokens", None),
+        },
+        "exemplars_used": (
+            [e.get("reference") or e.get("name") or str(e) for e in exemplar_block["exemplars"]]
+            if (ACTIVE_PROVIDER != "mock" and exemplar_block) else []
+        ),
+        "extraction_file": out_path.name,
+        "extraction_sha256": hashlib.sha256(out_path.read_bytes()).hexdigest(),
+        "anthropic_sdk_version": (getattr(anthropic, "__version__", None)
+                                  if ACTIVE_PROVIDER != "mock" else None),
+        "job_run_id": JOB_RUN_ID or None,
+        "extracted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    (Path(EXTRACTIONS_DIR) / f"{d['doc_id']}.extraction_meta.json").write_text(
+        json.dumps(meta, indent=2), encoding="utf-8")
 
     n_feeds = len(spec.feeds)
     print(

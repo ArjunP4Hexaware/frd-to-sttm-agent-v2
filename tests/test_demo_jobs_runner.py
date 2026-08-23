@@ -329,7 +329,7 @@ def test_databricks_run_completes_without_a_local_api_key(databricks_mode, monke
         jobs=SimpleNamespace(get_run=lambda rid: SimpleNamespace(run_page_url="https://ws/run/42"))))
     monkeypatch.setattr(jr, "resolve_job_id", lambda w: 7)
     monkeypatch.setattr(jr, "stage_frd", lambda w, s, p: staged.append((s, p.name)))
-    monkeypatch.setattr(jr, "start_job_run", lambda w, jid, s: 42)
+    monkeypatch.setattr(jr, "start_job_run", lambda w, jid, s, **kw: 42)
     monkeypatch.setattr(jr, "poll_job_run", lambda w, run, rid: polled.append(rid))
 
     def fake_download(w, suffix, dest):
@@ -354,7 +354,7 @@ def test_databricks_run_failure_surfaces_and_clears_the_active_slot(databricks_m
     monkeypatch.setattr(jr, "_workspace_client", lambda: SimpleNamespace(jobs=None))
     monkeypatch.setattr(jr, "resolve_job_id", lambda w: 7)
     monkeypatch.setattr(jr, "stage_frd", lambda w, s, p: None)
-    monkeypatch.setattr(jr, "start_job_run", lambda w, jid, s: 42)
+    monkeypatch.setattr(jr, "start_job_run", lambda w, jid, s, **kw: 42)
 
     def fail_poll(w, run, rid):
         raise jr.JobRunnerError("extract: AssertionError: no key in scope")

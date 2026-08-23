@@ -77,7 +77,13 @@ presentation of both agents still stands after it). Everything needed is on
 6. `databricks bundle run frd_sttm_pipeline` — the gating check for the
    Apps deploy (§11) — and `databricks bundle run frd_sttm_sharepoint_sync`
    (the sync job — deployed as the manual / start-up target, NO schedule
-   per the 2026-08-22 late decision) — then `databricks apps deploy`.
+   per the 2026-08-22 late decision) — then **`databricks bundle run
+   frd_sttm_uc_governance`** (2026-08-23: creates the `sttm_audit` volume
+   and tags every asset; grant the app SP READ+WRITE VOLUME on
+   `sttm_audit` — without it every governed action in the deployed App is
+   a 502 by design) — then `databricks apps deploy`. After the first live
+   run: `GET /api/demo/audit` shows `run.started` / `run.finished` under
+   your email, and `frd_sttm_runs` has `triggered_by` = you.
 7. In parallel from step 1: chase the **Entra ID app registration**
    (`Sites.Selected` application permission, admin consent, per-site
    grant). External, blocking, and the long pole for everything SharePoint.
@@ -375,6 +381,35 @@ work is fully done — inflates local per-stage wall clock only.
 
 ## 12. Decisions log (newest first; reasons matter more than dates)
 
+- **2026-08-23 (Arjun; built with Claude Code on the personal Mac, deliberate
+  one-session override of the no-work-code rule) — GOVERNANCE PASS: the
+  agent becomes describable and auditable; behaviour unchanged.** Trigger:
+  the client runs Collibra and the agent had no actor, no audit trail, a
+  runs table that was overwritten every render, and no extraction
+  provenance. What landed (full record in `docs/AI_GOVERNANCE.md`; repo
+  CLAUDE.md "Governance" has the rules): (1) `backend/identity.py` — the
+  caller is the Databricks Apps forwarded identity; databricks-mode
+  requests without it are refused; (2) `backend/audit.py` — one JSON file
+  per governed event in volume `sttm_audit` (fail-closed: no event, no
+  action) for run start/finish, resolution, re-render, workbook download
+  (= the hand-off, with the file's sha256), sync, upload; `GET
+  /api/demo/audit`; (3) provenance by hash: `frd_documents.content_sha256`
+  (01), `extraction_meta.json` sidecars (02: model, prompt/schema sha,
+  usage, exemplars, job run id), `run_manifest.json` per artifact set
+  (app), `frd_sttm_runs` now APPEND with `triggered_by / run_label /
+  job_run_id / model / tokens / frd_sha256 / rendered_sha256` (04);
+  `resolved_by` is finally set; `triggered_by` / `run_label` are job
+  parameters on both job ymls; (4) `90_uc_governance` +
+  `frd_sttm_uc_governance` — comments + tags on every UC asset, hand-run by
+  an APPLY-TAG holder, placeholders that read as placeholders. Why this
+  shape: Collibra (and UC itself) can only describe what exists — registry
+  without trail is empty; tagging is a data-owner act, not a pipeline
+  side-effect; the download is the real boundary crossing because the repo
+  is read-only against SharePoint. Explicitly NOT decided in code (§8 of
+  the doc): owner/steward names, whether the direct Anthropic API path is
+  within the client's BAA posture, retention, the app-level access model,
+  the git-history purge. New deploy prerequisite: the `sttm_audit` volume +
+  READ/WRITE VOLUME for the app SP. Tests +21 (234), all offline.
 - **2026-08-22 late evening (Arjun) — TEMPLATE FILL replaces the two
   hard-coded output dialects.** `reference_workbooks.layout_of` turns the
   parser's header-name observation into a write-side layout descriptor;

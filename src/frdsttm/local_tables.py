@@ -42,6 +42,25 @@ def write_table(
     return str(path)
 
 
+def append_table(
+    warehouse_dir: Path, catalog: str, schema: str, table: str, rows: list[dict[str, Any]]
+) -> str:
+    """Append `rows` to a local Delta table, creating it if absent. Mirrors
+    `.write.mode("append").option("mergeSchema", "true").saveAsTable(...)` —
+    the shape 04 uses for the runs table, which is an audit trail and is
+    never rewritten."""
+    path = _table_path(warehouse_dir, catalog, schema, table)
+    path.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        return str(path)
+
+    import pyarrow as pa
+    from deltalake import write_deltalake
+
+    write_deltalake(str(path), pa.Table.from_pylist(rows), mode="append", schema_mode="merge")
+    return str(path)
+
+
 def read_table(warehouse_dir: Path, catalog: str, schema: str, table: str) -> list[dict[str, Any]]:
     """Read a local Delta table back as a list of dicts (drop-in replacement
     for `spark.table(...).collect()`, since each dict supports `row["col"]`

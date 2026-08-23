@@ -32,6 +32,12 @@ resources:
           default: frd_sttm_runs
         - name: out_volume
           default: ${var.out_volume}
+        # Provenance — same two as frd_sttm_pipeline; the app passes the
+        # reviewer's identity and "<suffix>:rerender".
+        - name: triggered_by
+          default: manual
+        - name: run_label
+          default: ""
 
       email_notifications:
         on_failure:
@@ -49,3 +55,6 @@ resources:
               runs_table: "{{job.parameters.runs_table}}"
               reference_volume: sttm_reference
               out_volume: "{{job.parameters.out_volume}}"
+              triggered_by: "{{job.parameters.triggered_by}}"
+              run_label: "{{job.parameters.run_label}}"
+              job_run_id: "{{job.run_id}}"

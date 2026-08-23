@@ -64,6 +64,13 @@ CONTRACTS_TABLE_NAME = _param("contracts_table", "frd_contracts")
 RUNS_TABLE_NAME = _param("runs_table", "frd_sttm_runs")
 REFERENCE_VOLUME = _param("reference_volume", "sttm_reference")
 OUT_VOLUME = _param("out_volume", "sttm_out")
+# Provenance (docs/AI_GOVERNANCE.md): who asked for this render, the app's
+# run label, and the Databricks job run id — job parameters in the two job
+# ymls, env vars TRIGGERED_BY / RUN_LABEL / JOB_RUN_ID from the app's
+# subprocess env. "manual" / "" on a hand run: a recorded fact, not a gap.
+TRIGGERED_BY = _param("triggered_by", "manual")
+RUN_LABEL = _param("run_label", "")
+JOB_RUN_ID = _param("job_run_id", "")
 
 if IS_DATABRICKS:
     CONTRACTS_TABLE = f"{CATALOG}.{SCHEMA}.{CONTRACTS_TABLE_NAME}"
@@ -78,6 +85,7 @@ else:
 RENDERED_DIR = f"{OUT_ROOT}/rendered"
 CONTRACTS_DIR = f"{OUT_ROOT}/contracts"
 REPORTS_DIR = f"{OUT_ROOT}/reports"
+EXTRACTIONS_DIR = f"{OUT_ROOT}/extractions"   # 02's extraction_meta sidecars (read-only here)
 print(f"contracts: {CONTRACTS_TABLE}\nreference: {REFERENCE_DIR}\nrendered:  {RENDERED_DIR}")
 
 # COMMAND ----------
@@ -1442,8 +1450,29 @@ for doc_id, contract in contracts.items():
           f"eval {str(ev['totals']['pct']) + '%' if ev else 'n/a'}, "
           f"{n_human_applied}/{len(human_audit)} human resolution(s) applied, "
           f"{len(resolutions)} attribution resolution(s) -> {Path(out_xlsx).name}")
+    # Provenance columns: 02's sidecar says which model/prompt/input bytes
+    # produced the extraction this render descends from; the render's own
+    # sha256 lets a workbook a reviewer uploads to SharePoint be matched
+    # back to exactly this row. An older artifact set without the sidecar
+    # yields NULLs, never a failure.
+    _meta_path = Path(EXTRACTIONS_DIR) / f"{doc_id}.extraction_meta.json"
+    try:
+        _meta = json.loads(_meta_path.read_text(encoding="utf-8")) if _meta_path.is_file() else {}
+    except (OSError, json.JSONDecodeError):
+        _meta = {}
+    _usage = _meta.get("usage") or {}
     runs.append({"doc_id": doc_id, "status": contract["status"],
                  "dialect": dictionary["dialect"],
+                 "run_label": RUN_LABEL,
+                 "triggered_by": TRIGGERED_BY,
+                 "job_run_id": JOB_RUN_ID,
+                 "provider": _meta.get("provider"),
+                 "model": _meta.get("model"),
+                 "system_prompt_sha256": _meta.get("system_prompt_sha256"),
+                 "input_tokens": int(_usage.get("input_tokens") or 0),
+                 "output_tokens": int(_usage.get("output_tokens") or 0),
+                 "frd_sha256": _meta.get("content_sha256"),
+                 "rendered_sha256": hashlib.sha256(Path(out_xlsx).read_bytes()).hexdigest(),
                  # comma-joined template list, or the mode marker when none
                  "reference": ", ".join(order) if order else "(freeform)",
                  "template_mode": decision["mode"],
@@ -1466,6 +1495,16 @@ if IS_DATABRICKS:
         T.StructField("doc_id", T.StringType(), False),
         T.StructField("status", T.StringType(), False),
         T.StructField("dialect", T.StringType(), False),
+        T.StructField("run_label", T.StringType(), False),
+        T.StructField("triggered_by", T.StringType(), False),
+        T.StructField("job_run_id", T.StringType(), False),
+        T.StructField("provider", T.StringType(), True),
+        T.StructField("model", T.StringType(), True),
+        T.StructField("system_prompt_sha256", T.StringType(), True),
+        T.StructField("input_tokens", T.IntegerType(), False),
+        T.StructField("output_tokens", T.IntegerType(), False),
+        T.StructField("frd_sha256", T.StringType(), True),
+        T.StructField("rendered_sha256", T.StringType(), False),
         T.StructField("reference", T.StringType(), False),
         T.StructField("template_mode", T.StringType(), False),
         T.StructField("eval_reference", T.StringType(), False),
@@ -1477,13 +1516,18 @@ if IS_DATABRICKS:
         T.StructField("rendered_path", T.StringType(), False),
         T.StructField("run_at", T.TimestampType(), False),
     ])
-    spark.createDataFrame(runs, rschema).write.mode("overwrite").option(
-        "overwriteSchema", "true").saveAsTable(RUNS_TABLE)
-    display(spark.table(RUNS_TABLE))
+    # APPEND, never overwrite (governance pass): the runs table is the audit
+    # trail of every render — a re-render after human resolutions is a new
+    # row (run_label ends in ":rerender"), not a rewrite of the last one.
+    # mergeSchema lets a table written before the provenance columns existed
+    # keep its history and gain the columns.
+    spark.createDataFrame(runs, rschema).write.mode("append").option(
+        "mergeSchema", "true").saveAsTable(RUNS_TABLE)
+    display(spark.table(RUNS_TABLE).orderBy("run_at", ascending=False))
 else:
-    from _local_tables import read_table, write_table
+    from _local_tables import append_table, read_table
 
-    write_table(LOCAL_ROOT / "warehouse", CATALOG, SCHEMA, RUNS_TABLE_NAME, runs)
+    append_table(LOCAL_ROOT / "warehouse", CATALOG, SCHEMA, RUNS_TABLE_NAME, runs)
     for _r in read_table(LOCAL_ROOT / "warehouse", CATALOG, SCHEMA, RUNS_TABLE_NAME):
         print(_r)
 

@@ -39,6 +39,17 @@ command: ["python", "review_app_react/backend/app.py"]
 #     sttm_agent/sharepoint_client_secret are populated
 #   - the app's service principal can run both jobs, READ frd_raw and
 #     sttm_reference, and read/write demo_raw and sttm_out_app
+#   - GOVERNANCE (2026-08-23, docs/AI_GOVERNANCE.md): the audit volume
+#     STTM_AUDIT_VOLUME exists (`bundle run frd_sttm_uc_governance` creates
+#     and tags it) and the service principal has READ VOLUME + WRITE VOLUME
+#     on it. Every governed action (run, resolution, re-render, workbook
+#     download, sync, upload) writes one event file there BEFORE it
+#     proceeds and FAILS (502) if it cannot. Every such action also needs
+#     the caller's identity: Databricks Apps forwards it as
+#     X-Forwarded-Email / -Preferred-Username / -User on every proxied
+#     request; a request without them is refused (401). Only set
+#     STTM_REQUIRE_IDENTITY=0 as a deliberate operator override (events are
+#     then recorded under actor "unknown").
 env:
   - name: "STTM_APP_MODE"
     value: "databricks"
@@ -56,6 +67,13 @@ env:
     value: "frd_sttm_render"
   - name: "STTM_DEMO_APP_OUT_VOLUME"
     value: "sttm_out_app"
+  # Governance: the append-only audit trail (one JSON per event under
+  # events/). Identity is REQUIRED by default in databricks mode — see the
+  # prerequisites comment above.
+  - name: "STTM_AUDIT_VOLUME"
+    value: "sttm_audit"
+  # - name: "STTM_REQUIRE_IDENTITY"
+  #   value: "0"                          # operator override ONLY
   # --- SharePoint (uncomment and fill once the Entra ID app registration
   # exists; until then the app shows "SharePoint is not connected").
   # The CLIENT SECRET must NOT be listed here as a value: map it from the

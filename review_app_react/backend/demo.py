@@ -62,11 +62,13 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 import ambiguity_parsing as ap
+import audit
 import eval_report as er
+import identity as ident
 import jobs_runner
 
 router = APIRouter()
@@ -193,13 +195,20 @@ class Run:
     subprocess, so the boundaries are exact rather than inferred."""
 
     def __init__(self, doc_id: str, frd_path: Path, suffix: str, log_path: Path,
-                 stages=_STAGES):
+                 stages=_STAGES, identity: dict | None = None):
         self.id = suffix
         self.suffix = suffix
         self.doc_id = doc_id
         self.frd_path = frd_path
         self.log_path = log_path
         self.artifact_set = f"sttm_out_{suffix}"
+        # Governance provenance (docs/AI_GOVERNANCE.md): who started this
+        # run and exactly which bytes it ran over. Stamped on the audit
+        # events, the run manifest and — via job parameters / env — the
+        # notebooks' own runs table. Identity is the identity.py dict.
+        self.identity = identity or {"actor": ident.ACTOR_UNKNOWN, "source": ident.SOURCE_UNKNOWN}
+        self.frd_sha256 = audit.sha256_of(frd_path) if frd_path.is_file() else None
+        self.job_run_id: int | None = None
         self.is_golden = doc_id == GOLDEN_DOC_ID
         self.status = STATUS_RUNNING
         self.error: str | None = None
@@ -256,6 +265,9 @@ class Run:
                 "started_at": self.started_at,
                 "finished_at": self.finished_at,
                 "run_page_url": self.run_page_url,
+                "job_run_id": self.job_run_id,
+                "triggered_by": self.identity.get("actor"),
+                "frd_sha256": self.frd_sha256,
                 "stages": [dict(s) for s in self.stages],
                 "seq": self.seq,
                 "events": [e for e in self.events if e["seq"] > after_seq],
@@ -307,10 +319,14 @@ def _validate_frd(frd_rel: str) -> Path:
     return candidate
 
 
-def _subprocess_env(suffix: str, raw_volume: str) -> dict:
+def _subprocess_env(suffix: str, raw_volume: str, identity: dict | None = None,
+                    run_label: str | None = None) -> dict:
     """The full insulation contract in one place: every output knob embeds
     the demo suffix; mock is stripped; the provider is pinned to anthropic;
-    the API key is injected (from env or .env) without ever being logged."""
+    the API key is injected (from env or .env) without ever being logged.
+    `identity` / `run_label` become TRIGGERED_BY / RUN_LABEL — the env-var
+    twins of the `triggered_by` / `run_label` job parameters — so 04 stamps
+    the same provenance on the runs table in both modes."""
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["SCHEMA"] = f"sttm_agent_{suffix}"
@@ -319,6 +335,8 @@ def _subprocess_env(suffix: str, raw_volume: str) -> dict:
     env["RAW_VOLUME"] = raw_volume
     env["STTM_LLM_PROVIDER"] = "anthropic"
     env.pop("STTM_MOCK_EXTRACTION", None)
+    env["TRIGGERED_BY"] = (identity or {}).get("actor") or ident.ACTOR_UNKNOWN
+    env["RUN_LABEL"] = run_label or suffix
     if not env.get(API_KEY_ENV_VAR, "").strip():
         key = _api_key_from_dotenv()
         if key:
@@ -326,11 +344,65 @@ def _subprocess_env(suffix: str, raw_volume: str) -> dict:
     return env
 
 
+def run_manifest(run: Run) -> dict:
+    """The self-describing record that travels WITH the artifact set
+    (`<set>/run_manifest.json`): what ran, over which bytes, started by whom,
+    with what outcome. In databricks mode it is also uploaded next to the
+    artifacts in the UC out dir, so the durable copy is self-describing
+    without the app. The extraction's model/prompt/usage facts are 02's own
+    sidecar (`extractions/<doc>.extraction_meta.json`); this is the app-level
+    half."""
+    return {
+        "run_id": run.id,
+        "suffix": run.suffix,
+        "artifact_set": run.artifact_set,
+        "doc_id": run.doc_id,
+        "frd_file": run.frd_path.name,
+        "frd_sha256": run.frd_sha256,
+        "triggered_by": run.identity.get("actor"),
+        "triggered_by_source": run.identity.get("source"),
+        "app_mode": APP_MODE,
+        "job_run_id": run.job_run_id,
+        "run_page_url": run.run_page_url,
+        "status": run.status,
+        "error": run.error,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+    }
+
+
+def _write_run_manifest(run: Run, w=None) -> None:
+    """Write the manifest into the local artifact set; in databricks mode
+    also into the UC out dir. Never raises — the run's outcome is already
+    decided and recorded; a failed manifest write is reported on the run's
+    console, not turned into a failed run."""
+    payload = json.dumps(run_manifest(run), indent=2, ensure_ascii=False)
+    try:
+        local_dir = LOCAL_ROOT / run.artifact_set
+        local_dir.mkdir(parents=True, exist_ok=True)
+        (local_dir / "run_manifest.json").write_text(payload, encoding="utf-8")
+        if IS_DATABRICKS_APP and w is not None:
+            jobs_runner.upload_run_manifest(w, run.suffix, payload.encode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 — reported, never fatal (see docstring)
+        run._emit("console", f"WARNING: run_manifest.json not written ({type(exc).__name__}: {exc})")
+
+
+def _record_run_finished(run: Run) -> None:
+    try:
+        audit.record("run.finished", run.identity, run_id=run.id, doc_id=run.doc_id,
+                     artifact_set=run.artifact_set, status=run.status, error=run.error,
+                     job_run_id=run.job_run_id, frd_sha256=run.frd_sha256)
+    except audit.AuditWriteError as exc:
+        # The run already happened; the START was recorded (or the run was
+        # refused). Surface the failure loudly on the run's console.
+        run._emit("console", f"WARNING: audit event run.finished not written — {exc}")
+
+
 def _run_worker(run: Run, raw_volume: str) -> None:
     global _active_run_id
     try:
         run.log_path.parent.mkdir(parents=True, exist_ok=True)
-        env = _subprocess_env(run.suffix, raw_volume)
+        env = _subprocess_env(run.suffix, raw_volume, identity=run.identity, run_label=run.id)
         with run.log_path.open("w", encoding="utf-8") as log:
             for fname, _label in _STAGES:
                 cmd = [sys.executable, str(ROOT / "notebooks" / fname)]
@@ -361,8 +433,12 @@ def _run_worker(run: Run, raw_volume: str) -> None:
     except Exception as exc:  # noqa: BLE001 — a stuck "running" spinner is the one outcome to prevent
         run._finish(STATUS_FAILED, f"{type(exc).__name__}: {exc}")
     finally:
+        # Release the single-run slot FIRST (terminal status == slot free is
+        # the contract pollers rely on), then persist the outcome.
         with _active_lock:
             _active_run_id = None
+        _write_run_manifest(run)
+        _record_run_finished(run)
 
 
 def _run_worker_databricks(run: Run) -> None:
@@ -372,18 +448,21 @@ def _run_worker_databricks(run: Run) -> None:
     Every step is jobs_runner's; this function only owns the Run lifecycle
     (same try/finally shape as the subprocess worker above)."""
     global _active_run_id
+    w = None
     try:
         w = jobs_runner._workspace_client()
         job_id = jobs_runner.resolve_job_id(w)
         run._emit("console", f"staging {run.frd_path.name} -> {jobs_runner.raw_dir_for(run.suffix)}")
         jobs_runner.stage_frd(w, run.suffix, run.frd_path)
-        run_id = jobs_runner.start_job_run(w, job_id, run.suffix)
+        run_id = jobs_runner.start_job_run(w, job_id, run.suffix,
+                                           triggered_by=run.identity.get("actor"))
         try:
             url = w.jobs.get_run(run_id).run_page_url
         except Exception:  # noqa: BLE001 — the link is a convenience, never worth failing a run over
             url = None
         with run._lock:
             run.run_page_url = url
+            run.job_run_id = run_id
         run._emit("console", f"job run {run_id} started" + (f" — {url}" if url else ""))
         jobs_runner.poll_job_run(w, run, run_id)
         n = jobs_runner.download_run_artifacts(w, run.suffix, LOCAL_ROOT / run.artifact_set)
@@ -398,9 +477,11 @@ def _run_worker_databricks(run: Run) -> None:
     finally:
         with _active_lock:
             _active_run_id = None
+        _write_run_manifest(run, w)
+        _record_run_finished(run)
 
 
-def start_run(frd_rel: str) -> Run:
+def start_run(frd_rel: str, identity: dict | None = None) -> Run:
     global _active_run_id
 
     frd_path = _validate_frd(frd_rel)
@@ -423,7 +504,7 @@ def start_run(frd_rel: str) -> Run:
         log_path = LOGS_DIR / f"{suffix}.log"
         if IS_DATABRICKS_APP:
             run = Run(frd_path.stem, frd_path, suffix, log_path,
-                      stages=jobs_runner.JOB_STAGES)
+                      stages=jobs_runner.JOB_STAGES, identity=identity)
         else:
             # Stage the chosen document into a per-run raw dir: 01_frd_ingest
             # ingests its whole RAW_VOLUME, so the run must see exactly one
@@ -434,7 +515,15 @@ def start_run(frd_rel: str) -> Run:
             raw_dir = LOCAL_ROOT / raw_volume
             raw_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(frd_path, raw_dir / frd_path.name)
-            run = Run(frd_path.stem, frd_path, suffix, log_path)
+            run = Run(frd_path.stem, frd_path, suffix, log_path, identity=identity)
+        # Recorded BEFORE the worker starts: if the audit write fails in
+        # databricks mode the run does not start (fail-closed — see audit.py).
+        try:
+            audit.record("run.started", run.identity, run_id=run.id, doc_id=run.doc_id,
+                         artifact_set=run.artifact_set, frd_file=frd_path.name,
+                         frd_sha256=run.frd_sha256, frd_path=_rel(frd_path))
+        except audit.AuditWriteError:
+            raise
         _runs[run.id] = run
         _active_run_id = run.id
 
@@ -745,15 +834,19 @@ def _suffix_of(set_id: str) -> str:
     return set_id[len("sttm_out_"):]
 
 
-def _rerender_worker(set_id: str, doc_id: str) -> None:
+def _rerender_worker(set_id: str, doc_id: str, identity: dict | None = None) -> None:
     suffix = _suffix_of(set_id)
+    identity = identity or {"actor": ident.ACTOR_UNKNOWN, "source": ident.SOURCE_UNKNOWN}
+    job_run_id = None
     try:
         if IS_DATABRICKS_APP:
             w = jobs_runner._workspace_client()
             jobs_runner.upload_contract(w, suffix, doc_id,
                                         _contract_v1_path(set_id, doc_id).read_bytes())
             job_id = jobs_runner.resolve_render_job_id(w)
-            run_id = jobs_runner.start_render_job(w, job_id, suffix)
+            run_id = jobs_runner.start_render_job(w, job_id, suffix,
+                                                  triggered_by=identity.get("actor"))
+            job_run_id = run_id
             try:
                 url = w.jobs.get_run(run_id).run_page_url
             except Exception:  # noqa: BLE001 — the link is a convenience
@@ -762,7 +855,8 @@ def _rerender_worker(set_id: str, doc_id: str) -> None:
             jobs_runner.wait_for_run(w, run_id)
             jobs_runner.download_run_artifacts(w, suffix, LOCAL_ROOT / set_id)
         else:
-            env = _subprocess_env(suffix, f"{RAW_STAGING_VOLUME}/{suffix}")
+            env = _subprocess_env(suffix, f"{RAW_STAGING_VOLUME}/{suffix}",
+                                  identity=identity, run_label=f"{suffix}:rerender")
             log_path = LOGS_DIR / f"{suffix}.rerender.log"
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with log_path.open("a", encoding="utf-8") as log:
@@ -782,6 +876,14 @@ def _rerender_worker(set_id: str, doc_id: str) -> None:
     except Exception as exc:  # noqa: BLE001 — a stuck 'running' is the one outcome to prevent
         _set_rerender(set_id, state="failed", finished_at=_now(),
                       error=f"{type(exc).__name__}: {exc}")
+    finally:
+        state = _rerender_state(set_id)
+        try:
+            audit.record("rerender.finished", identity, set_id=set_id, doc_id=doc_id,
+                         status=state.get("state"), error=state.get("error"),
+                         job_run_id=job_run_id)
+        except audit.AuditWriteError as exc:
+            _set_rerender(set_id, error=(state.get("error") or "") + f" [audit: {exc}]")
 
 
 # --------------------------------------------------------------------------- #
@@ -827,7 +929,7 @@ _UPLOAD_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 @router.post("/api/demo/uploads")
-async def demo_upload(file: UploadFile) -> dict:
+async def demo_upload(request: Request, file: UploadFile) -> dict:
     """Accept a .docx FRD into the gitignored demo uploads dir. Prototype-
     scoped: synthetic or anonymized documents only (the UI states this next
     to the control; enforced shape-wise here, policy-wise by the operator)."""
@@ -846,9 +948,12 @@ async def demo_upload(file: UploadFile) -> dict:
             detail=f"upload exceeds the {UPLOAD_MAX_BYTES} byte limit",
         )
     safe = _UPLOAD_NAME.sub("_", name)
+    who = ident.resolve_identity(request)
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     dest = UPLOADS_DIR / safe
     dest.write_bytes(content)
+    _audit_or_502("upload.received", who, file=safe, doc_id=dest.stem,
+                  size_bytes=len(content), sha256=audit.sha256_of(dest))
     return {
         "path": _rel(dest),
         "name": safe,
@@ -867,14 +972,50 @@ class StartDemoRunRequest(BaseModel):
 
 
 @router.post("/api/demo/runs", status_code=201)
-def demo_start_run(body: StartDemoRunRequest) -> dict:
+def demo_start_run(body: StartDemoRunRequest, request: Request) -> dict:
+    who = ident.resolve_identity(request)   # 401 in databricks mode without a forwarded identity
     try:
-        run = start_run(body.frd)
+        run = start_run(body.frd, identity=who)
     except RunConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RunPreflightError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except audit.AuditWriteError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return run.snapshot()
+
+
+def _audit_or_502(kind: str, who: dict, **fields) -> dict:
+    """Record an event or raise the caller's 502 (databricks-mode volume
+    write failure). Used by the routes whose governed action is the
+    recording itself (download, resolution, upload, sync trigger)."""
+    try:
+        return audit.record(kind, who, **fields)
+    except audit.AuditWriteError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/api/demo/audit")
+def demo_audit(request: Request, limit: int = audit.LIST_LIMIT_DEFAULT, kind: str | None = None) -> dict:
+    """The audit trail, newest first — who ran / resolved / re-rendered /
+    downloaded what, when. Reading it is itself identity-gated in databricks
+    mode (same 401 rule as every governed action). In databricks mode the
+    UC volume is mirrored down first so events written by another App
+    instance (or before a restart) are listed too."""
+    ident.resolve_identity(request)
+    if IS_DATABRICKS_APP:
+        try:
+            w = jobs_runner._workspace_client()
+            jobs_runner.mirror_volume_dir(w, audit.volume_events_dir(), audit.local_events_dir())
+        except Exception as exc:  # noqa: BLE001 — an unreadable trail is a 502 naming the fix, never an empty list
+            raise HTTPException(
+                status_code=502,
+                detail=f"could not read the audit volume {audit.volume_events_dir()} "
+                       f"({type(exc).__name__}: {exc}) — grant the app's service "
+                       "principal READ VOLUME on it.") from exc
+    events = audit.list_events(limit=limit, kind=kind)
+    return {"events": events, "n_events": len(events), "kinds": list(audit.KINDS),
+            "store": audit.volume_events_dir() if IS_DATABRICKS_APP else _rel(audit.local_events_dir())}
 
 
 @router.get("/api/demo/runs")
@@ -958,7 +1099,13 @@ def demo_artifact_results(set_id: str, doc: str) -> dict:
 
 
 @router.get("/api/demo/artifacts/{set_id}/workbook")
-def demo_artifact_workbook(set_id: str, doc: str) -> FileResponse:
+def demo_artifact_workbook(set_id: str, doc: str, request: Request) -> FileResponse:
+    """Serve the rendered workbook — and record the HAND-OFF. The repo never
+    writes to SharePoint (read-only by construction), so a reviewer taking
+    the workbook out of the app is the moment a generated STTM leaves the
+    governed boundary; the event carries the sha256 + size of exactly the
+    bytes served so an uploaded workbook can be matched back to its run."""
+    who = ident.resolve_identity(request)
     try:
         path = workbook_path(set_id, doc)
     except ArtifactRequestError as exc:
@@ -968,6 +1115,9 @@ def demo_artifact_workbook(set_id: str, doc: str) -> FileResponse:
             status_code=404,
             detail=f"no rendered STTM workbook for {doc!r} in this artifact set",
         )
+    _audit_or_502("workbook.downloaded", who, set_id=set_id, doc_id=doc,
+                  file=f"{doc}.sttm.xlsx", sha256=audit.sha256_of(path),
+                  size_bytes=path.stat().st_size)
     return FileResponse(
         str(path),
         filename=f"{doc}.sttm.xlsx",
@@ -1006,11 +1156,14 @@ class DemoResolution(BaseModel):
 
 
 @router.post("/api/demo/artifacts/{set_id}/resolutions")
-def demo_submit_resolution(set_id: str, doc: str, body: DemoResolution) -> dict:
+def demo_submit_resolution(set_id: str, doc: str, body: DemoResolution, request: Request) -> dict:
     """Record ONE human resolution into the run's v1 contract — same
     validation and persistence as orchestration.py's run-scoped route, so
     04 applies it identically. Nothing is re-rendered here; that is the
-    reviewer's explicit next click."""
+    reviewer's explicit next click. `resolved_by` is the forwarded identity
+    (identity.py) — the human-in-the-loop control is only a control if the
+    human is named."""
+    who = ident.resolve_identity(request)
     try:
         contract, items = _review_items(set_id, doc)
     except ArtifactRequestError as exc:
@@ -1047,20 +1200,26 @@ def demo_submit_resolution(set_id: str, doc: str, body: DemoResolution) -> dict:
         "rationale": body.rationale,
         "candidates_snapshot": body.candidates_snapshot or ambiguity["candidates"],
         "resolved_at": _now(),
-        "resolved_by": None,
+        "resolved_by": who["actor"],
     }
     ap.merge_resolution(contract, record)
     path = _contract_v1_path(set_id, doc)
     tmp = path.with_suffix(path.suffix + ".part")
     tmp.write_text(json.dumps(contract, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+    _audit_or_502("resolution.recorded", who, set_id=set_id, doc_id=doc,
+                  ambiguity_id=body.ambiguity_id, kind_of_ambiguity=body.kind,
+                  resolution_type=body.resolution_type,
+                  chosen_candidate=body.chosen_candidate,
+                  has_rationale=bool(body.rationale))
     return ap.to_gated_item_dict(contract, ambiguity)
 
 
 @router.post("/api/demo/artifacts/{set_id}/rerender", status_code=202)
-def demo_rerender(set_id: str, doc: str) -> dict:
+def demo_rerender(set_id: str, doc: str, request: Request) -> dict:
     """Fold the recorded resolutions into the STTM: re-run stage 04 only
     (no model call, nothing billed) and return 202; poll GET .../review."""
+    who = ident.resolve_identity(request)
     try:
         _contract, _items = _review_items(set_id, doc)
     except ArtifactRequestError as exc:
@@ -1072,7 +1231,12 @@ def demo_rerender(set_id: str, doc: str) -> dict:
             raise HTTPException(status_code=409, detail="a re-render is already running")
         _rerenders[set_id] = {"state": "running", "started_at": _now(), "finished_at": None,
                               "error": None, "run_page_url": None}
-    threading.Thread(target=_rerender_worker, args=(set_id, doc), daemon=True).start()
+    try:
+        audit.record("rerender.started", who, set_id=set_id, doc_id=doc)
+    except audit.AuditWriteError as exc:
+        _set_rerender(set_id, state="failed", finished_at=_now(), error=str(exc))
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    threading.Thread(target=_rerender_worker, args=(set_id, doc, who), daemon=True).start()
     return _rerender_state(set_id)
 
 

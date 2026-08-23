@@ -1,0 +1,59 @@
+# The Unity Catalog GOVERNANCE job (added with the governance pass,
+# 2026-08-23): notebooks/90_uc_governance.py, one task. Creates the audit
+# volume, then COMMENTs + TAGs every table/volume this agent reads or writes
+# (owner, steward, sensitivity, data class, source system, content kind,
+# retention policy) so the assets are describable in Unity Catalog — and in
+# anything that harvests UC, e.g. the client's Collibra.
+#
+# Why its own job, run BY HAND (no schedule, no trigger from the app):
+# tagging needs APPLY TAG, which the pipeline's and the app's service
+# principals should NOT hold — a data-owner decision, not a pipeline
+# side-effect. Run it once at set-up and again after a batch of demo runs
+# (run-scoped tables/volumes are tagged by prefix). Idempotent.
+#
+#   databricks bundle run frd_sttm_uc_governance -t <target> \
+#     --params data_owner="<name or group>",data_steward="<name>",retention_policy="<policy>"
+#
+# The defaults are PLACEHOLDERS that read as placeholders ("UNASSIGNED — set
+# data_owner") — never a plausible-looking guess.
+#
+# Compute: no job_cluster -> serverless, like the other jobs.
+
+resources:
+  jobs:
+    frd_sttm_uc_governance:
+      name: frd_sttm_uc_governance
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: audit_volume
+          default: sttm_audit
+        - name: data_owner
+          default: "UNASSIGNED — set data_owner"
+        - name: data_steward
+          default: "UNASSIGNED — set data_steward"
+        - name: retention_policy
+          default: "undecided — see docs/AI_GOVERNANCE.md"
+        - name: sensitivity
+          default: confidential
+
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+
+      tasks:
+        - task_key: uc_governance
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/90_uc_governance.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              audit_volume: "{{job.parameters.audit_volume}}"
+              data_owner: "{{job.parameters.data_owner}}"
+              data_steward: "{{job.parameters.data_steward}}"
+              retention_policy: "{{job.parameters.retention_policy}}"
+              sensitivity: "{{job.parameters.sensitivity}}"
