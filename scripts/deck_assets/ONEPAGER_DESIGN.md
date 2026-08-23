@@ -1,4 +1,6 @@
-# Signal Dark — design philosophy for the one-slide architecture
+# Signal — design philosophy for the one-slide architecture
+
+> **v4 (2026-08-22, Arjun): the canvas is WHITE.** The philosophy below was written for the dark v3 and still governs; the theme table at the end is the light spec now in force, with the dark values kept for reference.
 
 Applies to `context/FRD_to_STTM_Agent_System_Architecture.pptx`, built by
 `scripts/build_architecture_onepager.py`. Written 2026-08-22 using the
@@ -6,7 +8,7 @@ canvas-design, algorithmic-art, brand-guidelines and theme-factory skills;
 the theme below is the theme-factory "custom theme" Arjun chose over the
 Tech Innovation and Midnight Galaxy presets.
 
-## The movement: Signal Dark
+## The movement: Signal
 
 Information as signal against a quiet field. The slide is a dark instrument
 panel, not a poster: a near-black ground, a faint computed field moving
@@ -50,20 +52,23 @@ the top of their field — a Swiss-grid discipline applied to a dark,
 contemporary data-product idiom. Refinement means removing, aligning and
 sharpening what is already there, never adding another element.
 
-## Theme spec (theme-factory custom theme)
+## Theme spec (theme-factory custom theme) — light, in force since v4
 
-| Role | Value |
-|---|---|
-| Canvas | `111418` with the generated field image |
-| Card / raised card / hairline | `1c2127` / `252a31` / `383e47` |
-| Text — primary / secondary / muted | `f6f7f9` / `c5cbd3` / `8f99a8` |
-| LLM (one place) | `d97757` Claude orange (brand-guidelines accent) |
-| Deterministic code | `13c9ba` turquoise |
-| Human | `f0b726` gold |
-| External system | `9881f3` indigo |
-| Headings | Calibri Bold (Poppins is the brand heading face but is not installed on the target machines; Calibri ships with Office and renders true-to-width in QA) |
-| Body | Calibri |
-| Identifiers / tracked labels | Courier New, ≥ 9 pt |
+| Role | Light (v4, current) | Dark (v3, reference) |
+|---|---|---|
+| Canvas | `ffffff` + pale generated field | `111418` + dark field |
+| Card / raised / hairline / hairline-2 | `f6f7f9` / `edeff2` / `d3d8de` / `c5cbd3` | `1c2127` / `252a31` / `383e47` / `404854` |
+| Text — primary / secondary / muted | `1c2127` / `404854` / `738091` (title `111418`) | `f6f7f9` / `c5cbd3` / `8f99a8` |
+| LLM — shape / text / tint | `d97757` Claude orange / `a04d2c` / `fbeee8` | `d97757` / — / `8a4a36` |
+| Deterministic code — shape / text | `00a396` / `007067` | `13c9ba` / `007067` |
+| Human — shape / text | `d1980b` / `866103` | `f0b726` / `866103` |
+| External system — shape / text | `7961db` / `5642a6` | `9881f3` / `634dbf` |
+| Icons | `scripts/deck_assets/icons_light` (`404854`) | `icons_dark` (`c5cbd3`) |
+| Headings / body / identifiers | Calibri Bold / Calibri / Courier New ≥ 8.5 pt | same |
+
+Rule that made the light version work: every accent has a *shape* shade
+(dots, borders, dashed loop) and a *text* shade two steps darker, because
+the bright Blueprint accents that glow on black fail contrast on white.
 
 ## Conceptual seed (kept quiet)
 

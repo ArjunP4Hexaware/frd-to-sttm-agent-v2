@@ -5,7 +5,8 @@
 
 Default output: context/FRD_to_STTM_Agent_System_Architecture.pptx
 
-ONE slide — "Signal Dark" (design philosophy + theme spec in
+ONE slide — "Signal" theme, LIGHT variant since v4 (white canvas, Arjun 2026-08-22;
+the dark v3 palette is recorded in ONEPAGER_DESIGN.md) — design philosophy + theme spec in
 scripts/deck_assets/ONEPAGER_DESIGN.md, written with the canvas-design,
 algorithmic-art, brand-guidelines and theme-factory skills, 2026-08-22):
 
@@ -52,19 +53,21 @@ from pptx.util import Inches, Pt
 
 REPO = Path(__file__).resolve().parent.parent
 ASSETS = REPO / "scripts" / "deck_assets"
-ICONS = ASSETS / "icons_dark"
+ICONS = ASSETS / "icons_light"
 GEN = ASSETS / "onepager_generated"
 OUT_DEFAULT = REPO / "context" / "FRD_to_STTM_Agent_System_Architecture.pptx"
 
-# --- Signal Dark theme (see ONEPAGER_DESIGN.md) ------------------------------
-BLACK = "111418"
-CARD, RAISED, HAIR, HAIR2 = "1c2127", "252a31", "383e47", "404854"
-T_MUTED, T_SEC, T_PRI = "8f99a8", "c5cbd3", "f6f7f9"
-WHITE = "ffffff"
-LLM, LLM_DIM = "d97757", "8a4a36"        # Claude orange — the one model call
-CODE, CODE_DIM = "13c9ba", "007067"      # deterministic code
-HUMAN, HUMAN_DIM = "f0b726", "866103"    # a person
-EXT, EXT_DIM = "9881f3", "634dbf"        # external system
+# --- Signal Light theme (see ONEPAGER_DESIGN.md; white canvas since v4) --------
+# Each accent has a SHAPE shade (dots, borders, lines) and a DIM shade dark
+# enough for text on white. Blueprint shades throughout, except Claude orange.
+CANVAS = "ffffff"
+CARD, RAISED, HAIR, HAIR2 = "f6f7f9", "edeff2", "d3d8de", "c5cbd3"
+T_MUTED, T_SEC, T_PRI = "738091", "404854", "1c2127"
+INK = "111418"
+LLM, LLM_DIM, LLM_TINT = "d97757", "a04d2c", "fbeee8"   # Claude orange — the one model call
+CODE, CODE_DIM = "00a396", "007067"                     # deterministic code
+HUMAN, HUMAN_DIM = "d1980b", "866103"                   # a person
+EXT, EXT_DIM = "7961db", "5642a6"                       # external system
 
 SANS, MONO = "Calibri", "Courier New"
 W_IN, H_IN = 13.333, 7.5
@@ -121,17 +124,17 @@ def make_background(path: Path) -> Path:
     w, h = 2560, 1440
     rng = random.Random(SEED)
     n1, n2 = _value_noise(rng, 9, 5), _value_noise(rng, 23, 13)
-    base = Image.new("RGB", (w, h), "#" + BLACK)
-    glow = Image.new("RGB", (w, h), "#" + BLACK)
+    base = Image.new("RGB", (w, h), "#" + CANVAS)
+    glow = Image.new("RGB", (w, h), "#" + CANVAS)
     gd = ImageDraw.Draw(glow)
-    gd.ellipse([-500, -600, 1400, 800], fill="#171d26")
-    gd.ellipse([1700, 800, 3300, 2000], fill="#141a22")
+    gd.ellipse([-500, -600, 1400, 800], fill="#eef1f5")
+    gd.ellipse([1700, 800, 3300, 2000], fill="#f1f3f6")
     glow = glow.filter(ImageFilter.GaussianBlur(280))
     base = Image.blend(base, glow, 0.9)
 
     trails = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     td = ImageDraw.Draw(trails)
-    cols = [_hex(CODE), _hex(EXT), _hex("4c90f0"), _hex(T_MUTED)]
+    cols = [_hex(CODE), _hex(EXT), _hex("2d72d2"), _hex("8f99a8")]
     for k in range(2600):
         x = rng.uniform(-40, 120)
         y = rng.uniform(0, h)
@@ -151,7 +154,7 @@ def make_background(path: Path) -> Path:
         for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
             band = 0.24 * h <= y0 <= 0.58 * h
             edge = min(x0, w - x0) / (0.32 * w)
-            alpha = 26 * max(0.0, min(1.0, 1.15 - edge))
+            alpha = 34 * max(0.0, min(1.0, 1.15 - edge))
             if band:
                 alpha *= 0.22
             if alpha < 2:
@@ -162,7 +165,7 @@ def make_background(path: Path) -> Path:
     d = ImageDraw.Draw(img)
     for yy in range(40, h, 40):
         for xx in range(40, w, 40):
-            d.point((xx, yy), fill="#242a33")
+            d.point((xx, yy), fill="#dfe3e8")
     img.save(path, optimize=True)
     return path
 
@@ -190,7 +193,7 @@ def make_frd_preview(path: Path) -> Path:
     w, h = 1400, 900
     img = Image.new("RGB", (w, h), "#" + RAISED)
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle([40, 30, w - 40, h + 40], radius=16, fill="#f6f7f9")
+    d.rounded_rectangle([40, 30, w - 40, h + 40], radius=16, fill="#ffffff", outline="#d3d8de", width=2)
     fh, fs, fp, fm = _font("sans", 46, True), _font("sans", 32, True), _font("sans", 30), _font("mono", 25)
     y = 80
     for kind, text in FRD_LINES:
@@ -210,7 +213,7 @@ def make_frd_preview(path: Path) -> Path:
                 d.text((x, y), t, font=fp, fill="#1c2127")
                 tw = d.textlength(t, font=fp)
                 if strict:
-                    d.line([x, y + 38, x + tw, y + 38], fill="#" + LLM, width=4)
+                    d.line([x, y + 38, x + tw, y + 38], fill="#" + LLM, width=5)
                 x += tw
             y += 46
         else:
@@ -241,7 +244,7 @@ def make_workbook_preview(path: Path) -> Path:
     w, h = 1400, 900
     img = Image.new("RGB", (w, h), "#" + RAISED)
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle([40, 30, w + 200, h + 40], radius=16, fill="#ffffff")
+    d.rounded_rectangle([40, 30, w + 200, h + 40], radius=16, fill="#ffffff", outline="#d3d8de", width=2)
     ft = _font("sans", 24)
     tx = 70
     for name, active in (("FILE_DETAILS", False), ("VERSION_HISTORY", False), ("MAPPING-SYN_MEMBER_RISK", True)):
@@ -423,14 +426,14 @@ def build(out: Path) -> Path:
     add_text(s, 0.6, 0.46, 9, 0.24,
              [("HEXAWARE  ·  AMERIHEALTH CARITAS  ·  AI-IN-ENGINEERING  ·  AGENT 01 / 03", {})],
              size=9, color=T_MUTED, font=MONO, spacing=1.6)
-    add_text(s, 0.6, 0.72, 9.5, 0.6, [("FRD → STTM Agent", {"color": WHITE, "bold": True, "size": 30}),
+    add_text(s, 0.6, 0.72, 9.5, 0.6, [("FRD → STTM Agent", {"color": INK, "bold": True, "size": 30}),
                                       ("    system architecture", {"color": T_MUTED, "size": 16})], size=30)
     add_text(s, 0.6, 1.28, 12.1, 0.3,
              [("An approved requirements document becomes an audited source-to-target mapping — "
                "every fact checked against the source text, every ambiguity routed to a person.", {})],
              size=12, color=T_SEC)
-    chips = [("read-only SharePoint", EXT, EXT_DIM), ("1 model call per document", LLM, LLM_DIM),
-             ("verdicts computed in code", CODE, CODE_DIM)]
+    chips = [("read-only SharePoint", EXT_DIM, EXT), ("1 model call per document", LLM_DIM, LLM),
+             ("verdicts computed in code", CODE_DIM, CODE)]
     cx = 0.6
     for t, col, bd in chips:
         cx = chip(s, cx, 1.68, t, color=col, border=bd)
@@ -449,10 +452,11 @@ def build(out: Path) -> Path:
         (10.95, 1.78, EXT, "code", "OUT", "Outputs",
          "STTM workbook + feed contract → CodeGen and Code Review agents.", wb_img),
     ]
+    DIM = {LLM: LLM_DIM, CODE: CODE_DIM, HUMAN: HUMAN_DIM, EXT: EXT_DIM}
     for x, w, acc, icon, idx, title, cap, thumb in nodes:
         add_rect(s, x, TOP, w, NH, fill=CARD, line=HAIR, radius=0.035)
         add_dot(s, x + 0.26, TOP + 0.3, 0.11, acc)
-        add_text(s, x + 0.44, TOP + 0.19, 1.0, 0.24, [(idx, {})], size=9, color=acc, font=MONO, spacing=1.4)
+        add_text(s, x + 0.44, TOP + 0.19, 1.0, 0.24, [(idx, {})], size=9, color=DIM[acc], font=MONO, spacing=1.4)
         add_text(s, x + 0.24, TOP + 0.46, w - 0.4, 0.34, [(title, {})], size=14.5, color=T_PRI, bold=True)
         if icon:
             add_icon(s, icon, x + w - 0.52, TOP + 0.16, 0.3)
@@ -471,15 +475,16 @@ def build(out: Path) -> Path:
     for i, (idx, name, acc) in enumerate(st):
         x = jx + 0.24 + i * (sw + sgap)
         is_llm = acc == LLM
-        add_rect(s, x, sy, sw, 0.5, fill=(LLM_DIM if is_llm else RAISED), line=(LLM if is_llm else HAIR2),
-                 line_w=(1.0 if is_llm else 0.75), radius=0.1)
-        add_text(s, x, sy + 0.07, sw, 0.18, [(idx, {})], size=8.5, color=(T_PRI if is_llm else acc), font=MONO,
+        add_rect(s, x, sy, sw, 0.5, fill=(LLM_TINT if is_llm else RAISED), line=(LLM if is_llm else HAIR2),
+                 line_w=(1.25 if is_llm else 0.75), radius=0.1)
+        add_text(s, x, sy + 0.07, sw, 0.18, [(idx, {})], size=8.5, color=(LLM_DIM if is_llm else CODE_DIM), font=MONO,
                  align=PP_ALIGN.CENTER)
-        add_text(s, x, sy + 0.24, sw, 0.22, [(name, {})], size=9.5, color=T_PRI, bold=is_llm, align=PP_ALIGN.CENTER)
+        add_text(s, x, sy + 0.24, sw, 0.22, [(name, {})], size=9.5, color=(LLM_DIM if is_llm else T_PRI), bold=is_llm,
+                 align=PP_ALIGN.CENTER)
         if i < 3:
             add_line(s, x + sw + 0.01, sy + 0.25, x + sw + sgap - 0.01, sy + 0.25, color=HAIR2, width=0.75, head=True)
     add_text(s, jx + 0.24, sy + 0.6, jw - 0.48, 0.24,
-             [("02 is the only model call", {})], size=9.5, color=LLM,
+             [("02 is the only model call", {})], size=9.5, color=LLM_DIM,
              align=PP_ALIGN.CENTER)
 
     # connectors between nodes
@@ -490,20 +495,20 @@ def build(out: Path) -> Path:
     # the human return loop
     ly = TOP + NH + 0.26
     hx, sx = nodes[3][0] + 0.7, nodes[0][0] + 0.7
-    add_line(s, hx, TOP + NH, hx, ly, color=HUMAN_DIM, width=1.25, dash="dash")
-    add_line(s, hx, ly, sx, ly, color=HUMAN_DIM, width=1.25, dash="dash")
-    add_line(s, sx, ly, sx, TOP + NH + 0.02, color=HUMAN_DIM, width=1.25, dash="dash", head=True)
+    add_line(s, hx, TOP + NH, hx, ly, color=HUMAN, width=1.25, dash="dash")
+    add_line(s, hx, ly, sx, ly, color=HUMAN, width=1.25, dash="dash")
+    add_line(s, sx, ly, sx, TOP + NH + 0.02, color=HUMAN, width=1.25, dash="dash", head=True)
     add_text(s, 1.2, ly + 0.08, 9.6, 0.26,
              [("the reviewer uploads the approved STTM   →   the next sync pairs it   →   it becomes a template", {})],
-             size=9, color=HUMAN, font=MONO, align=PP_ALIGN.CENTER)
+             size=9, color=HUMAN_DIM, font=MONO, align=PP_ALIGN.CENTER)
 
     # ----- footer --------------------------------------------------------------
     FY = 6.3
     add_line(s, 0.6, FY, W_IN - 0.6, FY, color=HAIR, width=0.5)
     add_text(s, 0.6, FY + 0.14, 9.5, 0.34,
-             [("the model proposes", {"color": LLM, "bold": True}), ("      ·      ", {"color": HAIR2}),
-              ("deterministic code audits and decides", {"color": CODE, "bold": True}), ("      ·      ", {"color": HAIR2}),
-              ("a person resolves", {"color": HUMAN, "bold": True})], size=12)
+             [("the model proposes", {"color": LLM_DIM, "bold": True}), ("      ·      ", {"color": HAIR2}),
+              ("deterministic code audits and decides", {"color": CODE_DIM, "bold": True}), ("      ·      ", {"color": HAIR2}),
+              ("a person resolves", {"color": HUMAN_DIM, "bold": True})], size=12)
     add_text(s, 0.6, FY + 0.5, 12.1, 0.3,
              [("Grounding checks, gate status, pairing verdicts, template choice and eval scores are computed in code, "
                "never by the model. Fail loud — no silent mock, no silent live, no stale copies.", {})], size=10, color=T_SEC)
