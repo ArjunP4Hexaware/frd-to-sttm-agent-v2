@@ -517,6 +517,17 @@ and auditable* without changing what it does. The rules that now hold:
 All development happens on `staging`. `main` is the deployment branch;
 `staging` merges to `main` only after testing.
 
+**`deploy-demo` (added 2026-08-23, Arjun) is a third, narrow-purpose
+branch — not part of normal development.** Databricks Git folders have no
+build step, so the review app's Databricks Git folder in the workspace is
+pointed at this branch specifically so it has a built
+`review_app_react/frontend/dist/` to serve; `dist/` stays gitignored on
+`staging`/`main` as before. Rebuilding means: `cd review_app_react/frontend
+&& npm install && npm run build`, then `git add -f
+review_app_react/frontend/dist` and commit to `deploy-demo` again — it is
+NOT kept in sync automatically, and it is never merged into `staging` or
+`main`.
+
 ## Fixtures & data rules
 
 **No FRD or STTM material is tracked in this repo — as of 2026-08-22.** The
@@ -603,9 +614,28 @@ code, not a document, and was left in place; flagged, not silently kept.
 ### Deploy blockers — live Databricks App, Hexaware, by 2026-08-24
 
 These are the specific things standing between the current state and the
-current priority stated at the top. None has been executed from this
-checkout; treat each as unproven until you have seen it work.
+current priority stated at the top. None had been executed from this
+checkout before 2026-08-23; treat each as unproven until you have seen it
+work.
 
+- **CLI connectivity — RESOLVED 2026-08-23.** No org permission to run an
+  installer (winget) on this laptop; unblocked with the Databricks CLI's
+  portable Windows zip from its official GitHub releases
+  (github.com/databricks/cli — not winget), unzipped to
+  `C:\Users\2000198467\AppData\Local\databricks-cli\` and that folder added
+  to the user PATH — no admin rights needed either way. Auth had a separate
+  trap: `databricks auth login` against the workspace ran the full OAuth
+  browser flow successfully (confirmed by the browser's own "Authenticated"
+  page and a debug-log token exchange) but the CLI's default
+  `auth_storage=secure` (Windows Credential Manager / OS keyring) silently
+  failed to persist the result — no error surfaced, yet `auth profiles` /
+  `current-user me` found nothing afterward. Likely a corporate
+  endpoint-protection policy blocking credential-vault writes; revisit if
+  this recurs on another machine. Fix: `.databrickscfg`'s `[__settings__]`
+  `auth_storage` set to `plaintext` (was `secure`); profile `ahc` (now
+  `default_profile`) authenticates cleanly and `databricks bundle validate
+  -t dev` succeeds from this laptop. `bundle deploy` has NOT been run as of
+  this writing — treat it as the next unproven step, not a done one.
 - **Databricks Apps deploy has never run from here.** Apps installs the
   repo-root `requirements.txt`, which includes
   `review_app_react/requirements.txt` — **not** `pyproject.toml`. Deploy
