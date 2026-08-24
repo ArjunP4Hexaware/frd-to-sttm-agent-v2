@@ -67,13 +67,26 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOKS_DIR = REPO_ROOT / "notebooks"
 LOCAL_ROOT = REPO_ROOT / "local_dev_fixtures"
 
-# notebooks/_mock_extractions.py (and its own `_models` import) is a plain,
-# Databricks-magic-free module -- safe to import directly, unlike
-# 01-04_*.py which run pipeline driver code at import time (see this
-# module's docstring). Only its tier-1 filename matcher is reused here;
-# see _assert_demo_scoped().
-sys.path.insert(0, str(NOTEBOOKS_DIR))
-from _mock_extractions import _tier1_filename_match  # noqa: E402
+# Same src/ bootstrap sharepoint_routes does. Repeated here rather than relying
+# on import order: app.py happens to import corpus_routes (which bootstraps)
+# first, but a test importing THIS module alone must not depend on that.
+_SRC = REPO_ROOT / "src"
+if (_SRC / "frdsttm").is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+# Only the tier-1 filename matcher is reused here; see _assert_demo_scoped().
+#
+# Imported from the PACKAGE, not from notebooks/_mock_extractions.py (fixed
+# 2026-08-24). That file is a shim whose own header says "Edit the real
+# module, not this shim", and the comment that used to sit here called it
+# "a plain, Databricks-magic-free module" -- it is not: it opens with
+# `# Databricks notebook source`. `databricks sync` turns any .py carrying
+# that header into a NOTEBOOK object with no .py extension, so on a deployed
+# App the import resolved to nothing and app.py died at startup with
+# ModuleNotFoundError. Locally it worked, because there it is a real file.
+# The package module is the shim's own target and needs no notebooks/ path
+# entry, so this import is correct in both places.
+from frdsttm.mock_extractions import _tier1_filename_match  # noqa: E402
 
 # The only fixture this orchestration demo accepts -- see module docstring.
 _DEMO_KEY = "demo_frd"

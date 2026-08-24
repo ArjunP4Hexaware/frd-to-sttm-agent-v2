@@ -1,4 +1,11 @@
-# Databricks notebook source
+# Library module, imported as `frdsttm.<name>`. NOT a notebook.
+#
+# Deliberately carries no Databricks notebook magic header (removed
+# 2026-08-24). `databricks sync` classifies any .py whose FIRST line is
+# the notebook marker as a NOTEBOOK object, stored without a .py
+# extension -- so with that header this module did not exist to `import`
+# on a deployed Databricks App, and app.py died at startup with
+# ModuleNotFoundError. Do not re-add the marker to this file.
 # MAGIC %md
 # MAGIC # Shared pydantic models — `FrdIngestionSpec` and children
 # MAGIC
