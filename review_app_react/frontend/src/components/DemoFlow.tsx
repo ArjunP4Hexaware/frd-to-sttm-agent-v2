@@ -106,10 +106,10 @@ function MappingSetup({
     <div className="flex flex-col gap-4">
       {!configured && spConfig.isSuccess && (
         <Alert>
-          <AlertTitle>SharePoint is not connected</AlertTitle>
+          <AlertTitle>No document source is connected</AlertTitle>
           <AlertDescription>
-            No tenant is configured on this backend (tenant, client id, host, site, and client secret), so
-            the library cannot be synced from here. FRDs already in the volumes can still be listed and
+            Neither a documents folder (STTM_LOCAL_SOURCE_DIR) nor a SharePoint tenant is configured on this
+            backend, so nothing can be synced from here. FRDs already in the volumes can still be listed and
             run; the index can be rebuilt from them with “Rebuild index”.
           </AlertDescription>
         </Alert>
@@ -127,8 +127,8 @@ function MappingSetup({
       <div>
         <h2 className="eyebrow mb-2">Select FRD</h2>
         <p className="text-sm text-muted-foreground">
-          The list below is what the SharePoint sync has landed in Unity Catalog. Pick an FRD that has no
-          STTM yet to draft one; an FRD that already has an STTM is presented as-is.
+          The list below is what the last sync landed in the corpus. Pick an FRD that has no STTM yet to
+          draft one; an FRD that already has an STTM is presented as-is.
         </p>
       </div>
 

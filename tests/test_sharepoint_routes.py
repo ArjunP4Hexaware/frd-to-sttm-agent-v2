@@ -44,12 +44,17 @@ def client():
 
 @pytest.fixture()
 def configured(monkeypatch):
+    # The local folder OUTRANKS SharePoint (2026-08-24), so a stray
+    # STTM_LOCAL_SOURCE_DIR in the ambient environment would silently make
+    # every tenant assertion below test the wrong branch. Clear it.
+    monkeypatch.delenv("STTM_LOCAL_SOURCE_DIR", raising=False)
     for k, v in ENV.items():
         monkeypatch.setenv(k, v)
 
 
 @pytest.fixture()
 def unconfigured(monkeypatch):
+    monkeypatch.delenv("STTM_LOCAL_SOURCE_DIR", raising=False)
     for k in ENV:
         monkeypatch.delenv(k, raising=False)
 
@@ -105,3 +110,49 @@ def test_the_module_exposes_no_write_route():
     """Guard for the 2026-08-22 decision: nothing in the app publishes."""
     paths = {route.path for route in spr.router.routes}
     assert paths == {"/api/demo/sharepoint/config"}
+
+
+# --------------------------------------------------------------------------- #
+# local documents folder — the 2026-08-24 SharePoint stand-in
+# --------------------------------------------------------------------------- #
+def test_local_folder_is_reported_as_the_source(client, unconfigured, monkeypatch, tmp_path):
+    src = tmp_path / "frd-to-sttm-demo-document"
+    src.mkdir()
+    monkeypatch.setenv("STTM_LOCAL_SOURCE_DIR", str(src))
+    body = client.get("/api/demo/sharepoint/config").json()
+    assert body["configured"] is True
+    assert body["source"] == "local_folder"
+    assert body["site"] == str(src)
+    assert body["sttm_folder"] == str(src)
+
+
+def test_local_folder_outranks_a_configured_tenant(client, configured, monkeypatch, tmp_path):
+    """Pointing the app at a folder is a deliberate act; leftover tenant
+    settings in .env must not quietly win."""
+    src = tmp_path / "docs"
+    src.mkdir()
+    monkeypatch.setenv("STTM_LOCAL_SOURCE_DIR", str(src))
+    body = client.get("/api/demo/sharepoint/config").json()
+    assert body["source"] == "local_folder"
+    assert body["site"] == str(src)
+
+
+def test_a_bad_local_folder_falls_back_to_the_tenant(client, configured, monkeypatch, tmp_path):
+    """A typo'd path must not take the app offline when a tenant IS wired."""
+    monkeypatch.setenv("STTM_LOCAL_SOURCE_DIR", str(tmp_path / "nope"))
+    body = client.get("/api/demo/sharepoint/config").json()
+    assert body["source"] == "sharepoint"
+    assert body["site"] == "example.sharepoint.com/sites/DataOffice"
+
+
+def test_no_source_at_all_reports_unconfigured_with_a_null_source(client, unconfigured):
+    body = client.get("/api/demo/sharepoint/config").json()
+    assert body["configured"] is False and body["source"] is None
+
+
+def test_the_local_folder_path_is_not_a_secret_but_the_client_secret_still_never_leaks(
+        client, configured, monkeypatch, tmp_path):
+    src = tmp_path / "docs"
+    src.mkdir()
+    monkeypatch.setenv("STTM_LOCAL_SOURCE_DIR", str(src))
+    assert "SUPERSECRET" not in client.get("/api/demo/sharepoint/config").text

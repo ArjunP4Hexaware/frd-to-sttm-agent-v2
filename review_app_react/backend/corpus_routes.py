@@ -67,6 +67,11 @@ from frdsttm.corpus import (  # noqa: E402
     CorpusIndexError,
     load_corpus_index,
 )
+from frdsttm.local_folder import (  # noqa: E402
+    LocalFolderClient,
+    LocalFolderConfigError,
+    load_local_folder_config,
+)
 from frdsttm.sharepoint import GraphError, SharePointConfigError, load_config  # noqa: E402
 from frdsttm.similarity import thresholds_from  # noqa: E402
 from frdsttm.sync import (  # noqa: E402
@@ -84,7 +89,21 @@ REFERENCE_DIR = LOCAL_ROOT / REFERENCE_VOLUME
 # databricks mode: how stale the container's mirror of the volumes may get
 # before a read re-mirrors from Unity Catalog (another instance or a manual
 # job run may have written there). Small files; cheap.
-CORPUS_REFRESH_SECONDS = int(os.environ.get("STTM_CORPUS_REFRESH_SECONDS", "120"))
+def _env_int(name: str, default: int) -> int:
+    """Env int where BLANK means "not set" (fixed 2026-08-24).
+
+    `.env.example` ships every optional knob blank and the documented load
+    (`set -a; . ./.env; set +a`) exports a blank as an empty string, so
+    os.environ.get(name, default) hands back "" and int("") raised at import
+    time — following the repo's own setup instructions crashed the app before
+    it served a request. Same rule frdsttm.similarity.thresholds_from applies.
+    A non-numeric value still raises: that is a typo, not an absence.
+    """
+    raw = (os.environ.get(name) or "").strip()
+    return int(raw) if raw else default
+
+
+CORPUS_REFRESH_SECONDS = _env_int("STTM_CORPUS_REFRESH_SECONDS", 120)
 
 # The library's naming convention (learned 2026-08-22): every FRD is
 # FRD_<name>.<ext>, every STTM STTM_<name>.xlsx. Blank disables the filter.
@@ -101,6 +120,37 @@ _thresholds = lambda: thresholds_from(  # noqa: E731
     lambda name, default: os.environ.get(name.upper(), default))
 
 SYNC_MODES = ("sync", "reindex")
+
+
+def _source_client():
+    """The sync's document source: (kind, reference_folder, client).
+
+    Precedence — local folder, then SharePoint. The local folder wins when it
+    is configured because setting STTM_LOCAL_SOURCE_DIR is a deliberate act
+    (decided 2026-08-24: no Graph access in time for the demo), and a stale
+    tenant left in .env must not silently outrank it.
+
+    Raises the caller's HTTPException when NEITHER is usable, carrying both
+    reasons — an operator seeing only "SharePoint not configured" after
+    pointing the app at a folder would be chasing the wrong gap. 503 keeps the
+    existing contract: an unwired source is a normal state the startup path
+    turns into a reindex, not a crash.
+    """
+    try:
+        cfg = load_local_folder_config(_param)
+    except LocalFolderConfigError as local_exc:
+        try:
+            sp_cfg, client = _client()
+        except HTTPException as sp_exc:
+            if sp_exc.status_code == 503:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"no document source configured — {local_exc}; "
+                           f"and no SharePoint tenant: {sp_exc.detail}",
+                ) from sp_exc
+            raise
+        return "sharepoint", sp_cfg.sttm_folder, client
+    return "local_folder", cfg.sttm_folder, LocalFolderClient(cfg)
 
 
 def _uc_reference_dir() -> str:
@@ -254,15 +304,16 @@ def corpus_sync(body: SyncRequest, request: Request) -> dict:
 
     Zero model calls, but it rewrites the two volumes and the corpus index,
     so it is confirm-gated like every other state-changing control here.
-    `mode`: "sync" (SharePoint → volumes → index) or "reindex" (index from
-    the volumes as they are; no network, no tenant needed). Anything else
+    `mode`: "sync" (source → volumes → index, where the source is the local
+    folder when one is configured, else SharePoint) or "reindex" (index from
+    the volumes as they are; no network, no source needed). Anything else
     is a 400 — no value is guessed.
     """
     if body.confirm is not True:
         raise HTTPException(
             status_code=400,
-            detail="the sync downloads the SharePoint library into the raw/"
-                   "reference volumes and rebuilds the corpus index — it "
+            detail="the sync copies the configured document source into the "
+                   "raw/reference volumes and rebuilds the corpus index — it "
                    "requires an explicit {\"confirm\": true}",
         )
     if body.mode not in SYNC_MODES:
@@ -272,10 +323,9 @@ def corpus_sync(body: SyncRequest, request: Request) -> dict:
 
     client, reference_folder = None, None
     if body.mode == "sync" and not IS_DATABRICKS_APP:
-        # Resolve config + sign-in HERE so an unwired tenant is the caller's
-        # 503 and a refused sign-in its 502 — not a failed background state.
-        cfg, client = _client()
-        reference_folder = cfg.sttm_folder
+        # Resolve the source HERE so an unwired one is the caller's 503 and a
+        # refused sign-in its 502 — not a failed background state.
+        _kind, reference_folder, client = _source_client()
 
     return _start_sync(body.mode, client, reference_folder, trigger="request", identity=who)
 
@@ -312,10 +362,11 @@ def start_sync_on_startup() -> dict | None:
     running/done/failed state as "Sync now".
 
     - databricks mode: trigger the sync JOB and mirror (same worker).
-    - local mode with a wired tenant: the sync in-process.
-    - local mode with NO tenant configured: a network-free REINDEX, so the
+    - local mode with a source wired (local folder, else SharePoint): the
+      sync in-process.
+    - local mode with NO source configured: a network-free REINDEX, so the
       picker reflects whatever the volumes hold (this is not an error — an
-      unwired tenant is the ordinary dev state).
+      unwired source is the ordinary dev state).
     - STTM_SYNC_ON_STARTUP=0: do nothing, return None.
     Never raises: a start-up failure is recorded in the sync state, not
     thrown into the server's lifespan.
@@ -325,10 +376,9 @@ def start_sync_on_startup() -> dict | None:
     mode, client, reference_folder = "sync", None, None
     if not IS_DATABRICKS_APP:
         try:
-            cfg, client = _client()
-            reference_folder = cfg.sttm_folder
+            _kind, reference_folder, client = _source_client()
         except HTTPException:
-            mode = "reindex"   # no tenant wired (503) / sign-in refused (502): index the volumes
+            mode = "reindex"   # no source wired (503) / sign-in refused (502): index the volumes
     try:
         return _start_sync(mode, client, reference_folder, trigger="startup",
                            identity=STARTUP_IDENTITY)
@@ -423,14 +473,27 @@ def corpus_reference(name: str):
 
 
 # Config probe so the frontend can offer the right control: "Sync now" only
-# with a wired tenant (same "unconfigured is normal" contract as the
-# SharePoint config probe); "Rebuild index" always.
+# with a wired SOURCE (same "unconfigured is normal" contract as the source
+# config probe); "Rebuild index" always.
 @router.get("/api/demo/corpus/config")
 def corpus_config() -> dict:
     """Presence probe only — no sign-in, no network (a probe that signed in
-    would make every page load a Graph call)."""
+    would make every page load a Graph call).
+
+    Must honour the SAME source precedence as _source_client, which is what
+    actually runs the sync: a local folder configured with no tenant wired
+    reported available=False here, which greyed out the very "Sync now"
+    button that would have worked.
+    """
     base = {"mode": "databricks" if IS_DATABRICKS_APP else "local",
             "reference_volume": _uc_reference_dir() if IS_DATABRICKS_APP else str(REFERENCE_DIR)}
+    try:
+        local = load_local_folder_config(_param)
+    except LocalFolderConfigError:
+        pass
+    else:
+        return {**base, "available": True, "frd_folder": local.frd_folder,
+                "reference_folder": local.sttm_folder}
     try:
         cfg = load_config(_param, _client_secret)
     except SharePointConfigError:

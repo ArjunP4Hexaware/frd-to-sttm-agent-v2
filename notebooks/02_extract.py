@@ -83,6 +83,23 @@ def _param(name: str, default: str) -> str:
     return os.environ.get(name.upper(), default)
 
 
+def _int_param(name: str, default: int) -> int:
+    """A NUMERIC knob where blank means "not set" (fixed 2026-08-24).
+
+    `.env.example` ships `STTM_EXEMPLARS_K` (and friends) blank, and the
+    documented load (`set -a; . ./.env; set +a`) exports a blank as "", so
+    `_param` hands back "" instead of the default and `int("")` raised. An
+    emptied widget behaves the same way.
+
+    Deliberately NOT folded into `_param`: for the STRING knobs blank is
+    meaningful and differs from the default — `frd_name_prefix` documents
+    "blank disables the filter" — so a blanket rule there would silently
+    re-enable filtering. A non-numeric value still raises: that is a typo.
+    """
+    raw = _param(name, str(default)).strip()
+    return int(raw) if raw else default
+
+
 CATALOG = _param("catalog", "arjun_workspace")
 SCHEMA = _param("schema", "sttm_agent")
 DOCS_TABLE_NAME = _param("docs_table", "frd_documents")
@@ -92,8 +109,8 @@ MODEL = _param("model", "claude-opus-4-8")
 # demo FRD used 3.3k output tokens at ~700-800/feed, so 16k capped out
 # around 15-20 feeds. The call streams, so the larger ceiling cannot hit
 # HTTP timeouts.
-MAX_TOKENS = int(_param("max_tokens", "64000"))
-MAX_RETRIES = int(_param("max_retries", "2"))
+MAX_TOKENS = _int_param("max_tokens", 64000)
+MAX_RETRIES = _int_param("max_retries", 2)
 SECRET_SCOPE = _param("secret_scope", "sttm_agent")
 SECRET_KEY = _param("secret_key", "anthropic_api_key")
 # Provenance: the Databricks job run id ({{job.run_id}} in the job yml);
@@ -121,13 +138,16 @@ if IS_DATABRICKS:
     REFERENCE_DIR = f"/Volumes/{CATALOG}/{SCHEMA}/{REFERENCE_VOLUME}"
 else:
     REFERENCE_DIR = str(LOCAL_ROOT / REFERENCE_VOLUME)
-EXEMPLARS_MODE = _param("sttm_exemplars", "auto").strip().lower()
+# Blank means "not set" -> the default, for the same reason _int_param exists:
+# .env.example ships STTM_EXEMPLARS blank and `set -a; . ./.env; set +a`
+# exports it as "", which used to fall through to the raise below.
+EXEMPLARS_MODE = _param("sttm_exemplars", "auto").strip().lower() or "auto"
 if EXEMPLARS_MODE not in ("auto", "on", "off"):
     raise ValueError(
         f"sttm_exemplars={EXEMPLARS_MODE!r} is not recognised (auto|on|off). "
         f"Refusing to guess."
     )
-EXEMPLARS_K = int(_param("sttm_exemplars_k", "2"))
+EXEMPLARS_K = _int_param("sttm_exemplars_k", 2)
 
 # Zero-cost local testing only: skips the real Anthropic call entirely and
 # returns a hand-authored FrdIngestionSpec per doc_id from

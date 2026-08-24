@@ -48,12 +48,17 @@ export interface DemoDocument {
   size_bytes: number;
 }
 
-/** SharePoint tenant probe (backend/sharepoint_routes.py). `configured` is
+/** Document-source probe (backend/sharepoint_routes.py). `configured` is
  *  derived from presence only — no credential value ever crosses this
- *  boundary. `sttm_folder` is where a reviewer uploads a finished workbook:
- *  the folder the sync watches. */
+ *  boundary. `sttm_folder` is where a reviewer puts a finished workbook:
+ *  the folder the sync watches.
+ *
+ *  `source` distinguishes the 2026-08-24 demo stand-in (a folder on the
+ *  reviewer's machine, `site` = its path) from a wired Graph tenant, so the
+ *  copy can name the right place without a second endpoint. */
 export interface SharePointConfig {
   configured: boolean;
+  source: "local_folder" | "sharepoint" | null;
   site: string | null;
   library: string | null;
   frd_folder: string | null;

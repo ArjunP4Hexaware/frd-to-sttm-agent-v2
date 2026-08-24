@@ -400,28 +400,32 @@ function MappingsSection({ r }: { r: R }) {
 }
 
 /**
- * The hand-off (decided 2026-08-22): the app never writes to SharePoint.
- * The reviewer downloads the draft, makes any final edits, and uploads it
- * to the library's STTM folder THEMSELVES; the scheduled sync then pulls it
- * into Unity Catalog and pairs it with its FRD. This note says exactly
- * where. Renders a generic version when SharePoint is unconfigured.
+ * The hand-off (decided 2026-08-22): the app never writes back to the
+ * document source. The reviewer downloads the draft, makes any final edits,
+ * and puts it in the STTM folder THEMSELVES; the next sync pulls it in and
+ * pairs it with its FRD. This note says exactly where — the library folder,
+ * or (since 2026-08-24) the local documents folder standing in for it.
+ * Renders a generic version when no source is configured.
  */
 function HandOffNote({ docId }: { docId: string }) {
   const configQuery = useSharePointConfig();
   const cfg = configQuery.data;
-  const target = cfg?.configured
-    ? `${cfg.site}/${cfg.library}${cfg.sttm_folder ? `/${cfg.sttm_folder}` : ""}`
-    : null;
+  const isLocalFolder = cfg?.source === "local_folder";
+  const target = !cfg?.configured
+    ? null
+    : isLocalFolder
+      ? cfg.site
+      : `${cfg.site}/${cfg.library}${cfg.sttm_folder ? `/${cfg.sttm_folder}` : ""}`;
   return (
     <Card className="mb-3">
       <CardHeader>
         <CardTitle className="text-base">Next step — yours, not the agent's</CardTitle>
         <CardDescription>
           <span className="mono-id">{docId}.sttm.xlsx</span> is a draft until you say otherwise. Download
-          it, make any final edits in Excel, and when you are satisfied upload it to{" "}
-          {target ? <span className="mono-id">{target}</span> : "the SharePoint STTM folder"} yourself. The
-          app does not publish anything; the next sync pulls your upload into Databricks and pairs it with
-          this FRD, and it becomes a template for future mappings.
+          it, make any final edits in Excel, and when you are satisfied {isLocalFolder ? "save" : "upload"}{" "}
+          it to {target ? <span className="mono-id">{target}</span> : "the STTM folder"} yourself. The app
+          does not publish anything; the next sync pulls it in and pairs it with this FRD, and it becomes a
+          template for future mappings.
         </CardDescription>
       </CardHeader>
     </Card>

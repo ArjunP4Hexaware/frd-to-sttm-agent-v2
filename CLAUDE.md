@@ -1,14 +1,28 @@
 # FRD-to-STTM Agent — working notes
 
-> **Where the work happens (Arjun's decision, corrected same day
-> 2026-08-23): on this Hexaware Windows laptop**, working clone
-> `C:\Users\2000198467\Desktop\frd-to-sttm-agent`. Earlier the same day this
-> file briefly said the opposite — that work was moving to Arjun's personal
-> MacBook Air and NOT to the Hexaware laptop — that decision was reversed
-> within the day. The Mac-specific consequences noted at the time (a
-> blobless clone made after the history purge, iCloud Finder conflict
-> copies on `~/Desktop`) no longer apply since work isn't happening there.
-> The umbrella folder is present on this machine, beside this repo.
+> **Where the work happens — SPLIT as of 2026-08-24 (Arjun).** The Hexaware
+> Windows laptop (`C:\Users\2000198467\Desktop\frd-to-sttm-agent`) remains
+> the machine that touches **client documents**: the demo source folder with
+> the real FRD/STTM pairs is created there, and real client material must
+> never reach the MacBook Air. **Architecture work also happens on Arjun's
+> personal MacBook Air** (`~/Desktop/frd-to-sttm-agent`) against SYNTHETIC
+> documents only — `tools/make_local_source_fixture.py` exists so that needs
+> no client content. Two consequences, both re-confirmed on the Mac
+> 2026-08-24 rather than assumed:
+>
+> - **The iCloud caveats DO apply again.** `~/Desktop` is symlinked into
+>   iCloud Drive, which stamps `UF_HIDDEN` on a venv created inside it.
+>   Python 3.14's `site.addpackage` skips hidden `.pth` files, so an
+>   editable install there is silently inert (`import frdsttm` fails while
+>   `pytest` still passes, because `pyproject.toml` sets its own
+>   `pythonpath`). Keep the venv OUTSIDE iCloud —
+>   `~/.virtualenvs/frdsttm` is what this machine uses. `chflags nohidden`
+>   is not a fix; iCloud re-applies the flag within about a minute.
+> - Earlier in 2026-08-23 this file said the Mac decision had been reversed
+>   outright. That is now half-true: reversed for client documents, not for
+>   architecture work.
+>
+> The umbrella folder is present on the Windows machine, beside that repo.
 
 ## Purpose & pipeline position
 
@@ -197,7 +211,10 @@ src/frdsttm/            models.py (FrdIngestionSpec, GatedAmbiguity,
                         (shared-label-contract loader), local_tables.py,
                         mock_extractions.py, live_extraction.py,
                         sharepoint.py (Microsoft Graph transport, READ-ONLY),
-                        sync.py (SharePoint → volumes → index, incremental;
+                        local_folder.py (2026-08-24: a local directory behind
+                        the SAME client duck type, so the folder stand-in
+                        reuses the sync engine rather than forking it),
+                        sync.py (source → volumes → index, incremental;
                         ONE implementation for the job and the app);
                         since 2026-08-22 (docs/TEMPLATE_ARCHITECTURE.md):
                         frd_parsing.py + reference_workbooks.py (the 01/04
@@ -317,17 +334,33 @@ review_app_react/       FastAPI + Vite/React review app (Databricks App; its
 local_dev_fixtures/     gitignored, NOT in the checkout since 2026-08-22 -- frd_raw/,
                         sttm_reference/ inputs and run outputs land here when you
                         supply them locally; nothing FRD/STTM-shaped is tracked
-tools/                  anonymization mapping + applier (mandated fixture path)
+tools/                  anonymization mapping + applier (mandated fixture path);
+                        make_synthetic_smoke_fixture.py (synthetic VOLUMES);
+                        make_local_source_fixture.py (2026-08-24: the
+                        synthetic SOURCE FOLDER upstream of them, so the
+                        local-folder path is testable with no client
+                        documents and no Graph access)
 ```
 
 ## Setup / run / test
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
+# On the MacBook Air the venv must live OUTSIDE ~/Desktop (iCloud hides it
+# and Python 3.14 then ignores the editable-install .pth — see the
+# "Where the work happens" note at the top):
+#     python3 -m venv ~/.virtualenvs/frdsttm && source ~/.virtualenvs/frdsttm/bin/activate
 pip install -e ".[local,dev,ui]"     # deps from pyproject.toml; ui gives the
                                      # review-app backend its FastAPI tests
 
 pytest                               # offline; run it for the live count
+
+# Review app against a LOCAL documents folder (the 2026-08-24 SharePoint
+# stand-in), with synthetic documents:
+python tools/make_local_source_fixture.py ~/Desktop/frd-to-sttm-demo-document
+cd review_app_react/frontend && npm install && npm run build && cd -
+set -a; . ./.env; set +a             # STTM_LOCAL_SOURCE_DIR points at the folder
+python review_app_react/backend/app.py                   # http://127.0.0.1:8000
 
 # Offline smoke of 01→03→04 with SYNTHETIC documents (the repo carries no
 # FRD/STTM material since 2026-08-22; this replaces the deleted fixtures
@@ -374,6 +407,30 @@ is PAUSED on the dev target (no tenant there); UNPAUSED by default.
   advisory prose token-overlap). Never relax it to make a run pass.
 
 ## SharePoint / Microsoft Graph (added 2026-08-21; READ-ONLY 2026-08-22; sync on app start-up decided 2026-08-22 late — see the decision block at the top)
+
+**Local folder stands in for the library for the 2026-08-24 demo (Venu,
+2026-08-24).** Graph access did not arrive in time, so the FRD/STTM pairs sit
+in a folder on the reviewer's machine and the app is pointed at it with
+`STTM_LOCAL_SOURCE_DIR`. **This is a source swap, not a second pipeline.**
+`src/frdsttm/local_folder.py` implements only the client duck type
+`sync_from_sharepoint` already documents (`list_documents(suffixes=, folder=)`
++ `download_item(item_id)`), so the entire downstream half — prefix split,
+incremental manifest, atomic writes, departed-file cleanup, reindex, name
+pairing — is the same code on the same path. Consequences worth knowing:
+
+- **the naming convention still decides everything.** `FRD_<name>.<ext>` and
+  `STTM_<name>.xlsx`, `<name>` matching exactly, is what splits the two kinds
+  AND what pairs them. A mismatch does not fail — it falls through to
+  similarity scoring and can land as "unmapped".
+- `item_id` is the file name and `etag` is `<size>-<mtime_ns>`, so editing a
+  document in the folder re-syncs it and deleting one removes the synced copy.
+- the folder is **read-only** to this repo, matching the never-writes-to-
+  SharePoint rule it stands in for.
+- **precedence: local folder first, then SharePoint** — in
+  `corpus_routes._source_client`, mirrored (not re-decided) by the
+  `/api/demo/sharepoint/config` probe's new `source` field. Setting the
+  variable is deliberate; a stale tenant in `.env` must not outrank it.
+  Unset it to go back to Graph — nothing else changes.
 
 The document library is the program's system of record: FRDs and approved
 STTMs live there. `src/frdsttm/sharepoint.py` is the whole transport;
@@ -594,6 +651,25 @@ code, not a document, and was left in place; flagged, not silently kept.
 
 ## Known gaps / cautions
 
+- **A BLANK env var is "not set", never a value — fixed 2026-08-24, and the
+  rule is not yet enforced everywhere.** `.env.example` ships every optional
+  knob blank, and the load it documents (`set -a; . ./.env; set +a`) exports
+  a blank as `""`. `os.environ.get(NAME, default)` then returns `""` rather
+  than the default, so `int("")` / `float("")` raised and following this
+  repo's own setup instructions crashed the app at import
+  (`STTM_CORPUS_REFRESH_SECONDS`), and `02_extract` on
+  `STTM_EXEMPLARS_K` / `STTM_EXEMPLARS`. Fixed at four sites:
+  `similarity.thresholds_from`, `corpus_routes._env_int`, and
+  `02_extract._int_param` + its `sttm_exemplars` default. **Deliberately NOT
+  fixed by a blanket rule in `_param`:** for STRING knobs a blank is
+  meaningful and differs from the default — `frd_name_prefix` documents
+  "blank disables the filter" — so a sweeping change there would silently
+  re-enable prefix filtering. When adding a numeric knob, parse it through a
+  blank-tolerant helper; when adding a string one, decide explicitly what
+  blank means and say so in `.env.example`. The other `int(os.environ.get(…))`
+  sites (`demo.py`, `jobs_runner.py`, `app.py`'s port) are unfixed but safe
+  today only because no `STTM_DEMO_*` key ships blank in `.env.example` —
+  add one and they break.
 - **The `.venv` was recreated 2026-08-22** (again — the repo moved from
   `~/Desktop/amerihealth-agents/` to `~/Desktop/` and the venv bakes in
   absolute paths; `source .venv/bin/activate` then silently pointed at the

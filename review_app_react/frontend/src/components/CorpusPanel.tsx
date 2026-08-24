@@ -20,15 +20,18 @@ import type { CorpusFrd } from "../demoApi";
  * - "FRDs already mapped" — each with its reference STTM and how it was
  *   paired (exact name / similarity + score). "View STTM" presents the
  *   approved workbook; regeneration is a deliberate extra step there.
- * - the sync controls: "Sync now" (SharePoint → volumes → index; the
- *   scheduled job does this on its own every tick — this is the on-demand
- *   trigger) and "Rebuild index" (index from what the volumes hold, no
- *   network). Both two-step, because they rewrite the volumes/index; zero
- *   AI calls, hence no cost copy.
+ * - the sync controls: "Sync now" (document source → volumes → index) and
+ *   "Rebuild index" (index from what the volumes hold, no network). Both
+ *   two-step, because they rewrite the volumes/index; zero AI calls, hence
+ *   no cost copy.
  *
- * The list is read from the corpus index only — never from SharePoint on
- * the request path — so what the reviewer sees is exactly what Unity
- * Catalog holds.
+ * The source is SharePoint, or — since 2026-08-24, when Graph access did not
+ * land in time for the demo — a folder on the reviewer's machine. The backend
+ * picks (corpus_routes._source_client); this component only names it, via
+ * `source` on the config probe.
+ *
+ * The list is read from the corpus index only — never from the source on the
+ * request path — so what the reviewer sees is exactly what the volumes hold.
  */
 export function CorpusPanel({
   onGenerate,
@@ -67,6 +70,20 @@ export function CorpusPanel({
   const built = summary.data?.built ?? false;
   const configured = spConfig.data?.configured ?? false;
   const canSync = corpusConfig.data?.available ?? false;
+
+  // Where the documents come from. The local folder is the 2026-08-24 demo
+  // stand-in for the library (no Graph access in time); the backend decides
+  // which is active, this only names it. `sourcePath` is one string because
+  // the two shapes differ: a folder is its own full path, a library is
+  // site/library[/folder].
+  const isLocalFolder = spConfig.data?.source === "local_folder";
+  const sourceLabel = isLocalFolder ? "the documents folder" : "SharePoint";
+  const sourcePath = isLocalFolder
+    ? (spConfig.data?.site ?? "")
+    : `${spConfig.data?.site ?? ""}/${spConfig.data?.library ?? ""}`;
+  const sttmPath = isLocalFolder
+    ? (spConfig.data?.site ?? "")
+    : `${sourcePath}${spConfig.data?.sttm_folder ? `/${spConfig.data.sttm_folder}` : ""}`;
   const unmapped = (frds.data?.frds ?? []).filter((f) => !f.paired);
   const mapped = (frds.data?.frds ?? []).filter((f) => f.paired);
 
@@ -83,9 +100,8 @@ export function CorpusPanel({
 
       {!built && summary.isSuccess && !running && (
         <p className="text-sm text-muted-foreground">
-          Nothing has been synced yet. The scheduled sync (or “Sync now”) pulls every FRD and approved STTM
-          from the SharePoint library into Unity Catalog, pairs them, and lists them here. No AI calls are
-          made.
+          Nothing has been synced yet. “Sync now” pulls every FRD and approved STTM from {sourceLabel}, pairs
+          them, and lists them here. No AI calls are made.
         </p>
       )}
 
@@ -101,7 +117,7 @@ export function CorpusPanel({
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="mono-id text-sm truncate">{f.name}</span>
                   <Badge variant="warning">no STTM yet</Badge>
-                  {f.web_url && (
+                  {f.web_url && !isLocalFolder && (
                     <a
                       href={f.web_url}
                       target="_blank"
@@ -146,7 +162,7 @@ export function CorpusPanel({
       {syncState?.state === "running" && (
         <Alert>
           <AlertTitle className="flex items-center gap-2">
-            <Spinner /> {syncState.mode === "reindex" ? "Rebuilding the index…" : "Syncing from SharePoint…"}
+            <Spinner /> {syncState.mode === "reindex" ? "Rebuilding the index…" : `Syncing from ${sourceLabel}…`}
           </AlertTitle>
           <AlertDescription>
             {syncState.run_page_url ? (
@@ -189,9 +205,9 @@ export function CorpusPanel({
               variant="outline"
               disabled={running || sync.isPending || !canSync}
               onClick={() => setConfirming("sync")}
-              title={canSync ? undefined : "SharePoint is not configured on this backend"}
+              title={canSync ? undefined : "No document source is configured on this backend"}
             >
-              {running && syncState?.mode === "sync" ? "Syncing…" : "Sync from SharePoint now…"}
+              {running && syncState?.mode === "sync" ? "Syncing…" : `Sync from ${sourceLabel} now…`}
             </Button>
             <Button
               variant="ghost"
@@ -205,11 +221,8 @@ export function CorpusPanel({
           <>
             <span className="text-sm text-muted-foreground">
               Pulls new and changed FRDs and STTMs from{" "}
-              <span className="mono-id">
-                {spConfig.data?.site}/{spConfig.data?.library}
-              </span>{" "}
-              into Unity Catalog and re-pairs them (no AI calls). The scheduled sync does this on its own;
-              this runs it now. Continue?
+              <span className="mono-id">{sourcePath}</span> into the raw/reference volumes and re-pairs them
+              (no AI calls). Continue?
             </span>
             <Button onClick={() => start("sync")}>Sync now</Button>
             <Button variant="ghost" onClick={() => setConfirming(null)}>
@@ -219,8 +232,8 @@ export function CorpusPanel({
         ) : (
           <>
             <span className="text-sm text-muted-foreground">
-              Rebuilds the pairing index from the FRDs and STTMs already in the volumes — no SharePoint
-              access, no AI calls. Continue?
+              Rebuilds the pairing index from the FRDs and STTMs already in the volumes — it does not
+              re-read {sourceLabel}, and makes no AI calls. Continue?
             </span>
             <Button onClick={() => start("reindex")}>Rebuild now</Button>
             <Button variant="ghost" onClick={() => setConfirming(null)}>
@@ -237,12 +250,9 @@ export function CorpusPanel({
       </div>
       {configured && spConfig.data?.sttm_folder != null && (
         <p className="text-xs text-muted-foreground">
-          Finished STTMs belong in{" "}
-          <span className="mono-id">
-            {spConfig.data.site}/{spConfig.data.library}
-            {spConfig.data.sttm_folder ? `/${spConfig.data.sttm_folder}` : ""}
-          </span>{" "}
-          — upload yours there and the next sync pairs it with its FRD.
+          Finished STTMs belong in <span className="mono-id">{sttmPath}</span>{" "}
+          — {isLocalFolder ? "save yours there" : "upload yours there"} and the next sync pairs it with its
+          FRD.
         </p>
       )}
     </div>

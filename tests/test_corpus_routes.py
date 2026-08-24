@@ -39,6 +39,9 @@ def client():
 
 @pytest.fixture()
 def configured(monkeypatch):
+    # The local folder outranks SharePoint (2026-08-24) — clear it so these
+    # tenant-based tests exercise the branch they mean to.
+    monkeypatch.delenv("STTM_LOCAL_SOURCE_DIR", raising=False)
     for k, v in ENV.items():
         monkeypatch.setenv(k, v)
 
@@ -294,3 +297,87 @@ def test_app_lifespan_kicks_off_the_startup_sync(monkeypatch):
     with TestClient(backend_app.app):
         pass
     assert calls == ["startup"]
+
+
+# --------------------------------------------------------------------------- #
+# _source_client — which document source the sync actually uses
+# --------------------------------------------------------------------------- #
+def test_source_client_prefers_the_local_folder(monkeypatch, tmp_path):
+    src = tmp_path / "frd-to-sttm-demo-document"
+    src.mkdir()
+    monkeypatch.setenv("STTM_LOCAL_SOURCE_DIR", str(src))
+    for k, v in ENV.items():          # a wired tenant as well — folder still wins
+        monkeypatch.setenv(k, v)
+
+    kind, reference_folder, client = cr._source_client()
+
+    assert kind == "local_folder"
+    assert reference_folder == str(src)
+    assert isinstance(client, cr.LocalFolderClient)
+
+
+def test_source_client_falls_back_to_sharepoint(monkeypatch, configured):
+    monkeypatch.delenv("STTM_LOCAL_SOURCE_DIR", raising=False)
+    monkeypatch.setattr(spr, "build_client", lambda cfg: "GRAPH-CLIENT")
+
+    kind, reference_folder, client = cr._source_client()
+
+    assert kind == "sharepoint"
+    assert reference_folder == "STTMs"
+    assert client == "GRAPH-CLIENT"
+
+
+def test_source_client_503_names_both_gaps(monkeypatch):
+    """An operator who set STTM_LOCAL_SOURCE_DIR to a typo needs to see THAT,
+    not just 'SharePoint is not configured'."""
+    monkeypatch.setenv("STTM_LOCAL_SOURCE_DIR", "/no/such/folder")
+    for k in ENV:
+        monkeypatch.delenv(k, raising=False)
+
+    with pytest.raises(fastapi.HTTPException) as info:
+        cr._source_client()
+
+    assert info.value.status_code == 503
+    assert "/no/such/folder" in info.value.detail
+    assert "SharePoint" in info.value.detail
+
+
+def test_startup_reindexes_when_no_source_is_configured(monkeypatch):
+    """The ordinary dev state: no folder, no tenant — index the volumes
+    rather than failing the app's lifespan."""
+    monkeypatch.delenv("STTM_LOCAL_SOURCE_DIR", raising=False)
+    for k in ENV:
+        monkeypatch.delenv(k, raising=False)
+    started = {}
+    monkeypatch.setattr(cr, "_start_sync",
+                        lambda mode, client, folder, **kw: started.update(
+                            mode=mode, client=client) or {})
+
+    cr.start_sync_on_startup()
+
+    assert started["mode"] == "reindex"
+    assert started["client"] is None
+
+
+def test_corpus_config_offers_sync_for_a_local_folder(client, monkeypatch, tmp_path):
+    """Regression: the probe that gates the "Sync now" button used to check
+    SharePoint only, so a folder-configured backend greyed out the one
+    control that would have worked."""
+    src = tmp_path / "docs"
+    src.mkdir()
+    monkeypatch.setenv("STTM_LOCAL_SOURCE_DIR", str(src))
+    for k in ENV:
+        monkeypatch.delenv(k, raising=False)
+
+    body = client.get("/api/demo/corpus/config").json()
+
+    assert body["available"] is True
+    assert body["frd_folder"] == str(src)
+    assert body["reference_folder"] == str(src)
+
+
+def test_corpus_config_unavailable_with_no_source(client, monkeypatch):
+    monkeypatch.delenv("STTM_LOCAL_SOURCE_DIR", raising=False)
+    for k in ENV:
+        monkeypatch.delenv(k, raising=False)
+    assert client.get("/api/demo/corpus/config").json()["available"] is False

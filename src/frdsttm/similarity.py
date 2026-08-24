@@ -78,10 +78,19 @@ def thresholds_from(param) -> dict:
     ``param(name, default)`` must return a string (the `_param` contract in
     the notebooks and the env accessor in the backend). Floats parse
     loudly — a mistyped widget value must not silently fall back.
+
+    A BLANK value means "not set", not "invalid" (fixed 2026-08-24): every
+    optional knob ships blank in `.env.example`, and the documented load
+    (`set -a; . ./.env; set +a`) exports a blank as an empty string, so
+    `os.environ.get(name, default)` returns "" rather than the default. An
+    empty widget behaves the same way. Treating that as a parse error made
+    following the repo's own setup instructions raise here.
     """
     out = {}
     for name, default in THRESHOLD_DEFAULTS.items():
         raw = str(param(name, str(default))).strip()
+        if not raw:
+            raw = str(default)
         try:
             out[name] = int(raw) if name == "template_top_k" else float(raw)
         except ValueError as exc:

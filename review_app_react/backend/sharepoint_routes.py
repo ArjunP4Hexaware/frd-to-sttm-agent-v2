@@ -39,6 +39,10 @@ _SRC = Path(__file__).resolve().parents[2] / "src"
 if (_SRC / "frdsttm").is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from frdsttm.local_folder import (  # noqa: E402
+    LocalFolderConfigError,
+    load_local_folder_config,
+)
 from frdsttm.sharepoint import (  # noqa: E402
     GraphError,
     SharePointConfigError,
@@ -81,21 +85,45 @@ def _client():
 
 @router.get("/api/demo/sharepoint/config")
 def sharepoint_config() -> dict:
-    """Whether a tenant is wired, and what it points at.
+    """Whether a document source is wired, and what it points at.
 
-    Never raises: an unconfigured tenant is a normal state (the UI hides the
-    "Sync now" control and names the gap), not an error the page has to
-    handle. `configured` is derived from presence only — no secret value
-    crosses this boundary. `sttm_folder` is where the reviewer uploads a
-    finished workbook — the folder the sync watches.
+    Kept at this path and shape because the frontend already gates "Sync now"
+    and the "where do I upload the finished STTM" text on it; `source` is the
+    one added field, so a caller that ignores it behaves exactly as before.
+
+    `source` is "local_folder" (the 2026-08-24 demo stand-in: a folder on the
+    reviewer's machine, no Graph access) or "sharepoint", and the local folder
+    WINS when both are set — same precedence as corpus_routes._source_client,
+    which is what actually runs the sync. Deciding it in two places would be a
+    bug waiting to happen, so this reads as documentation OF that function.
+
+    Never raises: no source configured is a normal state (the UI hides "Sync
+    now" and names the gap), not an error the page has to handle. `configured`
+    is derived from presence only — no secret value crosses this boundary.
+    `sttm_folder` is where the reviewer puts a finished workbook — the folder
+    the sync watches.
     """
+    try:
+        local = load_local_folder_config(_param)
+    except LocalFolderConfigError:
+        pass
+    else:
+        return {
+            "configured": True,
+            "source": "local_folder",
+            "site": str(local.root),
+            "library": local.root.name,
+            "frd_folder": local.frd_folder,
+            "sttm_folder": local.sttm_folder,
+        }
     try:
         cfg = load_config(_param, _client_secret)
     except SharePointConfigError:
-        return {"configured": False, "site": None, "library": None,
-                "frd_folder": None, "sttm_folder": None}
+        return {"configured": False, "source": None, "site": None,
+                "library": None, "frd_folder": None, "sttm_folder": None}
     return {
         "configured": True,
+        "source": "sharepoint",
         "site": f"{cfg.host}{cfg.site_path}",
         "library": cfg.library,
         "frd_folder": cfg.frd_folder,
