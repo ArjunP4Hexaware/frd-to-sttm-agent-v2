@@ -40,7 +40,7 @@ source document; genuine ambiguities are gated for review, never guessed.
    databricks secrets put-secret sttm_agent anthropic_api_key
    ```
 3. Run `01_frd_ingest` (serverless). Widgets default to
-   `soham_workspace.sttm_agent`.
+   `arjun_workspace.sttm_agent`.
 4. Run `02_extract`. It reads `frd_documents.content`, calls Claude via the
    Anthropic SDK with `schema/sttm_extraction_schema.json` enforced
    server-side (via the shared Pydantic model in `frdsttm.models`), and
@@ -100,7 +100,7 @@ since documents arrive irregularly and there's no review UI yet to gate a
 scheduled run on.
 
 Only one target, `dev`, is defined today, using the same
-`soham_workspace.sttm_agent` defaults the notebook widgets already use. The
+`arjun_workspace.sttm_agent` defaults the notebook widgets already use. The
 job has an `email_notifications.on_failure` field wired up with a
 placeholder address (`notification_email` variable in `databricks.yml`) —
 replace it with a real address before deploying to a shared workspace.

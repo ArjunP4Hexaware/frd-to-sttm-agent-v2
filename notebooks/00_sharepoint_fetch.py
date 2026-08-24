@@ -60,7 +60,7 @@ def _param(name: str, default: str) -> str:
 
 LOCAL_ROOT = Path(__file__).resolve().parent.parent / "local_dev_fixtures" if not IS_DATABRICKS else None
 
-CATALOG = _param("catalog", "soham_workspace")
+CATALOG = _param("catalog", "arjun_workspace")
 SCHEMA = _param("schema", "sttm_agent")
 RAW_VOLUME = _param("raw_volume", "frd_raw")
 

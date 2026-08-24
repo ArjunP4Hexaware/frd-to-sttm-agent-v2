@@ -58,7 +58,7 @@ env:
   - name: "STTM_APP_MODE"
     value: "databricks"
   - name: "CATALOG"
-    value: "soham_workspace"
+    value: "arjun_workspace"
   - name: "SCHEMA"
     value: "sttm_agent"
   - name: "OUT_VOLUME"

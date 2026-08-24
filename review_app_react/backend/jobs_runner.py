@@ -62,7 +62,7 @@ from pathlib import Path
 
 # Same env names/defaults demo.py uses. Read here independently (not
 # imported from demo) so this module has no import cycle with it.
-CATALOG = os.environ.get("CATALOG", "soham_workspace")
+CATALOG = os.environ.get("CATALOG", "arjun_workspace")
 SCHEMA = os.environ.get("SCHEMA", "sttm_agent")
 RAW_STAGING_VOLUME = os.environ.get("STTM_DEMO_RAW_STAGING_VOLUME", "demo_raw")
 

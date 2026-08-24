@@ -7,17 +7,21 @@ include:
 # Variables shared across the pipeline notebooks and the sync job
 # (resources/frd_sttm_sync_job.yml). Defaults match the widget defaults
 # hardcoded in notebooks/01_frd_ingest.py .. 04_sttm_render.py today
-# (soham_workspace.sttm_agent). See resources/frd_sttm_job.yml for how
+# (arjun_workspace.sttm_agent). See resources/frd_sttm_job.yml for how
 # each variable maps onto each notebook's actual widget names -- they don't
 # all agree (e.g. 01_frd_ingest calls the shared documents table "table",
 # while 02_extract/03_contract_build call it "docs_table").
 variables:
   catalog:
     description: Unity Catalog catalog name, shared by all four notebooks.
-    # DEV-WORKSPACE-ONLY default — soham_workspace exists only in the
-    # internal dev workspace. Override per target; never assume it
-    # resolves in the client workspace.
-    default: soham_workspace
+    # DEV-WORKSPACE-ONLY default — was soham_workspace until verified
+    # 2026-08-23 (Arjun) that catalog is not accessible from this identity
+    # at all (`databricks catalogs list` doesn't even show it) — switched to
+    # arjun_workspace, which this identity can reach and which already has
+    # frd_raw/sttm_out/sttm_reference volumes and populated tables from
+    # prior runs. Override per target regardless; never assume any personal
+    # catalog resolves in a future client workspace.
+    default: arjun_workspace
   schema:
     description: Unity Catalog schema name, shared by all four notebooks.
     # DEV-WORKSPACE-ONLY default (pairs with the catalog above).

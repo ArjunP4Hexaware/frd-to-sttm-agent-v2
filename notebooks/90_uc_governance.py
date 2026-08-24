@@ -57,7 +57,7 @@ def _param(name: str, default: str) -> str:
     return os.environ.get(name.upper(), default)
 
 
-CATALOG = _param("catalog", "soham_workspace")
+CATALOG = _param("catalog", "arjun_workspace")
 SCHEMA = _param("schema", "sttm_agent")
 AUDIT_VOLUME = _param("audit_volume", "sttm_audit")
 # Governance facts that only a person can supply. Defaults are placeholders

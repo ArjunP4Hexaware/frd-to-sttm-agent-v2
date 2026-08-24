@@ -93,7 +93,7 @@ LOGS_DIR = ROOT / "data" / "live_run_logs"
 
 SUFFIX_PREFIX = "demo"  # never configurable: the insulation guarantee hangs off it
 SUFFIX_TS_FORMAT = "%Y%m%d_%H%M%S"
-CATALOG = os.environ.get("CATALOG", "soham_workspace")
+CATALOG = os.environ.get("CATALOG", "arjun_workspace")
 STAGE_TIMEOUT_SECONDS = int(os.environ.get("STTM_DEMO_STAGE_TIMEOUT_SECONDS", "900"))
 UPLOAD_MAX_BYTES = int(os.environ.get("STTM_DEMO_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))
 UPLOAD_ALLOWED_EXTENSIONS = (".docx",)

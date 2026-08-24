@@ -50,7 +50,7 @@ def _param(name: str, default: str) -> str:
     return os.environ.get(name.upper(), default)
 
 
-CATALOG = _param("catalog", "soham_workspace")
+CATALOG = _param("catalog", "arjun_workspace")
 SCHEMA = _param("schema", "sttm_agent")
 RAW_VOLUME = _param("raw_volume", "frd_raw")
 TABLE_NAME = _param("table", "frd_documents")

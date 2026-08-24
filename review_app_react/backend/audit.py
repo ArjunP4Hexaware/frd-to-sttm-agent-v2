@@ -53,7 +53,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LOCAL_ROOT = ROOT / "local_dev_fixtures"
 AUDIT_VOLUME = os.environ.get("STTM_AUDIT_VOLUME", "sttm_audit")
 EVENTS_SUBDIR = "events"
-CATALOG = os.environ.get("CATALOG", "soham_workspace")
+CATALOG = os.environ.get("CATALOG", "arjun_workspace")
 SCHEMA = os.environ.get("SCHEMA", "sttm_agent")
 
 # Listing cap for GET /api/demo/audit — newest first; the volume is the

@@ -345,7 +345,9 @@ calls (`ANTHROPIC_API_KEY` env var locally; secret scope
 `databricks bundle validate|deploy|run frd_sttm_pipeline -t dev` (and
 `run frd_sttm_sharepoint_sync` for the sync) — verify the CLI targets the
 intended workspace first, and override the dev-only
-`soham_workspace.sttm_agent` defaults per target. The sync job's schedule
+`arjun_workspace.sttm_agent` defaults per target (was `soham_workspace` —
+see "Deploy blockers" below; that catalog is not accessible from Arjun's
+identity at all). The sync job's schedule
 is PAUSED on the dev target (no tenant there); UNPAUSED by default.
 
 ## Config doctrine
@@ -671,6 +673,38 @@ work.
   `default_profile`) authenticates cleanly and `databricks bundle validate
   -t dev` succeeds from this laptop. `bundle deploy` has NOT been run as of
   this writing — treat it as the next unproven step, not a done one.
+- **Catalog default was wrong, fixed 2026-08-23 (Arjun) — bundle deploy and
+  app deploy are STILL unproven.** Verified live: `soham_workspace` (the
+  checked-in default in every notebook widget, `databricks.yml`, and
+  `app.yaml`) is **not accessible from Arjun's identity at all** —
+  `databricks catalogs list` doesn't show it, and `volumes list
+  soham_workspace sttm_agent` errors "Catalog 'soham_workspace' is not
+  accessible." This was true even in this shared internal dev workspace,
+  not just as a future-client-workspace risk. Fixed by switching every
+  hardcoded default (all four notebooks + `00_sharepoint_sync`,
+  `00_sharepoint_fetch`, `90_uc_governance`, `databricks.yml`, `app.yaml`,
+  and the four `review_app_react/backend/*.py` modules that read `CATALOG`)
+  from `soham_workspace` to `arjun_workspace` — the catalog this identity
+  can actually reach, which already has a `sttm_agent` schema with
+  `frd_raw` / `sttm_out` / `sttm_reference` volumes and all three Delta
+  tables (`frd_documents`, `frd_contracts`, `frd_sttm_runs`) populated from
+  prior manual runs. **Still missing under `arjun_workspace.sttm_agent`:**
+  the `demo_raw`, `sttm_out_app`, and `sttm_audit` volumes the live-run and
+  governance paths require (see `app.yaml`'s prerequisite comment) — none
+  of the three exist yet. **Nothing has ever been deployed to this
+  workspace via the bundle**: `databricks jobs list` returns zero jobs, so
+  `frd_sttm_pipeline`, `frd_sttm_sharepoint_sync`, `frd_sttm_render`, and
+  the governance job all still need their first `bundle deploy`. **The
+  registered Databricks App is stale**: `frd-sttm-review-app` (created
+  2026-07-31) shows `app_status: UNAVAILABLE`, compute `STOPPED`, and its
+  `default_source_code_path` still points at an old workspace copy
+  (`/Workspace/Users/.../sttm_review_app`) predating the repo-root move
+  (2026-08-22 evening) — it has never been deployed since that
+  architecture change and its description ("read-only demo") is left over
+  from the pre-2026-08-21 tab layout. Treat creating the three missing
+  volumes, the first `bundle deploy`, and redeploying the App from the repo
+  root as three separate, still-open action items before Monday, not
+  assumptions.
 - **Databricks Apps deploy has never run from here.** Apps installs the
   repo-root `requirements.txt`, which includes
   `review_app_react/requirements.txt` — **not** `pyproject.toml`. Deploy
@@ -750,6 +784,7 @@ work.
   mode is gated on `not IS_DATABRICKS`, so a workspace run cannot silently
   fall back to mock — it fails instead, which is correct but means the
   secret must be in place before the App can do anything live.
-- **Bundle defaults are dev-only** (`soham_workspace.sttm_agent`). Confirm
-  the CLI targets the intended workspace and override per target before
+- **Bundle defaults are dev-only** (`arjun_workspace.sttm_agent`, changed
+  from `soham_workspace` 2026-08-23 — see the entry above). Confirm the CLI
+  targets the intended workspace and override per target before
   `databricks bundle deploy`.

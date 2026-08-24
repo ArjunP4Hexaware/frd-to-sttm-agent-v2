@@ -56,7 +56,7 @@ def contracts_source() -> str:
     return str(LOCAL_CONTRACTS_DIR) if APP_MODE == "local" else _dbx_contracts_dir()
 
 # -- databricks mode config --------------------------------------------------
-DBX_CATALOG = os.environ.get("CATALOG", "soham_workspace")
+DBX_CATALOG = os.environ.get("CATALOG", "arjun_workspace")
 DBX_SCHEMA = os.environ.get("SCHEMA", "sttm_agent")
 DBX_OUT_VOLUME = os.environ.get("OUT_VOLUME", "sttm_out")
 
