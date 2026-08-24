@@ -339,7 +339,11 @@ tools/                  anonymization mapping + applier (mandated fixture path);
                         make_local_source_fixture.py (2026-08-24: the
                         synthetic SOURCE FOLDER upstream of them, so the
                         local-folder path is testable with no client
-                        documents and no Graph access)
+                        documents and no Graph access);
+                        push_local_source_to_volumes.py (2026-08-24: laptop
+                        folder -> UC volumes, creating them if absent -- the
+                        bridge a DEPLOYED App needs, since it cannot read
+                        your filesystem)
 ```
 
 ## Setup / run / test
@@ -650,6 +654,36 @@ patterns, table names, rule text) from the two source FRDs — it is source
 code, not a document, and was left in place; flagged, not silently kept.
 
 ## Known gaps / cautions
+
+- **A deployed Databricks App cannot read your laptop (2026-08-24).** The
+  local documents folder (`STTM_LOCAL_SOURCE_DIR`, `frdsttm.local_folder`) is
+  a LOCAL-MODE source: it works when the review app runs on your machine. The
+  deployed App runs inside Databricks and reads Unity Catalog, so
+  `corpus_routes._source_client` is not even consulted there
+  (`IS_DATABRICKS_APP` short-circuits every sync path to `jobs_runner`). To
+  get folder documents in front of a deployed App, run
+  `tools/push_local_source_to_volumes.py`, which stages the folder through
+  the pipeline's OWN sync and uploads the result -- including
+  `corpus_index.json`, which matters: the app's read path mirrors the volumes
+  with the SDK (`_mirror_from_uc` -> `jobs_runner.mirror_corpus`), needing no
+  job and no warehouse, so the corpus shows up with none of the bundle jobs
+  deployed.
+- **Only the audit volume is ever created by code.** `90_uc_governance.py`
+  does `CREATE VOLUME IF NOT EXISTS` for `sttm_audit` alone; `frd_raw`,
+  `sttm_reference`, `demo_raw` and `sttm_out_app` are assumed to exist and are
+  only commented/tagged/granted. Verified in the Hexaware workspace
+  2026-08-24: `frd_raw` and `sttm_reference` EXIST; `demo_raw`,
+  `sttm_out_app` and `sttm_audit` are MISSING -- which is exactly the error
+  the deployed App surfaced on its first run. `push_local_source_to_volumes.py
+  --all-volumes` creates the missing ones via the SDK (no warehouse, so no
+  compute cost).
+- **`databricks sync` honours `.gitignore` AND rewrites notebook-headed .py
+  files.** Two separate traps, both hit on 2026-08-24: gitignored build output
+  (`review_app_react/frontend/dist/`) never reaches the workspace unless
+  re-included with `--include`, and any `.py` whose FIRST line is
+  `# Databricks notebook source` is stored as a NOTEBOOK object with no `.py`
+  extension -- invisible to `import`. Do not put that header on anything under
+  `src/`. The working deploy command is in review_app_react/README.md.
 
 - **A BLANK env var is "not set", never a value — fixed 2026-08-24, and the
   rule is not yet enforced everywhere.** `.env.example` ships every optional

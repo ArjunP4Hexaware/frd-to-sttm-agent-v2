@@ -89,7 +89,11 @@ through. No SharePoint config → the picker still lists the volumes; only
   ```bash
   cd frontend && npm install && npm run build && cd ../..   # dist/ must exist
   databricks bundle deploy -t <target>                       # the three jobs
-  databricks sync . /Workspace/Users/<you>/frd-to-sttm-agent --exclude '.venv' --exclude 'node_modules'
+  # --include is REQUIRED: sync honours .gitignore, and dist/ is gitignored
+  # build output. Without it the App deploys with no UI (hit 2026-08-24).
+  databricks sync . /Workspace/Users/<you>/frd-to-sttm-agent \
+      --exclude '.venv' --exclude 'node_modules' --exclude 'local_dev_fixtures' \
+      --include 'review_app_react/frontend/dist/**'
   databricks apps create frd-sttm-agent                      # once
   databricks apps deploy frd-sttm-agent --source-code-path /Workspace/Users/<you>/frd-to-sttm-agent
   ```
