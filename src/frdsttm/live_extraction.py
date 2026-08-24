@@ -34,6 +34,68 @@ from pydantic import ValidationError
 
 from frdsttm.models import FrdIngestionSpec
 
+#: Databricks Foundation Model APIs serve Claude under a `databricks-` prefixed
+#: name (`databricks-claude-opus-4-8`). Same models, same Messages API.
+DATABRICKS_MODEL_PREFIX = "databricks-"
+
+#: The Anthropic-compatible endpoint on a workspace. Databricks' own docs use
+#: the literal api_key "unused" — the bearer token in the header authenticates.
+DATABRICKS_ANTHROPIC_PATH = "/serving-endpoints/anthropic"
+DATABRICKS_UNUSED_API_KEY = "unused"
+
+
+def databricks_model_name(name: str) -> str:
+    """First-party model id -> its Databricks-served twin.
+
+    `claude-opus-4-8` -> `databricks-claude-opus-4-8`; an already-prefixed name
+    is returned unchanged so the model can be pinned explicitly. Deterministic
+    rename with one possible answer — the repo's "refusing to guess" rule is
+    about ambiguous CONFIGURATION, not about a 1:1 mapping.
+    """
+    return name if name.startswith(DATABRICKS_MODEL_PREFIX) else f"{DATABRICKS_MODEL_PREFIX}{name}"
+
+
+def build_live_client(provider: str, *, max_retries: int,
+                      anthropic_module=None, workspace_config=None):
+    """The Anthropic SDK client for the selected live provider.
+
+    ``provider`` is "databricks" or anything else (treated as first-party
+    Anthropic). Both return the SAME `anthropic.Anthropic` type, so
+    `extract_live` and everything downstream stay provider-agnostic — only the
+    front door and the credential differ:
+
+      anthropic   ANTHROPIC_API_KEY from the environment / secret scope
+      databricks  the workspace credential; NO Anthropic key exists or is read
+
+    Verified against the Hexaware workspace 2026-08-24, including
+    `messages.stream()` at max_tokens=64000, which `extract_live` requires.
+
+    CAVEAT: the Databricks auth header is snapshotted at construction. A token
+    that expires mid-run would 401 rather than refresh; for a run longer than
+    the token's lifetime, rebuild the client.
+
+    ``anthropic_module`` / ``workspace_config`` are injection seams for tests
+    so the suite never imports the SDK or touches a workspace.
+    """
+    if anthropic_module is None:
+        import anthropic as anthropic_module  # noqa: PLC0415 — optional at import time
+
+    if provider != "databricks":
+        return anthropic_module.Anthropic(max_retries=max_retries)
+
+    if workspace_config is None:
+        from databricks.sdk import WorkspaceClient  # noqa: PLC0415
+
+        workspace_config = WorkspaceClient().config
+
+    host = workspace_config.host.rstrip("/")
+    return anthropic_module.Anthropic(
+        api_key=DATABRICKS_UNUSED_API_KEY,
+        base_url=host + DATABRICKS_ANTHROPIC_PATH,
+        default_headers=workspace_config.authenticate(),
+        max_retries=max_retries,
+    )
+
 
 def build_extraction_prompt(content: str, schema: dict | None = None,
                             exemplars: str | None = None) -> str:

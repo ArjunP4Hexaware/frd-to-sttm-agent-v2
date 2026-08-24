@@ -44,7 +44,10 @@
 # MAGIC   output shape errors, not transient.
 # MAGIC
 # MAGIC Run on serverless compute. Requires an `ANTHROPIC_API_KEY` — see the
-# MAGIC credential-load cell below.
+# MAGIC credential-load cell below — UNLESS `STTM_LLM_PROVIDER=databricks`,
+# MAGIC which serves the same Claude models through this workspace's
+# MAGIC Foundation Model APIs and authenticates with the workspace credential
+# MAGIC instead (no key, no secret scope; Databricks bills per token).
 
 # COMMAND ----------
 
@@ -189,13 +192,14 @@ MOCK_EXTRACTION = MOCK_AVAILABLE and _MOCK_REQUESTED
 # --------------------------------------------------------------------------- #
 LLM_PROVIDER = _param("sttm_llm_provider", "").strip().lower()
 
-_VALID_PROVIDERS = ("", "mock", "anthropic")
+_VALID_PROVIDERS = ("", "mock", "anthropic", "databricks")
 if LLM_PROVIDER not in _VALID_PROVIDERS:
     raise ValueError(
         f"STTM_LLM_PROVIDER={LLM_PROVIDER!r} is not recognised. "
         f"Valid values: {_VALID_PROVIDERS!r}. Refusing to guess -- an unrecognised "
-        f"provider must never silently degrade to mock or to Anthropic."
+        f"provider must never silently degrade to mock or to a live provider."
     )
+
 
 # Ambiguous configuration raises rather than picking a winner. Silently
 # honouring the mock here would reproduce the silent-mock failure mode the
@@ -224,6 +228,14 @@ USE_MOCK = MOCK_EXTRACTION or (MOCK_AVAILABLE and LLM_PROVIDER == "mock")
 if MOCK_EXTRACTION or USE_MOCK:
     ACTIVE_PROVIDER = "mock"
     ACTIVE_MODEL = "mock (cached extraction, no API call)"
+elif LLM_PROVIDER == "databricks":
+    # Claude, served by Databricks Foundation Model APIs. Same vendor, same
+    # Messages API, different front door -- so "Anthropic-only as model vendor"
+    # still holds; what changes is who bills and who authenticates.
+    ACTIVE_PROVIDER = "databricks"
+    from frdsttm.live_extraction import databricks_model_name
+
+    ACTIVE_MODEL = databricks_model_name(MODEL)
 else:
     ACTIVE_PROVIDER = "anthropic"
     ACTIVE_MODEL = MODEL
@@ -257,6 +269,12 @@ import os
 
 if MOCK_EXTRACTION or USE_MOCK:
     pass  # no Anthropic call on the mock path -- nothing to authenticate here
+elif LLM_PROVIDER == "databricks":
+    # Nothing to fetch: the workspace credential IS the credential. In a job or
+    # notebook the SDK picks up the runtime identity, in the deployed App the
+    # service principal, and locally ~/.databrickscfg. No ANTHROPIC_API_KEY, no
+    # secret scope -- which is the whole point of this provider.
+    pass
 else:
     _api_key = None
     try:
@@ -399,7 +417,13 @@ from types import SimpleNamespace
 if not MOCK_EXTRACTION and not USE_MOCK:
     import anthropic
 
-    client = anthropic.Anthropic(max_retries=MAX_RETRIES)
+    # One builder for both providers (frdsttm.live_extraction.build_live_client)
+    # so the choice is made -- and tested -- in ONE place. Both return the same
+    # anthropic.Anthropic type, so everything downstream is provider-agnostic.
+    from frdsttm.live_extraction import build_live_client
+
+    client = build_live_client(LLM_PROVIDER, max_retries=MAX_RETRIES,
+                               anthropic_module=anthropic)
 
 Path(EXTRACTIONS_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -426,7 +450,7 @@ for d in docs:
                 client,
                 d["doc_id"],
                 d["content"],
-                model=MODEL,
+                model=ACTIVE_MODEL,   # resolved per provider (see the banner)
                 max_tokens=MAX_TOKENS,
                 system_prompt=SYSTEM_PROMPT,
                 exemplars=exemplar_block["text"] if exemplar_block else None,

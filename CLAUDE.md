@@ -419,8 +419,17 @@ is PAUSED on the dev target (no tenant there); UNPAUSED by default.
   the secret scope with an env-var fallback; with no key present,
   `02_extract` fails fast naming both remedies.
 - Provider seam: `STTM_LLM_PROVIDER` unset preserves default behavior
-  (`STTM_MOCK_EXTRACTION` decides mock vs Anthropic); `mock` / `anthropic`
-  select explicitly — the program is Anthropic-only as model vendor.
+  (`STTM_MOCK_EXTRACTION` decides mock vs Anthropic); `mock` / `anthropic` /
+  `databricks` select explicitly. **The program is still Anthropic-only as
+  model VENDOR** — `databricks` (added 2026-08-24) serves the same Claude
+  models through this workspace's Foundation Model APIs, so what changes is
+  the front door, the credential and who is billed, not the vendor. It needs
+  NO Anthropic key and NO secret scope: the workspace credential
+  authenticates. Both providers are built by ONE function,
+  `frdsttm.live_extraction.build_live_client`, and both return the same
+  `anthropic.Anthropic` type, so `extract_live` and everything downstream is
+  provider-agnostic. Model ids map 1:1 (`claude-opus-4-8` ->
+  `databricks-claude-opus-4-8`) and the banner prints the resolved name.
   Setting a live provider while
   `STTM_MOCK_EXTRACTION` is also set RAISES rather than silently picking.
   Mock mode is gated on `MOCK_AVAILABLE` — false when `IS_DATABRICKS`

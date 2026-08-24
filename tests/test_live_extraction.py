@@ -146,3 +146,83 @@ def test_extract_live_validation_failure_propagates():
     with pytest.raises(RuntimeError, match="nope"):
         extract_live(client, "doc1", "doc", model="m", max_tokens=10,
                      system_prompt="s")
+
+
+# --------------------------------------------------------------------------- #
+# provider seam: Databricks-served Claude (2026-08-24)
+# --------------------------------------------------------------------------- #
+class _FakeAnthropic:
+    """Records the kwargs the SDK would have been constructed with. No SDK
+    import, no network, no credential anywhere in this file."""
+
+    last_kwargs = None
+
+    def __init__(self, **kwargs):
+        _FakeAnthropic.last_kwargs = kwargs
+
+
+class _FakeModule:
+    Anthropic = _FakeAnthropic
+
+
+class _FakeConfig:
+    def __init__(self, host="https://adb-123.azuredatabricks.net/"):
+        self.host = host
+
+    def authenticate(self):
+        return {"Authorization": "Bearer dbx-token"}
+
+
+def test_databricks_model_name_prefixes_a_first_party_id():
+    from frdsttm.live_extraction import databricks_model_name
+
+    assert databricks_model_name("claude-opus-4-8") == "databricks-claude-opus-4-8"
+
+
+def test_databricks_model_name_leaves_an_already_prefixed_id_alone():
+    """So `model` can be pinned explicitly without being double-prefixed."""
+    from frdsttm.live_extraction import databricks_model_name
+
+    assert databricks_model_name("databricks-claude-opus-5") == "databricks-claude-opus-5"
+
+
+def test_anthropic_provider_builds_a_plain_client():
+    """The first-party path must stay byte-identical to before: no base_url,
+    no headers, no api_key override -- the SDK resolves ANTHROPIC_API_KEY."""
+    from frdsttm.live_extraction import build_live_client
+
+    build_live_client("anthropic", max_retries=2, anthropic_module=_FakeModule)
+
+    assert _FakeAnthropic.last_kwargs == {"max_retries": 2}
+
+
+def test_unset_provider_also_builds_a_plain_client():
+    from frdsttm.live_extraction import build_live_client
+
+    build_live_client("", max_retries=3, anthropic_module=_FakeModule)
+
+    assert _FakeAnthropic.last_kwargs == {"max_retries": 3}
+
+
+def test_databricks_provider_points_at_the_workspace_endpoint():
+    from frdsttm.live_extraction import build_live_client
+
+    build_live_client("databricks", max_retries=2, anthropic_module=_FakeModule,
+                      workspace_config=_FakeConfig())
+    kw = _FakeAnthropic.last_kwargs
+
+    # trailing slash on the host must not produce a double slash
+    assert kw["base_url"] == "https://adb-123.azuredatabricks.net/serving-endpoints/anthropic"
+    assert kw["default_headers"] == {"Authorization": "Bearer dbx-token"}
+    assert kw["max_retries"] == 2
+
+
+def test_databricks_provider_sends_no_real_api_key():
+    """The whole point: no ANTHROPIC_API_KEY is read, held, or sent. The
+    literal "unused" is what Databricks' own documentation passes."""
+    from frdsttm.live_extraction import build_live_client, DATABRICKS_UNUSED_API_KEY
+
+    build_live_client("databricks", max_retries=1, anthropic_module=_FakeModule,
+                      workspace_config=_FakeConfig())
+
+    assert _FakeAnthropic.last_kwargs["api_key"] == DATABRICKS_UNUSED_API_KEY == "unused"
