@@ -366,6 +366,27 @@ cd review_app_react/frontend && npm install && npm run build && cd -
 set -a; . ./.env; set +a             # STTM_LOCAL_SOURCE_DIR points at the folder
 python review_app_react/backend/app.py                   # http://127.0.0.1:8000
 
+# HEXAWARE LAPTOP ONLY -- the machine with the real client documents. A
+# DEPLOYED App cannot read that folder (it runs inside Databricks), so push
+# the folder into the volumes it DOES read. Creates missing volumes via the
+# SDK; no warehouse, no job, no cluster, so no compute cost.
+databricks auth login --host https://adb-7405616719878880.0.azuredatabricks.net
+python tools/push_local_source_to_volumes.py \
+    ~/Desktop/frd-to-sttm-agent-documents --all-volumes --dry-run   # inspect
+python tools/push_local_source_to_volumes.py \
+    ~/Desktop/frd-to-sttm-agent-documents --all-volumes             # then push
+
+# Deploy the App itself (the --include is required; see review_app_react/README.md)
+cd review_app_react/frontend && npm install && npm run build && cd -
+databricks sync . /Workspace/Users/<you>/frd-to-sttm-agent \
+    --exclude '.venv' --exclude 'node_modules' --exclude 'local_dev_fixtures' \
+    --include 'review_app_react/frontend/dist/**'
+databricks apps start frd-sttm-review-app     # deploy needs it RUNNING first
+databricks apps deploy frd-sttm-review-app \
+    --source-code-path /Workspace/Users/<you>/frd-to-sttm-agent
+# ... and when finished, STOP it -- Apps bill per hour of running compute:
+databricks apps stop frd-sttm-review-app
+
 # Offline smoke of 01→03→04 with SYNTHETIC documents (the repo carries no
 # FRD/STTM material since 2026-08-22; this replaces the deleted fixtures
 # without client content — 02 is skipped, its extraction JSONs pre-written):
