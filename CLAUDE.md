@@ -685,6 +685,20 @@ code, not a document, and was left in place; flagged, not silently kept.
 
 ## Known gaps / cautions
 
+- **Stale extraction JSONs can silently change the gate result (found
+  2026-08-24).** `03_contract_build` matches extraction files to `doc_id`, and
+  two DIFFERENTLY NAMED files can map to the SAME doc_id -- e.g.
+  `synthetic_claim_intake.json` (pre-written by
+  `tools/make_synthetic_smoke_fixture.py`) and
+  `FRD_synthetic_claim_intake.json` (written by a real `02_extract` run over
+  the `FRD_`-prefixed corpus). With both present, 03 reported PASS/PASS; with
+  only the fresh pair present it reported PASS_WITH_FLAGS/PASS. The stale file
+  won, and nothing said so. **Clear `sttm_out/extractions/` before a run whose
+  result you intend to trust**, and read `<doc_id>.extraction_meta.json`
+  (provider, model, stop_reason, usage, extraction_sha256) to confirm which
+  artifact produced the contract. This is a live demo-day hazard, not just a
+  local-fixtures one.
+
 - **A deployed Databricks App cannot read your laptop (2026-08-24).** The
   local documents folder (`STTM_LOCAL_SOURCE_DIR`, `frdsttm.local_folder`) is
   a LOCAL-MODE source: it works when the review app runs on your machine. The
