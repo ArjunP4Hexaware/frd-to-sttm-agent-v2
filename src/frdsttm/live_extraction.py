@@ -35,7 +35,7 @@ from pydantic import ValidationError
 from frdsttm.models import FrdIngestionSpec
 
 #: Databricks Foundation Model APIs serve Claude under a `databricks-` prefixed
-#: name (`databricks-claude-opus-4-8`). Same models, same Messages API.
+#: name (`databricks-claude-opus-5`). Same models, same Messages API.
 DATABRICKS_MODEL_PREFIX = "databricks-"
 
 #: The Anthropic-compatible endpoint on a workspace. Databricks' own docs use
@@ -47,7 +47,7 @@ DATABRICKS_UNUSED_API_KEY = "unused"
 def databricks_model_name(name: str) -> str:
     """First-party model id -> its Databricks-served twin.
 
-    `claude-opus-4-8` -> `databricks-claude-opus-4-8`; an already-prefixed name
+    `claude-opus-5` -> `databricks-claude-opus-5`; an already-prefixed name
     is returned unchanged so the model can be pinned explicitly. Deterministic
     rename with one possible answer — the repo's "refusing to guess" rule is
     about ambiguous CONFIGURATION, not about a 1:1 mapping.

@@ -488,3 +488,37 @@ def test_rerender_failure_is_surfaced_not_stuck(client, live_dirs, monkeypatch):
         time.sleep(0.05)
     assert st["state"] == "failed" and "04_sttm_render.py exited with code 3" in st["error"]
     demo._rerenders.clear()
+
+
+# --------------------------------------------------------------------------- #
+# provider-aware preflight (2026-08-24)
+# --------------------------------------------------------------------------- #
+def test_local_run_still_requires_the_key_on_the_anthropic_path(monkeypatch):
+    """Unchanged behaviour for the default provider — a live Anthropic run
+    without a key must still be refused before it starts."""
+    monkeypatch.delenv("STTM_LLM_PROVIDER", raising=False)
+    assert demo.needs_anthropic_key() is True
+
+
+def test_databricks_provider_needs_no_anthropic_key(monkeypatch):
+    """The whole point: that path reads no Anthropic key, so demanding one in
+    preflight would refuse a run that would have worked."""
+    monkeypatch.setenv("STTM_LLM_PROVIDER", "databricks")
+    assert demo.needs_anthropic_key() is False
+
+
+def test_provider_is_read_at_call_time_not_import_time(monkeypatch):
+    monkeypatch.setenv("STTM_LLM_PROVIDER", "databricks")
+    assert demo.llm_provider() == "databricks"
+    monkeypatch.setenv("STTM_LLM_PROVIDER", "anthropic")
+    assert demo.llm_provider() == "anthropic"
+
+
+def test_config_reports_the_configured_provider(monkeypatch):
+    monkeypatch.setenv("STTM_LLM_PROVIDER", "databricks")
+    assert demo.demo_config()["provider"] == "databricks"
+
+
+def test_config_defaults_to_anthropic_when_unset(monkeypatch):
+    monkeypatch.delenv("STTM_LLM_PROVIDER", raising=False)
+    assert demo.demo_config()["provider"] == "anthropic"

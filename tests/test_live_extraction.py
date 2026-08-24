@@ -176,6 +176,8 @@ class _FakeConfig:
 def test_databricks_model_name_prefixes_a_first_party_id():
     from frdsttm.live_extraction import databricks_model_name
 
+    # the repo default since 2026-08-24, and the id app.yaml pins
+    assert databricks_model_name("claude-opus-5") == "databricks-claude-opus-5"
     assert databricks_model_name("claude-opus-4-8") == "databricks-claude-opus-4-8"
 
 

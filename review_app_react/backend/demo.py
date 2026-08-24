@@ -120,6 +120,26 @@ CALL_ESTIMATE = {
 
 API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
 
+
+def llm_provider() -> str:
+    """The configured extraction provider, read at CALL time.
+
+    Read live rather than snapshotted at import so a test (or a process whose
+    environment is set after import) sees the current value.
+    """
+    return os.environ.get("STTM_LLM_PROVIDER", "").strip().lower()
+
+
+def needs_anthropic_key() -> bool:
+    """Whether a LOCAL live run requires ANTHROPIC_API_KEY.
+
+    False under STTM_LLM_PROVIDER=databricks (2026-08-24): that path reads no
+    Anthropic key at all — the workspace credential authenticates against the
+    Foundation Model APIs. Without this, a perfectly runnable local
+    Databricks-provider run was refused in preflight for a key it never uses.
+    """
+    return llm_provider() != "databricks"
+
 # Replay discovery: exactly these artifact-set families, nothing else. The
 # same rule family as the sibling app's suffix-based scan — a set is a
 # `sttm_out_<suffix>` directory whose suffix marks it as a demo run or a
@@ -488,10 +508,12 @@ def start_run(frd_rel: str, identity: dict | None = None) -> Run:
     # In databricks mode the Anthropic key lives in the workspace secret
     # scope and is checked by the job's own extract task (which fails loudly
     # without it); the app process neither has nor needs the key.
-    if not IS_DATABRICKS_APP and not api_key_present():
+    if not IS_DATABRICKS_APP and needs_anthropic_key() and not api_key_present():
         raise RunPreflightError(
             f"{API_KEY_ENV_VAR} is not set (environment or repo .env). A live run "
-            "makes billed Anthropic API calls and cannot start without it."
+            "makes billed Anthropic API calls and cannot start without it. "
+            "(Set STTM_LLM_PROVIDER=databricks to use this workspace's "
+            "Databricks-served Claude instead, which needs no Anthropic key.)"
         )
 
     with _active_lock:
@@ -892,7 +914,10 @@ def _rerender_worker(set_id: str, doc_id: str, identity: dict | None = None) -> 
 @router.get("/api/demo/config")
 def demo_config() -> dict:
     return {
-        "provider": "anthropic",
+        # The provider actually configured, not a hardcoded literal: with
+        # STTM_LLM_PROVIDER=databricks this is "databricks", and reporting
+        # "anthropic" there would be simply untrue.
+        "provider": llm_provider() or "anthropic",
         # "local" = subprocess runs gated on a local API key; "databricks" =
         # Jobs-API runs, where the key lives in the workspace secret scope so
         # api_key_present is not a readiness signal (the frontend gates on

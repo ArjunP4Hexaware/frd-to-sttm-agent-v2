@@ -130,9 +130,23 @@ resources:
               schema: "{{job.parameters.schema}}"
               docs_table: "{{job.parameters.docs_table}}"
               out_volume: "{{job.parameters.out_volume}}"
-              model: claude-opus-4-8
-              max_tokens: "16000"
+              # THIS is what a deployed App's live run actually uses: the App
+              # triggers this job (jobs_runner.py), it does not extract
+              # in-container. Without this parameter the notebook falls through
+              # to the first-party Anthropic path and demands
+              # ANTHROPIC_API_KEY from the secret scope below.
+              sttm_llm_provider: databricks
+              model: claude-opus-5
+              # 64000, matching 02_extract's default. This said "16000"
+              # until 2026-08-24 -- the value R3 replaced because it capped
+              # out around 15-20 feeds (docs/LIVE_E2E_2026-08-07.md). A job
+              # run would have silently reintroduced the truncation the
+              # notebook default was raised to prevent.
+              max_tokens: "64000"
               max_retries: "2"
+              # Unused while sttm_llm_provider is "databricks" (that path reads
+              # no key at all). Kept so switching the provider back to
+              # "anthropic" needs one edit, not three.
               secret_scope: sttm_agent
               secret_key: anthropic_api_key
               job_run_id: "{{job.run_id}}"

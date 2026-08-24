@@ -51,7 +51,10 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install "anthropic>=0.60" "pydantic>=2"
+# MAGIC %pip install "anthropic>=0.60" "pydantic>=2" "databricks-sdk"
+# MAGIC # databricks-sdk: needed only by STTM_LLM_PROVIDER=databricks, which
+# MAGIC # reads the workspace credential to reach the serving endpoint. It ships
+# MAGIC # with DBR, but pinning it here keeps the notebook self-contained.
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -107,7 +110,12 @@ CATALOG = _param("catalog", "arjun_workspace")
 SCHEMA = _param("schema", "sttm_agent")
 DOCS_TABLE_NAME = _param("docs_table", "frd_documents")
 OUT_VOLUME = _param("out_volume", "sttm_out")
-MODEL = _param("model", "claude-opus-4-8")
+# claude-opus-5 (was claude-opus-4-8, changed 2026-08-24, Arjun): the most
+# capable Claude available to Hexaware on Databricks. Under
+# STTM_LLM_PROVIDER=databricks this resolves to databricks-claude-opus-5,
+# verified callable in the Hexaware workspace the same day. The first-party
+# Anthropic path takes the same id unchanged.
+MODEL = _param("model", "claude-opus-5")
 # 64000 (was 16000): R3 mitigation from docs/LIVE_E2E_2026-08-07.md — the
 # demo FRD used 3.3k output tokens at ~700-800/feed, so 16k capped out
 # around 15-20 feeds. The call streams, so the larger ceiling cannot hit

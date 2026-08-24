@@ -399,7 +399,8 @@ python notebooks/04_sttm_render.py                       # template decision + e
 
 Without `STTM_MOCK_EXTRACTION=1`, `02_extract` makes real billed Anthropic
 calls (`ANTHROPIC_API_KEY` env var locally; secret scope
-`sttm_agent/anthropic_api_key` in Databricks). Bundle:
+`sttm_agent/anthropic_api_key` in Databricks) — UNLESS
+`STTM_LLM_PROVIDER=databricks`, which needs neither (2026-08-24). Bundle:
 `databricks bundle validate|deploy|run frd_sttm_pipeline -t dev` (and
 `run frd_sttm_sharepoint_sync` for the sync) — verify the CLI targets the
 intended workspace first, and override the dev-only
@@ -428,8 +429,11 @@ is PAUSED on the dev target (no tenant there); UNPAUSED by default.
   authenticates. Both providers are built by ONE function,
   `frdsttm.live_extraction.build_live_client`, and both return the same
   `anthropic.Anthropic` type, so `extract_live` and everything downstream is
-  provider-agnostic. Model ids map 1:1 (`claude-opus-4-8` ->
-  `databricks-claude-opus-4-8`) and the banner prints the resolved name.
+  provider-agnostic. Model ids map 1:1 (`claude-opus-5` ->
+  `databricks-claude-opus-5`) and the banner prints the resolved name.
+  The default model is `claude-opus-5` (2026-08-24) and `app.yaml` pins
+  `STTM_LLM_PROVIDER=databricks` + `MODEL=claude-opus-5`, so the deployed App
+  needs no Anthropic key.
   Setting a live provider while
   `STTM_MOCK_EXTRACTION` is also set RAISES rather than silently picking.
   Mock mode is gated on `MOCK_AVAILABLE` — false when `IS_DATABRICKS`
@@ -684,6 +688,23 @@ patterns, table names, rule text) from the two source FRDs — it is source
 code, not a document, and was left in place; flagged, not silently kept.
 
 ## Known gaps / cautions
+
+- **Two files configure the model, and the JOB wins (2026-08-24).** A deployed
+  App does NOT extract in its own container — it triggers the bundle job
+  (`jobs_runner.py`), so a live run is governed by the `base_parameters` in
+  `resources/frd_sttm_job.yml`, not by `app.yaml`'s `env:`. Both are set to
+  `sttm_llm_provider: databricks` + `model: claude-opus-5`; **change both or
+  the job silently wins.** `app.yaml`'s copies cover anything that ever runs
+  in-container (the subprocess path, today mock-only) and document intent
+  where people look first. Found because the job passed no provider at all,
+  which would have sent a deployed live run down the Anthropic path demanding
+  a key that no longer needs to exist.
+- **`frd_sttm_job.yml` pinned `max_tokens: "16000"` until 2026-08-24** — the
+  value R3 replaced (it capped out around 15-20 feeds,
+  docs/LIVE_E2E_2026-08-07.md) while `02_extract`'s own default had been
+  raised to 64000. A workspace job run would silently have reintroduced the
+  truncation. Now 64000 in both. When changing a notebook default, check
+  whether the job resource pins the old one.
 
 - **Stale extraction JSONs can silently change the gate result (found
   2026-08-24).** `03_contract_build` matches extraction files to `doc_id`, and

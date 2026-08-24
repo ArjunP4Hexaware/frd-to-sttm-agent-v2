@@ -157,6 +157,10 @@ python notebooks/04_sttm_render.py   # optional; needs sttm_reference fixtures
 ```
 
 `02_extract.py` needs `ANTHROPIC_API_KEY` set and makes real (billed) API
+calls — **unless you set `STTM_LLM_PROVIDER=databricks`** (2026-08-24), which
+runs the same Claude models through a Databricks workspace's Foundation Model
+APIs, authenticates with the workspace credential, and needs no Anthropic key
+at all. The rest of this paragraph describes the Anthropic path
 calls, same as in Databricks. For zero-cost local testing of everything
 *downstream* of extraction — `03_contract_build.py`'s gating logic, the
 review app — set `STTM_MOCK_EXTRACTION=1` before running `02_extract.py`

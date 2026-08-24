@@ -26,6 +26,11 @@ fastapi
 python-multipart
 uvicorn[standard]
 pydantic>=2
+# Also required by the pipeline subprocesses since 2026-08-24: with
+# STTM_LLM_PROVIDER=databricks, frdsttm.live_extraction.build_live_client
+# reads the workspace credential through WorkspaceClient().config to reach
+# the Anthropic-compatible serving endpoint. Already listed for the app
+# server, so nothing to add -- noted so nobody removes it as app-only.
 databricks-sdk
 
 # --- pipeline subprocesses (see note above) ---------------------------------

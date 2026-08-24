@@ -636,7 +636,8 @@ d.flow_slide(
            "Three ambiguity kinds only — attribution, disagreement, advisory grounding — each with a stable ID that survives re-runs so human decisions are never lost",
            "Runs as a Databricks Asset Bundle job (serverless) or the same four scripts on a laptop; artifacts in Unity Catalog volumes; key in a secret scope"],
     takeaway="The AI only reads. Plain, predictable code does everything else — and never writes a cell it cannot back up with the document.",
-    notes="Model today: claude-opus-4-8 via the Anthropic SDK; the eval repo recommends serving on "
+    notes="Model today: claude-opus-5 via the Anthropic SDK, or the same model served by Databricks "
+          "Foundation Model APIs as databricks-claude-opus-5; the eval repo recommends serving on "
           "claude-sonnet-4-6 (same gate profile, half the cost). Server-side structured output was "
           "rejected by the API for this schema size, so the schema is rendered into the prompt and "
           "validated client-side with extra='forbid'.")

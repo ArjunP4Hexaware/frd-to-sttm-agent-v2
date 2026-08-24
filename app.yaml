@@ -35,8 +35,12 @@ command: ["python", "review_app_react/backend/app.py"]
 #   - volumes exist in CATALOG.SCHEMA: frd_raw + sttm_reference (the sync
 #     maintains them; the app mirrors them down), demo_raw (per-run FRD
 #     staging), sttm_out_app (per-run artifact sets)
-#   - secret scopes sttm_agent/anthropic_api_key and
-#     sttm_agent/sharepoint_client_secret are populated
+#   - secret scope sttm_agent/sharepoint_client_secret is populated.
+#     sttm_agent/anthropic_api_key is NO LONGER REQUIRED (2026-08-24) while
+#     sttm_llm_provider is "databricks" in resources/frd_sttm_job.yml -- that
+#     path authenticates with the workspace credential and reads no Anthropic
+#     key. It is required again the moment that parameter is set back to
+#     "anthropic".
 #   - the app's service principal can run both jobs, READ frd_raw and
 #     sttm_reference, and read/write demo_raw and sttm_out_app
 #   - GOVERNANCE (2026-08-23, docs/AI_GOVERNANCE.md): the audit volume
@@ -57,6 +61,26 @@ command: ["python", "review_app_react/backend/app.py"]
 env:
   - name: "STTM_APP_MODE"
     value: "databricks"
+  # Extraction provider (2026-08-24, Arjun). "databricks" serves the SAME
+  # Claude models through this workspace's Foundation Model APIs, so nothing
+  # needs an Anthropic key or the sttm_agent/anthropic_api_key secret scope:
+  # the service principal authenticates and Databricks bills per token.
+  #
+  # READ THIS BEFORE CHANGING IT. A deployed App does NOT extract in this
+  # container -- it triggers the bundle job (jobs_runner.py), so the values
+  # that govern a live run are the base_parameters in
+  # resources/frd_sttm_job.yml, NOT these. The two are set to the same thing
+  # deliberately; change BOTH or the job silently wins. These entries cover
+  # anything that ever does run in-container (the subprocess path, today
+  # mock-only) and document the intent in the place people look first.
+  - name: "STTM_LLM_PROVIDER"
+    value: "databricks"
+  # The most capable Claude available to Hexaware on Databricks. Resolves to
+  # databricks-claude-opus-5 under the provider above (the databricks- prefix
+  # is added automatically and printed in the run banner); the same id works
+  # unchanged if the provider is switched back to "anthropic".
+  - name: "MODEL"
+    value: "claude-opus-5"
   - name: "CATALOG"
     value: "arjun_workspace"
   - name: "SCHEMA"
