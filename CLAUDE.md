@@ -1,28 +1,22 @@
 # FRD-to-STTM Agent — working notes
 
-> **Where the work happens — SPLIT as of 2026-08-24 (Arjun).** The Hexaware
-> Windows laptop (`C:\Users\2000198467\Desktop\frd-to-sttm-agent`) remains
-> the machine that touches **client documents**: the demo source folder with
-> the real FRD/STTM pairs is created there, and real client material must
-> never reach the MacBook Air. **Architecture work also happens on Arjun's
-> personal MacBook Air** (`~/Desktop/frd-to-sttm-agent`) against SYNTHETIC
-> documents only — `tools/make_local_source_fixture.py` exists so that needs
-> no client content. Two consequences, both re-confirmed on the Mac
-> 2026-08-24 rather than assumed:
+> **Where the work happens — back to Windows-only, for good this time
+> (Arjun, 2026-08-24, later the same day).** Earlier today this file
+> described a SPLIT: client documents stayed on this Hexaware Windows
+> laptop while architecture/synthetic-document work also happened on
+> Arjun's personal MacBook Air. That split is now retired — **all
+> Hexaware-related development work happens on this Windows laptop**
+> (`C:\Users\2000198467\Desktop\frd-to-sttm-agent`) from here forward, not
+> just the client-document half of it. This is a standing decision about
+> where the work happens generally, not a one-off for this repo.
 >
-> - **The iCloud caveats DO apply again.** `~/Desktop` is symlinked into
->   iCloud Drive, which stamps `UF_HIDDEN` on a venv created inside it.
->   Python 3.14's `site.addpackage` skips hidden `.pth` files, so an
->   editable install there is silently inert (`import frdsttm` fails while
->   `pytest` still passes, because `pyproject.toml` sets its own
->   `pythonpath`). Keep the venv OUTSIDE iCloud —
->   `~/.virtualenvs/frdsttm` is what this machine uses. `chflags nohidden`
->   is not a fix; iCloud re-applies the flag within about a minute.
-> - Earlier in 2026-08-23 this file said the Mac decision had been reversed
->   outright. That is now half-true: reversed for client documents, not for
->   architecture work.
+> Consequence: the MacBook-Air-specific material the split pull brought in
+> — the iCloud/venv-hidden-`.pth` caveat, `~/.virtualenvs/frdsttm`, running
+> `tools/make_local_source_fixture.py` against `~/Desktop/...` — describes
+> that same-day detour and does not apply going forward. It is left below
+> as history, not as a live setup path.
 >
-> The umbrella folder is present on the Windows machine, beside that repo.
+> The umbrella folder is present on this machine, beside this repo.
 
 ## Purpose & pipeline position
 
