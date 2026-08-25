@@ -81,6 +81,34 @@ MOCK_AVAILABLE = not (IS_DATABRICKS or IS_DATABRICKS_APP)
 
 LOCAL_ROOT = Path(__file__).resolve().parent.parent / "local_dev_fixtures" if not IS_DATABRICKS else None
 
+# Make src/ importable before ANY `from frdsttm...` below -- including the
+# provider-banner import further down, which runs in an earlier cell than
+# the `%run ./_models` / `%run ./_live_extraction` shims that would
+# otherwise be the ones to do this. In a notebook task `__file__` is unset
+# (unlike a plain script or a pip-installed frdsttm), so those two cases
+# need their own candidate search; mirrors notebooks/_models.py's.
+import sys as _sys
+try:
+    _here = Path(__file__).resolve().parent
+except NameError:
+    _here = Path.cwd()
+_candidates = [_here.parent / "src", _here / "src", Path.cwd().parent / "src", Path.cwd() / "src"]
+if IS_DATABRICKS:
+    # cwd/`__file__` are unreliable inside a WORKSPACE notebook task (as
+    # opposed to a Git-folder %run, where cwd is documented to be the
+    # notebook's own directory) -- ask the notebook context directly for
+    # its own workspace path instead of guessing.
+    try:
+        _nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+        _nb_dir = Path("/Workspace" + _nb_path).resolve().parent if not _nb_path.startswith("/Workspace") \
+            else Path(_nb_path).resolve().parent
+        _candidates.insert(0, _nb_dir.parent / "src")
+    except Exception:  # noqa: BLE001 — best-effort extra candidate, not fatal
+        pass
+for _cand in _candidates:
+    if (_cand / "frdsttm").is_dir() and str(_cand) not in _sys.path:
+        _sys.path.insert(0, str(_cand))
+
 
 def _param(name: str, default: str) -> str:
     if IS_DATABRICKS:
