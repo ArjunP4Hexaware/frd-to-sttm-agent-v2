@@ -93,6 +93,18 @@ env:
     value: "frd_sttm_sharepoint_sync"
   - name: "STTM_RENDER_JOB_NAME"
     value: "frd_sttm_render"
+  # dev-target bundle deploys prefix job names (e.g. "[dev <user>]
+  # frd_sttm_pipeline"), which the *_JOB_NAME values above won't match --
+  # pin the ids from the dev deploy directly so name lookup is never
+  # consulted. Re-pin these after any bundle deploy that recreates the
+  # jobs (a fresh dev deploy under a different bundle run does NOT change
+  # ids; `databricks bundle destroy` + redeploy would).
+  - name: "STTM_DEMO_JOB_ID"
+    value: "542994480165767"
+  - name: "STTM_SYNC_JOB_ID"
+    value: "892922030132384"
+  - name: "STTM_RENDER_JOB_ID"
+    value: "187243481553083"
   - name: "STTM_DEMO_APP_OUT_VOLUME"
     value: "sttm_out_app"
   # Governance: the append-only audit trail (one JSON per event under
