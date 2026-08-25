@@ -51,10 +51,12 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install "anthropic>=0.60" "pydantic>=2" "databricks-sdk"
+# MAGIC %pip install "anthropic>=0.60" "pydantic>=2" "databricks-sdk" openpyxl
 # MAGIC # databricks-sdk: needed only by STTM_LLM_PROVIDER=databricks, which
 # MAGIC # reads the workspace credential to reach the serving endpoint. It ships
 # MAGIC # with DBR, but pinning it here keeps the notebook self-contained.
+# MAGIC # openpyxl: frdsttm.corpus imports frdsttm.reference_workbooks (to parse
+# MAGIC # the template library for exemplars) whether or not a corpus is present.
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
