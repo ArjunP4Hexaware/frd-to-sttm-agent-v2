@@ -332,7 +332,6 @@ function RunProgress({
         <h2 className="text-lg font-semibold">
           {snap?.doc_id ? <>Processing <span className="mono-id">{snap.doc_id}</span></> : "Processing"}
         </h2>
-        <span className="text-xs text-muted-foreground mono-id">run {runId}</span>
         {snap?.run_page_url && (
           <a
             href={snap.run_page_url}
