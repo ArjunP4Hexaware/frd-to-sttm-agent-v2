@@ -98,6 +98,8 @@ print(f"contracts: {CONTRACTS_TABLE}\nreference: {REFERENCE_DIR}\nrendered:  {RE
 import hashlib
 import json
 import re
+import shutil
+import tempfile
 import unicodedata
 from copy import copy
 from datetime import datetime, timezone
@@ -1321,7 +1323,25 @@ for doc_id, contract in contracts.items():
     # Render INTO the lead template's own layout (2026-08-22): its sheets,
     # headers and styles are the dialect. Freeform keeps the built-in fallback.
     template_layout = layout_of(str(Path(REFERENCE_DIR) / order[0])) if order else None
-    render_contract(contract, dictionary, out_xlsx, layout=template_layout, feed_match=fm)
+    # openpyxl's save() writes in a way (seek + partial rewrites) that the UC
+    # volumes FUSE mount rejects with OSError [Errno 5], observed 2026-08-24
+    # on the first live App run. Write to local scratch first, then copy to
+    # the volume so the transfer is a plain sequential write. Local mode
+    # (RENDERED_DIR not under /Volumes/) keeps the direct write.
+    if out_xlsx.startswith("/Volumes/"):
+        Path(RENDERED_DIR).mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as _tmp:
+            _tmp_path = _tmp.name
+        try:
+            render_contract(contract, dictionary, _tmp_path, layout=template_layout, feed_match=fm)
+            shutil.copyfile(_tmp_path, out_xlsx)
+        finally:
+            try:
+                os.unlink(_tmp_path)
+            except OSError:
+                pass
+    else:
+        render_contract(contract, dictionary, out_xlsx, layout=template_layout, feed_match=fm)
 
     # Eval precedence: the doc's OWN workbook is the ground truth whenever it
     # exists (name-aligned cross eval — valid even though the dictionary that
