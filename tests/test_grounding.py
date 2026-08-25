@@ -5,6 +5,8 @@ from frdsttm.contract_build import (
     _advisory_ok,
     _ambiguity_id,
     _strict_ok,
+    _strict_ok_any_split,
+    split_reference_names,
     _tokens,
     attribution_check,
     enrich,
@@ -44,6 +46,24 @@ def test_strict_ok_is_normalized_substring():
     content = norm("Pattern: demographic_extract_CCYY_MM.csv arrives monthly")
     assert _strict_ok("demographic_extract_CCYY_MM.csv", content)
     assert not _strict_ok("invented_file.csv", content)
+
+
+def test_split_reference_names_on_alias_and_list_separators_not_commas():
+    assert split_reference_names("STTM-X.xlsx (Report, V1.0.xlsx)") == \
+        ["STTM-X.xlsx", "Report, V1.0.xlsx"]
+    assert split_reference_names("A; B | C") == ["A", "B", "C"]
+    assert split_reference_names("Refer CVX STTM") == ["Refer CVX STTM"]
+
+
+def test_strict_split_grounds_each_cited_name_separately():
+    # Observed 2026-08-25 on a real FRD: the document cites its STTM under
+    # two names in two places; the model returns both in one string.
+    content = norm("Link to STTM | STTM-X.xlsx | ... | see Report, V1.0.xlsx for detail")
+    assert not _strict_ok("STTM-X.xlsx (Report, V1.0.xlsx)", content)
+    assert _strict_ok_any_split("STTM-X.xlsx (Report, V1.0.xlsx)", content)
+    # A single invented name still fails -- splitting is not a loophole.
+    assert not _strict_ok_any_split("STTM-Y.xlsx (Report, V1.0.xlsx)", content)
+    assert not _strict_ok_any_split("STTM-Invented.xlsx", content)
 
 
 def test_advisory_ok_threshold():

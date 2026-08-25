@@ -173,6 +173,31 @@ def test_render_into_template_keeps_layout_fills_under_its_headers(tmp_path):
     assert tf["sheets"]["MAPPING-T_MEMBER"]["rows"] == 4
 
 
+def test_own_template_render_keeps_its_datatypes_and_verbatim_flag_text(tmp_path):
+    """The pinned own-template case (2026-08-25): the row set is the
+    template's, so its per-row stage/standard datatypes and the analyst's
+    exact cell spelling ("NOT NULL", "NA") must survive into the draft --
+    not a "String" default and a re-spelled "Not NULL"."""
+    p = tmp_path / "tpl.xlsx"; _unusual_template(p, table="T_MEMBER")
+    wb = load_workbook(p); ws = wb["MAPPING-T_MEMBER"]
+    ws["C3"] = "NOT NULL"; ws["C4"] = "NA"          # verbatim flag text, two spellings
+    ws["I4"] = "Decimal(10,2)"; ws["M4"] = "Int"    # stage / standard datatypes differ
+    wb.save(p)
+    d = parse_reference_workbook(str(p))
+    (key, feed), = d["feeds"].items()
+    assert feed["fields"][0]["nullable_raw"] == "NOT NULL" and feed["fields"][1]["nullable_raw"] == "NA"
+    contract = _contract(table="T_MEMBER")
+    R["derive_field_mappings"](contract, d, {0: key})
+    out = tmp_path / "out.xlsx"
+    R["render_contract"](contract, d, str(out), layout=layout_of(str(p)), feed_match={0: key})
+    data = _rows(load_workbook(out)["MAPPING-T_MEMBER"])[2:]
+    assert [r[0] for r in data] == ["OLD_A", "OLD_B", "NA"]
+    assert [r[2] for r in data[:2]] == ["NOT NULL", "NA"]                 # verbatim, not re-spelled
+    assert (data[0][8], data[0][12]) == ("String", "String")
+    assert (data[1][8], data[1][12]) == ("Decimal(10,2)", "Int")          # template datatypes, per layer
+    assert data[2][12] == "timestamp"                                      # audit row unchanged
+
+
 def test_rendered_template_fill_round_trips_through_our_parser(tmp_path):
     p = tmp_path / "tpl.xlsx"; _unusual_template(p)
     d, key = _dictionary_from_template_with_our_columns(p, ["MEMBER_ID", "ZIP_CODE"])

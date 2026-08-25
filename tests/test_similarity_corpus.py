@@ -21,9 +21,11 @@ from frdsttm.exemplars import build_exemplar_block
 from frdsttm.reference_workbooks import parse_reference_workbook
 from frdsttm.similarity import (
     THRESHOLD_DEFAULTS,
+    contract_features,
     decide_templates,
     frd_features,
     merge_dictionaries,
+    merge_features,
     score_match,
     thresholds_from,
     workbook_features,
@@ -245,6 +247,54 @@ def test_exclude_own_reference_changes_the_pick(reference_dir):
     excluded_row = next(r for r in decision["ranked"]
                         if r["reference"] == "member_risk_sttm.xlsx")
     assert excluded_row["excluded"] is True
+
+
+def test_contract_features_carry_the_extraction_table_vocabulary():
+    contract = {"feeds": [
+        {"feed_name": "member_risk",
+         "stage_target": {"schema": "stg", "tables": ["MEMBER_RISK"]},
+         "standard_target": {"schema": "std", "tables": ["member_risk"]}},
+        {"feed_name": "Claim Intake", "stage_target": None, "standard_target": {}},
+    ]}
+    feat = contract_features("member_risk_frd", contract)
+    assert feat["tables"] == {"member_risk", "claim intake"}
+    assert feat["columns"] == set()          # never the contract's own targets
+    assert "member" in feat["name"] or "member_risk_frd" in feat["name"] or feat["name"]
+
+
+def test_pinned_name_pair_is_definitive_over_score(reference_dir):
+    # A target that scores nothing against member_risk_sttm.xlsx ...
+    target = frd_features("member_risk_frd", "eligibility roster synchronization only")
+    feats = _wb_feats(reference_dir)
+    assert decide_templates(target, feats, _thresholds())["mode"] == "freeform"
+    # ... is still rendered from it when the corpus paired them by name.
+    pinned = decide_templates(target, feats, _thresholds(), pinned="member_risk_sttm.xlsx")
+    assert pinned["mode"] == "single"
+    assert pinned["selections"][0]["reference"] == "member_risk_sttm.xlsx"
+    assert pinned["pinned"] == "member_risk_sttm.xlsx"
+    assert pinned["ranked"]                   # evidence still shown
+
+
+def test_pinned_workbook_that_is_excluded_stays_excluded(reference_dir):
+    target = frd_features("member_risk_frd", "eligibility roster synchronization only")
+    decision = decide_templates(target, _wb_feats(reference_dir), _thresholds(),
+                                exclude={"member_risk_sttm.xlsx"},
+                                pinned="member_risk_sttm.xlsx")
+    assert decision["mode"] == "freeform"
+    assert decision["pinned"] is None
+
+
+def test_merge_features_lifts_a_prose_only_frd_via_its_extraction(reference_dir):
+    prose = frd_features("member_risk_frd",
+                         "Load the monthly member risk file. Rules apply per member.")
+    contract = {"feeds": [{"feed_name": "member_risk",
+                           "stage_target": {"tables": ["member_risk"]},
+                           "standard_target": {"tables": ["member_risk"]}}]}
+    merged = merge_features(prose, contract_features("member_risk_frd", contract))
+    feats = _wb_feats(reference_dir)
+    before = score_match(prose, feats["member_risk_sttm.xlsx"])["components"]["tables"]
+    after = score_match(merged, feats["member_risk_sttm.xlsx"])["components"]["tables"]
+    assert before == 0.0 and after > 0.0
 
 
 def test_amalgam_merge_is_first_wins(reference_dir):

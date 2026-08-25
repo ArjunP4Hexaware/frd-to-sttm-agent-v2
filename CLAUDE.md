@@ -798,12 +798,26 @@ code, not a document, and was left in place; flagged, not silently kept.
   content; on any other corpus a mock 02 run raises rather than inventing a
   spec (correct — fail loud), which is why the synthetic offline smoke
   skips 02 by pre-writing extraction JSONs. Live extraction is unaffected.
-- **Template thresholds are seeded, not calibrated (2026-08-22).**
-  `similarity.THRESHOLD_DEFAULTS` were set against the synthetic smoke
-  fixture. With a 2-document corpus and exclude-own on, each FRD has ONE
-  eligible template candidate, so `template_single_min` alone decides
-  single-vs-freeform — calibrate on the two real Hexaware pairs before the
-  demo and record the outcome in docs/TEMPLATE_ARCHITECTURE.md.
+- **Template retrieval CALIBRATED on the two real pairs (2026-08-25) —
+  three changes, all in code, after every real render came out freeform
+  (the "sparse workbook" symptom).** (1) Real FRDs do not enumerate columns
+  (33 identifiers in the FRD vs 391 columns in its own STTM), so the
+  markdown-only features scored 0.11 against the document's OWN workbook;
+  04 now scores `merge_features(index features, contract_features(contract))`
+  — the extraction's feed keys + stage/standard table names, the vocabulary
+  an FRD and its STTM actually share. Own-STTM scores became 0.236 / 0.253,
+  cross-pair 0.046 / 0.033. (2) `THRESHOLD_DEFAULTS` re-seeded to
+  single 0.15 / amalgam 0.08 (was 0.55 / 0.30); both job ymls pass the same
+  values explicitly on the render task. (3) The corpus's exact-name pairing
+  is now definitive at render time too: `decide_templates(..., pinned=)` —
+  04 pins the own STTM when `pairs[doc_id].matched_by == "name"` AND
+  exclude-own is off. Both job ymls set `exclude_own_reference: "0"` for the
+  demo (the App regenerates ALREADY-MAPPED FRDs, so the approved STTM is the
+  template by identity); the cross-validation default in the notebook is
+  unchanged, and with exclude-own ON a pinned workbook is still excluded.
+  Consequence to say out loud in the room: with own as template, the
+  "accuracy vs golden" figure is self-referential. Not yet done: the
+  2-pair corpus cannot exercise amalgam mode; re-calibrate as it grows.
 - **Interpreter exit DEADLOCK on the py3.14 venv — worked around
   (2026-08-22 evening).** What was logged as a "slow exit" turned into a
   hard hang on `03_contract_build` (>13 min at 0% CPU after all work was

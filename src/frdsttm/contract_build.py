@@ -132,6 +132,28 @@ def _strict_ok(value: str, ncontent: str) -> bool:
     return norm(value) in ncontent
 
 
+# A document may cite its STTM by more than one name -- "STTM-X.xlsx (Report
+# V1.0.xlsx)", "A; B" -- and the model faithfully returns both in ONE string
+# that, as a whole, appears nowhere in the source (observed 2026-08-25 on a
+# real FRD: each name grounded, the combination failed strict and FAILed the
+# run). Split on the alias/list separators and ground each name on its own.
+# Commas are NOT separators: real workbook names contain them.
+_REFERENCE_SPLIT_RE = re.compile(r"\s*[()\[\];|]\s*")
+
+
+def split_reference_names(value: str) -> list[str]:
+    parts = [p.strip(" ,") for p in _REFERENCE_SPLIT_RE.split(str(value))]
+    return [p for p in parts if p]
+
+
+def _strict_ok_any_split(value: str, ncontent: str) -> bool:
+    """Whole value grounded, or every separately-cited name grounded."""
+    if _strict_ok(value, ncontent):
+        return True
+    parts = split_reference_names(value)
+    return len(parts) > 1 and all(_strict_ok(p, ncontent) for p in parts)
+
+
 def _advisory_ok(value: str, content_token_set: set) -> bool:
     toks = _tokens(value)
     if not toks:
@@ -147,12 +169,13 @@ def grounding_audit(spec: FrdIngestionSpec, content: str, enrichments: List[str]
     strict_failed, advisory_flagged = [], []
     n_strict = n_advisory = 0
 
-    def strict(path: str, value):
+    def strict(path: str, value, *, split_names: bool = False):
         nonlocal n_strict
         if not value:
             return
         n_strict += 1
-        if not _strict_ok(str(value), ncontent):
+        ok = _strict_ok_any_split if split_names else _strict_ok
+        if not ok(str(value), ncontent):
             strict_failed.append(f"{path}: {value!r}")
 
     def advisory(path: str, value, *, feed_index: int = None, field: str = None):
@@ -190,7 +213,7 @@ def grounding_audit(spec: FrdIngestionSpec, content: str, enrichments: List[str]
             strict(f"{p}.lobs", lob)
         for rid in f.requirement_ids:
             strict(f"{p}.requirement_ids", rid)
-        strict(f"{p}.sttm_reference", f.sttm_reference)
+        strict(f"{p}.sttm_reference", f.sttm_reference, split_names=True)
         for tgt_name, tgt in (("stage_target", f.stage_target), ("standard_target", f.standard_target)):
             if tgt is None:
                 continue

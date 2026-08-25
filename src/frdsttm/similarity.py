@@ -27,6 +27,7 @@ caller logic is a bug; the defaults below are the single source of truth.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter
@@ -38,9 +39,16 @@ from frdsttm.reference_workbooks import _nl, loose_tokens
 # --------------------------------------------------------------------------- #
 # Names double as widget/env names (upper-cased by _param the usual way).
 THRESHOLD_DEFAULTS = {
-    # template choice (04 render + backend display)
-    "template_single_min": 0.55,   # top-1 at/above this → single-template mode
-    "template_amalgam_min": 0.30,  # refs at/above this may join an amalgam
+    # template choice (04 render + backend display).
+    # CALIBRATED 2026-08-25 on the two real Hexaware pairs with the merged
+    # features 04 now scores (index markdown features + contract_features):
+    # each FRD vs its own STTM 0.236 / 0.253, vs the other pair's STTM
+    # 0.046 / 0.033. The seeded values (0.55 / 0.30, from the synthetic smoke
+    # fixture whose FRDs enumerate columns) were unreachable on real
+    # documents -- every render went freeform. Re-calibrate when the corpus
+    # grows; record outcomes in docs/TEMPLATE_ARCHITECTURE.md.
+    "template_single_min": 0.15,   # top-1 at/above this → single-template mode
+    "template_amalgam_min": 0.08,  # refs at/above this may join an amalgam
     "template_top_k": 3,           # amalgam considers at most this many refs
     # corpus pairing (which FRD belongs to which existing STTM)
     "pair_min": 0.35,              # below this an FRD stays unmapped
@@ -124,6 +132,56 @@ def frd_features(doc_id: str, markdown: str) -> dict:
         "tokens": _prose_counts(markdown),
         "name": loose_tokens(doc_id),
     }
+
+
+def contract_features(doc_id: str, contract: dict) -> dict:
+    """Features of one stage-03 mapping contract — the EXTRACTION's vocabulary.
+
+    Calibrated on the two real Hexaware pairs (2026-08-25): a real FRD names
+    its feeds and target tables and states rules in prose; it does not
+    enumerate columns (33 identifiers in the FRD vs 391 columns in its own
+    STTM — column overlap 0.005, score 0.11 against its own workbook). What an
+    FRD and its STTM actually share is the feed key and the stage/standard
+    TABLE names, which the extraction carries as structured fields. Those go
+    into ``tables`` in exactly the shape ``workbook_features`` uses (bare,
+    normalised table names plus the feed key) so the two sides are comparable.
+    Prose tokens come from the contract text; ``columns`` stays empty here and
+    is supplied by the FRD-markdown features when merged (see
+    ``merge_features``) — never by the contract, whose target side would
+    otherwise be scored against itself."""
+    tables: set[str] = set()
+    for feed in contract.get("feeds", []) or []:
+        key = _nl(feed.get("feed_name", ""))
+        if key:
+            tables.add(key)
+        for layer in ("stage_target", "standard_target"):
+            target = feed.get(layer) or {}
+            for name in target.get("tables") or []:
+                n = _nl(name)
+                if n:
+                    tables.add(n)
+    tables.discard("")
+    return {
+        "columns": set(),
+        "tables": tables,
+        "tokens": _prose_counts(json.dumps(contract, ensure_ascii=False)),
+        "name": loose_tokens(doc_id),
+    }
+
+
+def merge_features(*feats: dict) -> dict:
+    """Union of feature sets (sets unioned, token counts summed). Used by 04 to
+    score the FRD-markdown features from the index TOGETHER with the
+    extraction's table vocabulary."""
+    out = {"columns": set(), "tables": set(), "tokens": Counter(), "name": set()}
+    for f in feats:
+        if not f:
+            continue
+        out["columns"] |= set(f.get("columns", ()))
+        out["tables"] |= set(f.get("tables", ()))
+        out["tokens"].update(f.get("tokens", {}))
+        out["name"] |= set(f.get("name", ()))
+    return out
 
 
 def workbook_features(name: str, dictionary: dict) -> dict:
@@ -332,7 +390,8 @@ def pair_corpus(frd_feats: dict, wb_feats: dict, thresholds: dict) -> dict:
 # template decision (render-time)
 # --------------------------------------------------------------------------- #
 def decide_templates(target_feat: dict, wb_feats: dict, thresholds: dict,
-                     exclude: frozenset | set = frozenset()) -> dict:
+                     exclude: frozenset | set = frozenset(),
+                     pinned: str | None = None) -> dict:
     """Pick the template(s) for one document. Pure code; the verdict
     vocabulary is exactly three modes:
 
@@ -349,6 +408,14 @@ def decide_templates(target_feat: dict, wb_feats: dict, thresholds: dict,
     (cross-validation: the ground truth must not feed the render — decided
     2026-08-22). Excluded references are still listed in the decision for
     display, marked excluded, score omitted from selection.
+
+    ``pinned`` names a workbook that is the template BY IDENTITY, not by
+    score: the document's own STTM when the corpus paired them by exact
+    name (``pair_corpus``'s ``matched_by == "name"`` — definitive there, so
+    definitive here too; added 2026-08-25). Mode is "single" with that
+    workbook, whatever the scores say; the ranking is still computed and
+    shown. A pinned workbook that is also excluded (cross-validation on) is
+    NOT pinned — exclusion wins, so exclude-own keeps meaning what it says.
     """
     ranked = []
     for name, wf in sorted(wb_feats.items()):
@@ -361,7 +428,11 @@ def decide_templates(target_feat: dict, wb_feats: dict, thresholds: dict,
     eligible = [r for r in ranked if not r["excluded"]]
     top_k = max(1, int(thresholds["template_top_k"]))
 
-    if eligible and eligible[0]["score"] >= thresholds["template_single_min"]:
+    pinned_row = next((r for r in eligible if r["reference"] == pinned), None) \
+        if pinned else None
+    if pinned_row is not None:
+        mode, selections = "single", [pinned_row]
+    elif eligible and eligible[0]["score"] >= thresholds["template_single_min"]:
         mode, selections = "single", [eligible[0]]
     else:
         amalgam = [r for r in eligible
@@ -377,6 +448,7 @@ def decide_templates(target_feat: dict, wb_feats: dict, thresholds: dict,
         "mode": mode,
         "selections": selections,
         "ranked": ranked,
+        "pinned": pinned_row["reference"] if pinned_row is not None else None,
         "thresholds": {k: thresholds[k] for k in
                        ("template_single_min", "template_amalgam_min", "template_top_k")},
     }

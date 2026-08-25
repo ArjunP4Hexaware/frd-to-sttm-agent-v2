@@ -54,6 +54,9 @@ resources:
               contracts_table: "{{job.parameters.contracts_table}}"
               runs_table: "{{job.parameters.runs_table}}"
               reference_volume: sttm_reference
+              exclude_own_reference: "0"
+              template_single_min: "0.15"
+              template_amalgam_min: "0.08"
               out_volume: "{{job.parameters.out_volume}}"
               triggered_by: "{{job.parameters.triggered_by}}"
               run_label: "{{job.parameters.run_label}}"

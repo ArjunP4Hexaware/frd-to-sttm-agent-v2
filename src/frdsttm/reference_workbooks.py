@@ -162,6 +162,12 @@ def _parse_sheet_per_table(wb):
         fields, ref_targets, table_key = [], [], None
         for r in ws.iter_rows(min_row=3, values_only=True):
             get = lambda m, k: _n(r[m[k]]) if k in m and m[k] < len(r) else ""
+            # The template's cell text verbatim (casing, spacing, "NA"): the
+            # render writes THIS back under the same header so a draft reads
+            # like the analyst's workbook, not a re-spelling of it (2026-08-25:
+            # 541 cells on one real sheet differed only by "NO" vs "No").
+            raw = lambda m, k: ("" if r[m[k]] is None else str(r[m[k]])) \
+                if k in m and m[k] < len(r) else ""
             col = get(smap, "source_column")
             if not col:
                 continue
@@ -173,6 +179,10 @@ def _parse_sheet_per_table(wb):
                 "nullable": not _not_null(get(smap, "nullable_raw")),
                 "phi": _flag(get(smap, "phi_raw")),
                 "mandatory": _flag(get(smap, "mandatory_raw")),
+                "description_raw": raw(smap, "description"),
+                "nullable_raw": raw(smap, "nullable_raw"),
+                "phi_raw": raw(smap, "phi_raw"),
+                "mandatory_raw": raw(smap, "mandatory_raw"),
                 "comment": get(smap, "comment"),
                 "segment": "",
                 "business_rule": "",
@@ -219,6 +229,12 @@ def _parse_single_sheet(wb):
         blanks = 0
         for r in ws.iter_rows(min_row=header_r + 1, values_only=True):
             get = lambda m, k: _n(r[m[k]]) if k in m and m[k] < len(r) else ""
+            # The template's cell text verbatim (casing, spacing, "NA"): the
+            # render writes THIS back under the same header so a draft reads
+            # like the analyst's workbook, not a re-spelling of it (2026-08-25:
+            # 541 cells on one real sheet differed only by "NO" vs "No").
+            raw = lambda m, k: ("" if r[m[k]] is None else str(r[m[k]])) \
+                if k in m and m[k] < len(r) else ""
             col = get(smap, "source_column")
             if not col:
                 blanks += 1
@@ -234,6 +250,10 @@ def _parse_single_sheet(wb):
                 "nullable": not _not_null(get(smap, "nullable_raw")),
                 "phi": _flag(get(smap, "phi_raw")),
                 "mandatory": _flag(get(smap, "mandatory_raw")),
+                "description_raw": raw(smap, "description"),
+                "nullable_raw": raw(smap, "nullable_raw"),
+                "phi_raw": raw(smap, "phi_raw"),
+                "mandatory_raw": raw(smap, "mandatory_raw"),
                 "comment": get(smap, "comment"),
                 "length": get(smap, "length"),
                 "fixed_length": get(smap, "fixed_length"),

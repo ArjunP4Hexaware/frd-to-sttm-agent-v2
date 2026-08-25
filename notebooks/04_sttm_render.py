@@ -143,9 +143,11 @@ from frdsttm.corpus import (  # noqa: E402
     reference_features_from_index,
 )
 from frdsttm.similarity import (  # noqa: E402
+    contract_features,
     decide_templates,
     frd_features,
     merge_dictionaries,
+    merge_features,
     thresholds_from,
     workbook_features,
 )
@@ -580,10 +582,12 @@ def _table_for_segment(tables, segment):
 def derive_field_mappings(contract, dictionary, feed_match):
     """Attach derived stage/standard mappings to each matched feed's fields.
     Rules (the pipeline's explicit, contestable defaults):
-      - stage: 1:1 column name, String datatype, schema/catalog from contract,
-        table chosen by record segment suffix (HDR/DTL/TRL) when present.
+      - stage: 1:1 column name, datatype from the template's stage target for
+        that row (else String), schema/catalog from contract, table chosen by
+        record segment suffix (HDR/DTL/TRL) when present.
       - standard: same 1:1 name; schema/catalog from contract when stated,
-        else null (the FRD may genuinely not state it); String datatype.
+        else null (the FRD may genuinely not state it); datatype from the
+        template's standard target (else the stage datatype).
       - AUDIT rows (source "NA", `audit: True` from the dictionary parser,
         2026-08-22): the template's ETL audit columns — a workbook
         convention, not an FRD fact, so there is no 1:1 source name to
@@ -614,7 +618,15 @@ def derive_field_mappings(contract, dictionary, feed_match):
                 std_dt = rt["standard"].get("datatype") or stage_dt
             else:
                 stage_col = std_col = f["source_column"]
-                stage_dt = std_dt = "String"
+                # Datatypes come from the template's own targets for this row
+                # (2026-08-25). Until then every derived row said "String",
+                # which put "String" where the analyst had Decimal(10,2)/Int
+                # on 158 standard-layer cells of one real workbook. The row
+                # set itself is already the template's, so its per-row
+                # datatypes are the same kind of input as its column list --
+                # a client convention, not the FRD's ground truth.
+                stage_dt = rt["stage"].get("datatype") or "String"
+                std_dt = rt["standard"].get("datatype") or stage_dt
             derived.append({
                 **f,
                 "stage": {"catalog": stg.get("catalog"), "schema": stg.get("schema"),
@@ -913,17 +925,29 @@ def _field_value(f, role, placement, sheet_has_comment):
         rules = placement["by_column"].get(f["source_column"], [])
         if key == "source_column":
             return f["source_column"]
+        # Template-sourced fields carry the analyst's verbatim cell text
+        # (`*_raw`, frdsttm.reference_workbooks, 2026-08-25); write it back
+        # as-is so the draft keeps the workbook's own spelling ("NO", "NOT
+        # NULL", "NA", double spaces). Fields built without a template
+        # (freeform, synthetic) have no raw text and fall back to the
+        # derived spelling.
         if key == "description":
-            return f.get("description", "")
+            return f["description_raw"] if f.get("description_raw") else f.get("description", "")
         if key == "sample":
             return f.get("sample", "")
         if key == "datatype":
             return f.get("datatype", "String")
         if key == "nullable_raw":
+            if "nullable_raw" in f:
+                return f["nullable_raw"]
             return "NULL" if f.get("nullable") else "Not NULL"
         if key == "phi_raw":
+            if "phi_raw" in f:
+                return f["phi_raw"]
             return "Yes" if f.get("phi") else "No"
         if key == "mandatory_raw":
+            if "mandatory_raw" in f:
+                return f["mandatory_raw"]
             return "Yes" if f.get("mandatory") else "No"
         if key == "comment":
             return "\n".join(rules + ([f["comment"]] if f.get("comment") else []))
@@ -1256,11 +1280,24 @@ def _own_reference(doc_id):
     return own if own in dicts_by_name else None
 
 
+def _own_pair(doc_id):
+    """The corpus pairing record for this doc (reference, score, matched_by),
+    or None — the index-less fallback in _own_reference has no record."""
+    return (corpus_index.get("pairs", {}) or {}).get(doc_id) if corpus_index else None
+
+
 def _target_features(doc_id, contract):
+    """What the template scorer sees for this document: the FRD-markdown
+    features the index holds (identifiers + prose) MERGED with the
+    extraction's own table vocabulary (frdsttm.similarity.contract_features).
+    Calibrated 2026-08-25 on the two real pairs: real FRDs do not enumerate
+    columns, so markdown-only features scored 0.11 against the document's
+    own STTM; the feed keys and stage/standard table names the extraction
+    carries are what the workbook actually shares."""
     feat = frd_features_from_index(corpus_index, doc_id) if corpus_index else None
     if feat is None:
         feat = frd_features(doc_id, json.dumps(contract, ensure_ascii=False))
-    return feat
+    return merge_features(feat, contract_features(doc_id, contract))
 
 # Read contracts from the CONTRACTS_DIR JSON files, not the frd_contracts
 # Delta table. The table is a snapshot from 03_contract_build.py's run, at
@@ -1289,12 +1326,19 @@ runs = []
 for doc_id, contract in contracts.items():
     own_ref = _own_reference(doc_id)
     exclude = {own_ref} if (EXCLUDE_OWN and own_ref) else set()
+    # The corpus's exact-name pairing (FRD_<name> <-> STTM_<name>) is
+    # definitive in pair_corpus, so it is definitive here too (2026-08-25):
+    # a name-paired own STTM is the template by identity, not by score --
+    # unless exclude-own is on, in which case cross-validation wins.
+    pair = _own_pair(doc_id)
+    pinned = own_ref if (own_ref and not exclude and pair
+                         and pair.get("matched_by") == "name") else None
     if wb_feats:
         decision = decide_templates(_target_features(doc_id, contract), wb_feats,
-                                    TEMPLATE_THRESHOLDS, exclude=exclude)
+                                    TEMPLATE_THRESHOLDS, exclude=exclude, pinned=pinned)
     else:
         decision = {"mode": "freeform", "selections": [], "ranked": [],
-                    "thresholds": {}}
+                    "pinned": None, "thresholds": {}}
     order = [sel["reference"] for sel in decision["selections"]]
     if decision["mode"] == "freeform":
         dictionary = dict(_FREEFORM_DICT)
@@ -1365,6 +1409,7 @@ for doc_id, contract in contracts.items():
         "ranked": decision["ranked"][:5],
         "own_reference": own_ref,
         "own_excluded": bool(exclude),
+        "pinned": decision.get("pinned"),
         "eval_reference": ev_reference,
         "feed_sources": dictionary.get("feed_sources", {}),
         "thresholds": decision.get("thresholds", {}),
