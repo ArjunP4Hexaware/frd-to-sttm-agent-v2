@@ -79,7 +79,7 @@ IS_DATABRICKS_APP = os.environ.get("STTM_APP_MODE", "").strip().lower() == "data
 # present) AND in the deployed App (STTM_APP_MODE set).
 MOCK_AVAILABLE = not (IS_DATABRICKS or IS_DATABRICKS_APP)
 
-LOCAL_ROOT = Path(__file__).resolve().parent.parent / "local_dev_fixtures"
+LOCAL_ROOT = Path(__file__).resolve().parent.parent / "local_dev_fixtures" if not IS_DATABRICKS else None
 
 
 def _param(name: str, default: str) -> str:

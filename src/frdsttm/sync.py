@@ -295,7 +295,7 @@ def reindex(frd_dir: str | Path, reference_dir: str | Path, thresholds: dict,
             try:
                 entries.append({
                     "doc_id": path.stem,
-                    "source_file": str(path),
+                    "source_file": path.name,
                     "content": normalize_to_markdown(str(path)),
                     "content_sha256": sha256_bytes(path.read_bytes()),
                 })

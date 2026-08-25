@@ -39,7 +39,7 @@ import os
 from pathlib import Path
 
 IS_DATABRICKS = "dbutils" in globals()
-LOCAL_ROOT = Path(__file__).resolve().parent.parent / "local_dev_fixtures"
+LOCAL_ROOT = Path(__file__).resolve().parent.parent / "local_dev_fixtures" if not IS_DATABRICKS else None
 
 
 def _param(name: str, default: str) -> str:
