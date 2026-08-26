@@ -1,5 +1,17 @@
 # FRD-to-STTM Agent — working notes
 
+> **TEMPORARY EXCEPTION 2026-08-25 → Friday 2026-08-28 (Arjun):
+> development happens on the personal MacBook Air this week**, because
+> Claude Code tokens in the Hexaware environment are exhausted until
+> Friday. The Windows-only decision below is suspended, not reversed —
+> it resumes Friday. While here: (1) there is NO venv on this machine
+> (`~/.virtualenvs/` is empty; the repo-root `.venv` is gone) — recreate
+> it OUTSIDE `~/Desktop` per the setup section before running anything;
+> (2) the real client pair on this machine must live OUTSIDE the repo and
+> be reached via `STTM_LOCAL_SOURCE_DIR` — see the 2026-08-25 finding
+> under "Fixtures & data rules"; (3) carry commits back through `origin`,
+> not by copying files between laptops.
+
 > **Where the work happens — back to Windows-only, for good this time
 > (Arjun, 2026-08-24, later the same day).** Earlier today this file
 > described a SPLIT: client documents stayed on this Hexaware Windows
@@ -45,6 +57,160 @@ Databricks App in the Hexaware environment by Monday 2026-08-24** —
 `review_app_react/` deployed with live (billed) runs working, not
 replay-only. The three deploy blockers are the last entries under "Known
 gaps" below; verify each rather than assuming it still holds.
+
+**ARCHITECTURE DECISION 2026-08-25 (Arjun) — THREE INPUTS, not one. The
+agent must consume the FRD + the vendor data dictionary + the client's
+naming/coding standards document. "FRD → STTM" as pitched is retired; the
+real shape is (FRD + dictionary + standards) → STTM, with the FRD as the
+spine that ties the other two together.** Reached after the 2026-08-24
+presentation, by reading both real FRD/STTM pairs side by side:
+
+- **The FRD carries the feed-level frame only.** File names/patterns,
+  schema + table per layer, load strategy, frequency, the landing FOLDER
+  (Structural Metadata › ADLS Location) and the DQ / recycle rules.
+  It names ~2 columns; its own STTM has ~410 column rows.
+  **CORRECTED 2026-08-26, then SOFTENED the same day when a THIRD real
+  FRD arrived (`standards/FRD_STG_STD_SFMC_..._1005310.docx`, commit
+  `9159447`): 2 of 3 real FRDs state the landing folder**, and the path
+  has a derivable shape, `mftlanding/inbound/<domain>/<subdomain>/<vendor>`
+  (SFMC: `mftlanding/inbound/member/outreach/salesforce_marketing_cloud`).
+  SD's empty cell is an authoring omission, not the norm — so a missing
+  ADLS Location is INFERABLE, and must be gated rather than filled
+  silently. CAQH gives `mftlanding/inbound/member/tpl/caqh`
+  (relative; no storage account or container, so it resolves only through
+  the `STTM_LANDING_ROOTS` config of §7) and its STTM's `File Location`
+  cell agrees verbatim. The SD FRD's `ADLS Location` row is EMPTY, and the
+  adjacent `Inbound/outbound File Folder Path` says only `Inbound` — a
+  direction, not a path. Consequence for the probe: it fills NOTHING for
+  either document today — SD has headered files but no path to find them,
+  CAQH has a path but a headerless file, so the probe yields a field count
+  and no names. Build it as the §7 VALIDATOR (which the CAQH FRD demands:
+  "Process should validate the source metadata as per Source Dictionary"),
+  never as a source of field names.
+  It points at the STTM for the field list ("refer to the mapping
+  document" ×6) — circular. No prompt closes that gap. The sharpest
+  instance, worth quoting in a room: the SD FRD's Structural Metadata
+  table has a row literally named **`Source Data Dictionary`**, and its
+  value is "File and field descriptions are mentioned in the mapping
+  document" — the slot designed to hold the dictionary contains a pointer
+  back to the STTM. It is also exactly where a `DICT_` reference belongs
+  once vendors supply one. **Confirmed BOILERPLATE 2026-08-26:** the SFMC
+  FRD's `Source Data Dictionary` row carries that sentence word-for-word
+  too. Two of three real FRDs. It is the blank template's default text —
+  the FRD process has a dictionary slot nobody ever fills.
+- **The vendor data dictionary is where every source-side cell comes
+  from**: column names, positions, types, lengths, null rules, valid
+  ranges, descriptions, PHI. The STTM's `Description` / `Comment` /
+  `Sample Value` / `DataType` columns are a transcription of it. It CANNOT
+  be reconstructed from a file: descriptions and rules are never in the
+  data, and one real feed is a headerless multi-record-type pipe file
+  whose field names exist only in the vendor spec. The agent must never
+  invent a field name or description — a blank + gated item, not a guess
+  (the grounding-audit doctrine, applied to the source side).
+- **The standards document is where every target-side rule comes from**,
+  and the two real STTMs prove it varies by feed: one keeps source names
+  lowercase as-is, the other renames to uppercase snake with a `TPL_`
+  prefix and three fixed audit columns; stage is always `String` with
+  numerics promoted to `Decimal(10,2)` / `Int` in standard; catalog per
+  layer. Neither FRD states these rules. Today the agent borrows them
+  implicitly from the matched template STTM — which is why it only looks
+  right when regenerating an already-mapped FRD (self-referential).
+- **A landing-zone probe is a FALLBACK and a validator, not an input.**
+  Given `mftlanding` → `abfss://…` resolved by a one-line environment
+  config (the FRD does not need to change), the agent can read a headered
+  file with CODE (pyarrow/pandas schema inference, never the LLM over raw
+  rows — PHI) to fill names / types / samples when no dictionary was
+  attached, and to check a dictionary against a real file when both exist.
+  It fills nothing for headerless files and never fills meaning. Whether a
+  file is even present at STTM-authoring time is an open question for the
+  BSAs.
+
+Consequences and what was settled LATER THE SAME DAY (2026-08-25, Arjun):
+- **The standards are TWO client documents — a NAMING standards doc and an
+  ENGINEERING standards doc — and they are VERSIONED CONFIG, not a corpus
+  kind and not a per-run upload.** Precedent: `contracts/frd_label_contract
+  .json` + `frdsttm.label_contract` (loads at start-up, fails loudly if
+  missing/unversioned, no hard-coded fallback). Target:
+  `contracts/naming_standards.json` + `contracts/engineering_standards.json`,
+  a `frdsttm.standards` loader modelled on `label_contract`, and
+  `standards_sha256` in every run's provenance like `system_prompt_sha256`.
+  NOT rules baked into Python (invisible, silently stale, not re-derivable
+  in the ACFC rebuild). Arjun has both documents; they are client documents
+  and never enter git — the config is a transcription of them. NEXT STEP:
+  Arjun drops them in `sample_documents/` (`.gitignore` line 2 covers
+  `*.xlsx`; check `*.docx`), then decide together which sections become
+  which config keys.
+- **Vendor dictionaries live in SharePoint → corpus kind `DICT_<name>.xlsx`**
+  harvested by the sync beside `FRD_` / `STTM_`, paired by stem, shown in
+  the picker; per-run upload only as the email fallback.
+- **A worked-example dictionary exists:** `sample_documents/DICT_Medicare
+  Expansion-MIDS - Socially Determined.xlsx` (built 2026-08-25 from the
+  approved STTM's SOURCE band as a stand-in for the vendor's real spec;
+  gitignored by `*.xlsx`; leaves with the Friday purge). Shape: `FILES`
+  sheet + one sheet per file with `Position | Field Name | Data Type |
+  Length | Required | Description | Allowed Values / Range | Example Value
+  | PHI/PII`; 399 fields (86/267/46); contains NOTHING the client decides.
+  Its README sheet states the provenance caveat (no lengths; "String" on
+  every community-file field).
+- **The golden STTM is not rule-typed (found building the dictionary):** in
+  the community-risk sheet all 90 standard-layer `Decimal(10,2)` cells are
+  exactly the rows whose SAMPLE had a fractional part (0 of 177 `String`
+  rows did); a `_pct` column with sample `0` stayed `String`. So type
+  promotion comes from the vendor type or a name rule, never the sample,
+  and the golden-pair eval must report those rows as disagreements, not
+  agent errors.
+- A missing dictionary is a gated ambiguity naming the file, never a
+  sparse render; `_provenance` records which input each cell came from.
+- Still open: whether a sample file is normally in the landing zone when
+  the STTM is written (decides how often the probe fills anything).
+See the matching entry under "Designed, not built" and the full design in
+docs/THREE_INPUT_ARCHITECTURE.md (2026-08-25; §5 standards, §6 ingress,
+§8a the worked example, §11 the standards documents read).
+
+**`standards/` — the client documents arrived 2026-08-26 (commit
+`9159447`). FOUR files, only TWO of them standards.** Full read in
+docs/THREE_INPUT_ARCHITECTURE.md §11. Note they are CLIENT DOCUMENTS and
+are TRACKED, like `sample_documents/` — they go in the same Friday purge
+(see "Fixtures & data rules"), and `standards/` is not in `.gitignore`
+today either.
+
+- `EDO Data Engineering Naming Standards.docx` — the naming input. 14
+  vocabulary tables: data layers (STAGE→`STG`, Standard→`STD`), domains
+  (MEMBER→`MBR`, CLAIMS→`CLM`), load strategy (Truncate & Load→`TRUNC`,
+  Append→`INSRT`, Update Else Insert→`UPSRT`, Extracts→`EXTR`), product
+  codes (Data Lake→`DLK`), frequency, region/LOB, pipeline type. **These
+  decode the cells 04 borrows from the template today:** CAQH's catalog
+  `PR_DLK` is the Data Lake product code, its schema `STG_MBR` is stage +
+  member. Catalog and schema per layer are DERIVABLE, not copied.
+- `EDO Data Engineering Coding Standards.docx` — the engineering input;
+  mostly ADF/Databricks build practice (CodeGen's). Three lines are ours:
+  *"Standard table should be created with proper datatype as per the
+  source column datatype"* (independent confirmation that type promotion
+  is a function of the SOURCE type, never the sample), the recycle-flag
+  null check, and rejects → reject table + Production Support email.
+- **NEITHER document contains the target COLUMN naming rule (upper snake,
+  the `TPL_` prefix) or the audit columns** (`SRC_FILE_NAME`,
+  `REC_CREATION_TIME`, `REC_UPDATED_TIME`) — grepped. They stop at
+  object level. So §5's plan holds for catalogs/schemas/tables/load
+  strategy and has NO written source for the column-level half. Ask where
+  that is documented before deciding it is undocumented. One lead, one
+  data point: `TPL_` matches CAQH's own `Sub-Domain = TPL`.
+- `FRD_Enhanced_Metadata_Template (1).docx` — NOT a standard: the blank
+  FRD BSAs author into, and so the canonical structure `01_frd_ingest`
+  parses. Its Structural Metadata block is a FIXED 11 rows (Object/data
+  Format, Target Schema, Target Table Name, Domain and Subdomain, Load
+  Strategy STG/STD/Consumption, Archive Schedule, Source Data Dictionary,
+  ADLS Location, Inbound File Folder Path) — the FRD's half of the
+  division of labour, and where the `DICT_` reference belongs. **Gotcha:
+  the requirement id `MDST231070` is HARDCODED IN THE TEMPLATE** and is
+  identical in every real FRD — a template artifact, never a project id.
+- `FRD_STG_STD_SFMC_..._1005310.docx` — NOT a standard: a THIRD real FRD
+  (Salesforce Marketing Cloud, csv, `stg_mbr`→`mbr`). It is what softened
+  the landing-path correction above, and it exposed a real CodeGen defect:
+  its `Load Strategy STD` is **`Upsert`**, which CodeGen's `FrdContract`
+  enum (`{'Truncate and Load','Append'}`) rejects before the workbook is
+  read. The naming standards sanction `Update Else Insert`, so the ENUM is
+  wrong, not the FRD — widen it on the CodeGen side.
 
 **FRD picker for the 2026-08-24 demo (decided 2026-08-23, Arjun) — no code
 change needed.** Both FRDs in the Hexaware SharePoint library must stay
@@ -215,7 +381,10 @@ src/frdsttm/            models.py (FrdIngestionSpec, GatedAmbiguity,
                         parsers, factored verbatim behind new shims),
                         similarity.py (deterministic FRD↔STTM scoring,
                         thresholds), corpus.py (corpus_index.json),
-                        exemplars.py (retrieved-exemplar prompt blocks)
+                        exemplars.py (retrieved-exemplar prompt blocks);
+                        standards.py (2026-08-26: the two standards contracts —
+                        abbreviate/schema_for/catalog_for/normalize_load_strategy/
+                        promote_type/column_convention + standards_sha256)
 context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
                         ACFC-style deck; built by scripts/build_architecture_deck.py
                         from scripts/deck_assets/),
@@ -248,6 +417,12 @@ context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
 contracts/frd_label_contract.json   the versioned FRD label contract — now a
                         frozen input, no longer mirrored anywhere (see
                         "Upstream" above)
+contracts/naming_standards.json + contracts/engineering_standards.json
+                        (BUILT 2026-08-26) the client's two standards
+                        documents transcribed into versioned config, loaded by
+                        src/frdsttm/standards.py on the label_contract model
+                        (fails loudly, no fallback). See the Standards section
+                        below for what is STATED vs OBSERVED vs UNSOURCED.
 tests/                  offline (no LLM/network/Spark); 234 as of
                         2026-08-23 (+21 governance: identity, audit trail,
                         provenance, UC plan) —
@@ -263,6 +438,11 @@ resources/frd_sttm_render_job.yml the render-only job (stage 04 over an existing
                         in databricks mode — no re-extraction, nothing billed
 resources/frd_sttm_governance_job.yml  the governance set-up job (90_uc_governance),
                         hand-run, no schedule, not triggered by the app
+docs/THREE_INPUT_ARCHITECTURE.md  the 2026-08-25 design: FRD + vendor
+                        dictionary + standards doc; target data flow, the
+                        source-layout and standards contracts, ingress options,
+                        the probe, gating/provenance rules, client questions,
+                        build order. DESIGN ONLY — nothing built.
 docs/AI_GOVERNANCE.md   the governance record (2026-08-23): AI asset/model
                         card, data flow, data inventory + classification,
                         controls map (each control → code → how to verify),
@@ -438,6 +618,46 @@ is PAUSED on the dev target (no tenant there); UNPAUSED by default.
 - The grounding audit is the quality gate (strict fields verbatim,
   advisory prose token-overlap). Never relax it to make a run pass.
 
+## Standards contracts (BUILT 2026-08-26 — src/frdsttm/standards.py)
+
+The client's naming + engineering standards are now versioned config, not
+an implicit borrow from whichever reference workbook matched. Loaded at
+import like `label_contract`: missing or unversioned raises
+`StandardsError` naming the path, no hardcoded fallback.
+`standards_sha256()` (over canonical JSON of BOTH contracts) belongs in
+every run's provenance beside `system_prompt_sha256` — NOT yet wired into
+02/04's manifests, which is the next step.
+
+**Every value carries its confidence, and the API enforces it:**
+
+- **STATED** (in a client document) — the load-strategy / layer / domain /
+  product / frequency vocabularies; type promotion from the SOURCE
+  datatype; the recycle null-check; rejects → reject table + Production
+  Support email; the run-control table columns.
+- **OBSERVED** (inferred from the mapped STTMs) — schema per layer
+  (`STG_{domain}` / `{domain}`), stage default `String`, the vendor-type →
+  standard-type table. `derivation_status()` returns this so
+  `_provenance` can show a reviewer which is which.
+- **OBSERVED_SINGLE_PAIR** — the catalogs. `PR_DLK` and `PR_STD` come from
+  ONE workbook and are not even built the same way (`PR_` + a PRODUCT code
+  vs `PR_` + a LAYER abbreviation), so `catalog_for()` answers only for
+  `stage`/`standard` and returns None for any other layer rather than
+  generalising.
+- **UNSOURCED** — the target COLUMN rules: upper-snake, the `TPL_` prefix,
+  and the three audit columns are in NEITHER document. `column_convention()`
+  **raises** unless the caller passes `allow_unsourced=True`, which commits
+  it to recording those cells as provenance `standards:unsourced` plus a
+  gated ambiguity. `confirmed_by` is null; set it only when the client
+  confirms, never to make a run quieter. `default_convention` is
+  deliberately null — defaulting would reintroduce the template borrow.
+
+**A `None` return is a real answer meaning GATE, never a reason to invent.**
+`abbreviate("domains", "sdoh")` is None because the SD FRD's own domain is
+absent from the client's table — a real gap, not a typo. Callers fall
+through to the FRD's stated value and gate.
+
+Tests: `tests/test_standards.py` (49; suite now 340 passed / 4 skipped).
+
 ## SharePoint / Microsoft Graph (added 2026-08-21; READ-ONLY 2026-08-22; sync on app start-up decided 2026-08-22 late — see the decision block at the top)
 
 **Local folder stands in for the library for the 2026-08-24 demo (Venu,
@@ -577,6 +797,27 @@ to detect it now exists).
   surfacing only their approved STTM. Needs a concrete design (does
   regenerate-anyway disappear entirely, or move behind a reviewer-only
   control?) before it's built.
+- **Three-input architecture (FRD + vendor data dictionary + standards
+  doc) — DECIDED 2026-08-25, NOT BUILT.** The full rationale is the
+  decision block under "Purpose & pipeline position". What it means in
+  code, at the level that is settled: (a) a dictionary parser beside
+  `frd_parsing.py` producing a per-file source layout (name, position,
+  type, length, null rule, allowed values, description, PHI) as a
+  structured input to `02_extract`, so the source-side STTM columns are
+  grounded in the dictionary the way feed facts are grounded in the FRD;
+  (b) a standards input that decides target naming, type promotion, audit
+  columns and catalog per layer — replacing the implicit borrow from the
+  template STTM (`reference_workbooks`), which stays as the LAYOUT source
+  only; (c) an optional landing-zone probe (code, not LLM; headered files
+  only; fills names/types/samples, never descriptions) behind a
+  `mftlanding` → storage-root config, used when no dictionary is attached
+  and as a layout check when one is; (d) missing dictionary → gated
+  ambiguity per file, never a sparse render; (e) `_provenance` records
+  which input each cell came from. NOT settled — decide before building:
+  the exact config keys for the two standards documents (read them first);
+  what the probe does when the folder is empty at authoring time. Settled
+  the same day: `DICT_` is a sync-harvested corpus kind; the standards are
+  versioned config under `contracts/`, not corpus documents.
 
 ## Governance (added 2026-08-23 — docs/AI_GOVERNANCE.md is the full record)
 
@@ -655,6 +896,23 @@ NOT kept in sync automatically, and it is never merged into `staging` or
 `main`.
 
 ## Fixtures & data rules
+
+**REGRESSION FOUND 2026-08-25 — real client documents are TRACKED again
+and PUSHED.** Commit `5f43813` ("Add sample_documents folder") on
+`staging` — and only `staging`, as of 2026-08-25; `main` / `deploy-demo`
+do not contain it — added the two real FRD/STTM pairs under
+`sample_documents/`, and `origin/staging` has them. That is the exact
+material the 2026-08-23 history purge removed. **Purge DEFERRED to Friday
+2026-08-28 (Arjun, 2026-08-25): Arjun was told these two pairs contain no
+sensitive material, so they stay tracked this week as the working
+fixtures.** Still do it Friday — the no-client-documents rule is about
+the repo, not about this pair. The fix: `git filter-repo --invert-paths --path
+sample_documents/`, force-push `staging`, add `sample_documents/` to
+`.gitignore` (it is NOT there today), keep the files in
+`~/Desktop/frd-to-sttm-agent-documents/` and reach them via
+`STTM_LOCAL_SOURCE_DIR`. Anyone who cloned `staging` after `5f43813` must
+re-clone. Delete this paragraph once done and record the purge date in
+the paragraph below.
 
 **No FRD or STTM material is tracked in this repo — as of 2026-08-22.** The
 formerly tracked anonymized demo pair (`demo_frd.docx`, `demo_sttm.xlsx`),
