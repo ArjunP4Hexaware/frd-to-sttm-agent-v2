@@ -643,13 +643,35 @@ every run's provenance beside `system_prompt_sha256` — NOT yet wired into
   vs `PR_` + a LAYER abbreviation), so `catalog_for()` answers only for
   `stage`/`standard` and returns None for any other layer rather than
   generalising.
-- **UNSOURCED** — the target COLUMN rules: upper-snake, the `TPL_` prefix,
-  and the three audit columns are in NEITHER document. `column_convention()`
-  **raises** unless the caller passes `allow_unsourced=True`, which commits
-  it to recording those cells as provenance `standards:unsourced` plus a
-  gated ambiguity. `confirmed_by` is null; set it only when the client
-  confirms, never to make a run quieter. `default_convention` is
-  deliberately null — defaulting would reintroduce the template borrow.
+- **PARTIALLY_SOURCED** — the target COLUMN rules. Neither document states
+  them, so v1.0.0 gated the lot; **v1.1.0 (2026-08-26) split them by
+  MEASURING each against the two mapped STTMs** rather than asserting:
+  - `as_is` → **DERIVABLE**. Target column == source column on **399 of 399**
+    non-audit SD rows. `column_convention("as_is")` needs no opt-in —
+    applying a rule that reproduces the workbook exactly is a measurement,
+    not a guess.
+  - `prefixed_upper_snake` → **NOT_DERIVABLE**. `TPL_` + UPPER_SNAKE(source)
+    reproduces **22 of 115** CAQH rows; 46 distinct word substitutions and 58
+    of the 93 misses change the WORD COUNT. **These are not abbreviations —
+    they are an existing warehouse vocabulary**: `TPL_MEME_ID`,
+    `TPL_SBSB_IND`, `GRP` are Facets column names, and the CAQH FRD names
+    Facets as the incumbent. So the missing input is a TERM CATALOG, not a
+    rule document — `information_schema.columns` over the existing
+    `PR_STD`/`PR_DLK` tables, which needs read access rather than a client
+    meeting. Still gated until that exists.
+  - **Audit columns moved OUT of the conventions** — they are consistent
+    across BOTH pairs once segment role is accounted for. `core` (3:
+    SRC_FILE_NAME / REC_CREATION_TIME / REC_UPDATED_TIME) on every table of
+    both workbooks in both layers; `LOB` on **data-bearing tables only**
+    (CAQH's DTL and all three SD tables, absent from CAQH's HDR/TRL — a line
+    of business is meaningless on a control record); `FILE_TYPE`
+    OBSERVED_SINGLE_PAIR, off by default. **A note in this repo previously
+    claimed the two workbooks disagreed (3 vs 4). They do not** — that came
+    from reading only CAQH's header segment.
+  `confirmed_by` is still null; set it only when the client confirms, never
+  to make a run quieter. `default_convention` is deliberately null —
+  defaulting would reintroduce the template borrow, and which convention a
+  given FRD uses is an OPEN CLIENT QUESTION.
 
 **A `None` return is a real answer meaning GATE, never a reason to invent.**
 `abbreviate("domains", "sdoh")` is None because the SD FRD's own domain is
@@ -687,8 +709,8 @@ COLUMN names and audit rows continue to come from the template — that is the
 next step and it is blocked on the client confirming the column rules (see
 UNSOURCED above).
 
-Tests: `tests/test_standards.py` (49) + `tests/test_render_standards.py` (15);
-suite now 355 passed / 4 skipped.
+Tests: `tests/test_standards.py` (56) + `tests/test_render_standards.py` (15);
+suite now 362 passed / 4 skipped.
 
 ## SharePoint / Microsoft Graph (added 2026-08-21; READ-ONLY 2026-08-22; sync on app start-up decided 2026-08-22 late — see the decision block at the top)
 

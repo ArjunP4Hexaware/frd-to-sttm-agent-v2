@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "kind": "naming_standards",
   "_about": [
     "Transcription of the client's naming standards document into versioned config.",
@@ -17,7 +17,16 @@
       "name": "EDO Data Engineering Naming Standards.docx",
       "sha256": "508575aaeca4e078952e43177426eafbdffd4c94566dd9775e779d8b8b70c83f",
       "read_on": "2026-08-26",
-      "tables_transcribed": [5, 6, 7, 8, 9, 10, 11, 12]
+      "tables_transcribed": [
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
     }
   ],
   "vocabularies": {
@@ -163,40 +172,125 @@
     }
   },
   "column_rules": {
-    "_status": "UNSOURCED",
+    "_status": "PARTIALLY_SOURCED",
     "_about": [
       "NEITHER standards document contains a target COLUMN naming rule or an audit-column",
       "set. Both were grepped on 2026-08-26 for SRC_FILE_NAME / REC_CREATION_TIME /",
       "REC_UPDATED_TIME / case rules / prefix rules: no hits. The documents stop at object",
       "level (layers, domains, catalogs, load strategy).",
       "",
-      "The values below are OBSERVED FROM THE TWO MAPPED STTMs, and this file is therefore",
-      "the first written record of them. They must be confirmed by the client before being",
-      "applied silently: until confirmed_by is set, a run that uses them records the cell as",
-      "provenance 'standards:unsourced' and raises a gated ambiguity."
+      "v1.1.0 (2026-08-26) splits what was one UNSOURCED blob, after measuring each rule",
+      "against the two mapped STTMs. One naming convention reproduces perfectly and is now",
+      "DERIVABLE; the other reproduces 19% and is not a rule at all. The audit columns turned",
+      "out to be consistent across BOTH pairs once segment role is accounted for, so they",
+      "move out of the per-convention blocks into a shared set."
     ],
     "confirmed_by": null,
+    "audit_columns": {
+      "_about": [
+        "Target columns with NO source field. Measured over both mapped STTMs: the core three",
+        "appear on EVERY table of BOTH workbooks, in BOTH layers, with identical datatypes",
+        "(case differs only: 'String' vs 'string'). They are not convention-specific.",
+        "",
+        "LOB appears on data-bearing tables only -- CAQH's EXT_TPL_CAQH_DTL and all three SD",
+        "tables -- and NOT on CAQH's header/trailer control tables, which is coherent: a line",
+        "of business is a per-record business attribute, meaningless on a file control record.",
+        "",
+        "An EARLIER NOTE IN THIS REPO CLAIMED THE TWO WORKBOOKS DISAGREED (three columns vs",
+        "four). They do not. The apparent conflict was reading only CAQH's header segment."
+      ],
+      "core": {
+        "_status": "OBSERVED_BOTH_PAIRS",
+        "_evidence": "Present on all 3 CAQH tables and all 3 SD tables, stage and standard.",
+        "applies_to": "every table",
+        "columns": [
+          {
+            "name": "SRC_FILE_NAME",
+            "datatype": "String",
+            "layers": [
+              "stage",
+              "standard"
+            ]
+          },
+          {
+            "name": "REC_CREATION_TIME",
+            "datatype": "timestamp",
+            "layers": [
+              "stage",
+              "standard"
+            ]
+          },
+          {
+            "name": "REC_UPDATED_TIME",
+            "datatype": "timestamp",
+            "layers": [
+              "stage",
+              "standard"
+            ]
+          }
+        ]
+      },
+      "data_bearing_only": {
+        "_status": "OBSERVED_BOTH_PAIRS",
+        "_evidence": "CAQH EXT_TPL_CAQH_DTL and all three SD tables; absent from CAQH's HDR and TRL.",
+        "applies_to": "tables carrying business records, not file header/trailer control records",
+        "columns": [
+          {
+            "name": "LOB",
+            "datatype": "String",
+            "layers": [
+              "stage",
+              "standard"
+            ]
+          }
+        ]
+      },
+      "feed_specific": {
+        "_status": "OBSERVED_SINGLE_PAIR",
+        "_evidence": "FILE_TYPE appears on CAQH's detail table only. One workbook, one table.",
+        "_note": "Do NOT emit for a new feed. Recorded so a reviewer recognises it, and so the template-fill path is not mistaken for an agent error when it appears.",
+        "columns": [
+          {
+            "name": "FILE_TYPE",
+            "datatype": "String",
+            "layers": [
+              "stage",
+              "standard"
+            ]
+          }
+        ]
+      },
+      "_case_note": "CAQH writes datatypes 'String'/'timestamp', SD writes 'string'/'timestamp'. No case rule is stated anywhere; follow the matched template's case."
+    },
     "conventions": {
       "as_is": {
-        "_evidence": "SD STTM: source names carried to stage and standard unchanged (zip_code → zip_code).",
+        "_status": "DERIVABLE",
+        "_evidence": "Measured 2026-08-26 over the SD STTM: target column == source column on 399 of 399 non-audit rows across all three sheets. 100%. Every apparent miss was an audit row (source 'NA'), not a naming failure.",
         "target_column": "as_is",
         "prefix": "",
-        "audit_columns": []
+        "strip_source_prefix": false
       },
       "prefixed_upper_snake": {
-        "_evidence": "CAQH STTM: 'File Format Version' → 'TPL_FILE_FMT_VER'; three trailing audit columns on every table in both layers.",
+        "_status": "NOT_DERIVABLE",
+        "_evidence": "Measured 2026-08-26 over the CAQH STTM: the rule 'TPL_' + UPPER_SNAKE(source) reproduces 22 of 115 rows = 19.1%. 46 distinct word substitutions, and 58 of the 93 misses change the WORD COUNT -- words are dropped entirely ('Member ID Family Sequence Number' -> TPL_FAMILY_SEQ_NO; 'National Payer ID' -> TPL_PAYER_ID).",
         "target_column": "upper_snake",
         "prefix": "TPL_",
-        "_prefix_lead": "TPL_ equals the CAQH source's own Sub-Domain value ('TPL'), so the prefix MAY be the sub-domain abbreviation rather than a per-source choice. ONE data point — check a third mapped STTM before encoding it as a rule.",
-        "_abbreviation_note": "The CAQH names are also abbreviated beyond snake-casing (Version→VER, Number→NO). No abbreviation table governs this; it cannot be derived and must come from the dictionary or be gated.",
-        "audit_columns": [
-          {"name": "SRC_FILE_NAME", "datatype": "String", "layers": ["stage", "standard"]},
-          {"name": "REC_CREATION_TIME", "datatype": "timestamp", "layers": ["stage", "standard"]},
-          {"name": "REC_UPDATED_TIME", "datatype": "timestamp", "layers": ["stage", "standard"]}
+        "_prefix_lead": "TPL_ equals the CAQH source's own Sub-Domain value ('TPL'). One data point -- check a third mapped STTM before encoding it as a rule.",
+        "_why_not_derivable": [
+          "These are not abbreviations of the source names; they are an EXISTING WAREHOUSE",
+          "VOCABULARY. 'Member ID' -> TPL_MEME_ID and 'Subscriber or Dependent indicator' ->",
+          "TPL_SBSB_IND: MEME, SBSB and GRP are Facets column names, and the CAQH FRD names",
+          "Facets as the incumbent on-prem system. So the missing input is not a rule document",
+          "-- it is a TERM CATALOG of the columns that already exist in the client's warehouse.",
+          "",
+          "The right source for it is information_schema.columns over the existing PR_STD /",
+          "PR_DLK tables, which needs read access rather than a client meeting. Matching a",
+          "source field to an existing column is then a scored alignment against a REAL column,",
+          "never a generated string. Until that exists, this convention must be gated."
         ]
       }
     },
     "default_convention": null,
-    "_default_note": "Deliberately null. Which convention applies to a given FRD is not stated anywhere; today it is inferred from the matched template STTM. Selecting one by default would reintroduce exactly the implicit borrow this file exists to remove."
+    "_default_note": "Deliberately null. Which convention applies to a given FRD is stated in neither FRD and in neither standards document; today it is inferred from the matched template STTM. Selecting one by default would reintroduce the implicit borrow this file exists to remove. This is an open question for the client."
   }
 }

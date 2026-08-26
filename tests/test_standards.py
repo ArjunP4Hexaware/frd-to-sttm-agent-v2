@@ -174,41 +174,101 @@ def test_derivations_carry_their_confidence_for_provenance():
 # Column rules — unsourced, and must stay hard to use by accident
 # --------------------------------------------------------------------------
 
-def test_column_rules_are_marked_unsourced():
+def test_column_rules_are_not_confirmed_by_the_client():
     # Neither standards document contains a column naming rule or the audit
     # columns. Until the client confirms, this repo's file is the only record.
     assert S.column_rules_are_sourced() is False
-    assert S.NAMING_STANDARDS["column_rules"]["_status"] == "UNSOURCED"
     assert S.NAMING_STANDARDS["column_rules"]["confirmed_by"] is None
+    assert S.NAMING_STANDARDS["column_rules"]["_status"] == "PARTIALLY_SOURCED"
 
 
-def test_column_convention_refuses_without_an_explicit_opt_in():
-    with pytest.raises(S.StandardsError, match="UNSOURCED"):
+def test_as_is_is_derivable_and_needs_no_opt_in():
+    # Measured: target == source on 399 of 399 non-audit SD rows. Applying it
+    # is a measurement, not a guess, so it must not be gated.
+    assert S.convention_status("as_is") == "DERIVABLE"
+    conv = S.column_convention("as_is")
+    assert conv["target_column"] == "as_is"
+    assert conv["prefix"] == ""
+    assert "399" in conv["_evidence"]
+
+
+def test_prefixed_upper_snake_is_not_derivable_and_is_gated():
+    # 22 of 115. The names are an existing warehouse vocabulary (Facets
+    # MEME/SBSB/GRP), not a transform of the source names.
+    assert S.convention_status("prefixed_upper_snake") == "NOT_DERIVABLE"
+    with pytest.raises(S.StandardsError, match="NOT_DERIVABLE"):
         S.column_convention("prefixed_upper_snake")
 
 
-def test_column_convention_opt_in_returns_the_observed_convention():
+def test_the_gate_message_carries_the_measured_evidence():
+    with pytest.raises(S.StandardsError) as exc:
+        S.column_convention("prefixed_upper_snake")
+    assert "22 of 115" in str(exc.value)
+
+
+def test_prefixed_convention_opt_in_returns_it():
     conv = S.column_convention("prefixed_upper_snake", allow_unsourced=True)
     assert conv["target_column"] == "upper_snake"
     assert conv["prefix"] == "TPL_"
-    as_is = S.column_convention("as_is", allow_unsourced=True)
-    assert as_is["target_column"] == "as_is"
-    assert as_is["prefix"] == ""
-    assert as_is["audit_columns"] == []
 
 
 def test_unknown_convention_raises_listing_what_exists():
     with pytest.raises(S.StandardsError, match="as_is"):
         S.column_convention("nope", allow_unsourced=True)
+    with pytest.raises(S.StandardsError, match="as_is"):
+        S.convention_status("nope")
 
 
-def test_audit_columns_match_the_caqh_workbook():
-    names = [c["name"] for c in S.audit_columns("prefixed_upper_snake", "stage", allow_unsourced=True)]
+# --- audit columns: shared across both pairs, not convention-specific -----
+
+def test_the_core_audit_columns_are_on_every_table_of_both_workbooks():
+    names = [c["name"] for c in S.audit_columns("stage", data_bearing=False)]
     assert names == ["SRC_FILE_NAME", "REC_CREATION_TIME", "REC_UPDATED_TIME"]
-    types = {c["name"]: c["datatype"] for c in
-             S.audit_columns("prefixed_upper_snake", "standard", allow_unsourced=True)}
+    assert all(c["confidence"] == "OBSERVED_BOTH_PAIRS"
+               for c in S.audit_columns("standard", data_bearing=False))
+
+
+def test_lob_is_added_on_data_bearing_tables_only():
+    # Present on CAQH's DTL and all three SD tables; absent from CAQH's
+    # HDR/TRL, where a line of business is meaningless.
+    data = [c["name"] for c in S.audit_columns("stage", data_bearing=True)]
+    control = [c["name"] for c in S.audit_columns("stage", data_bearing=False)]
+    assert "LOB" in data
+    assert "LOB" not in control
+    assert len(data) == len(control) + 1
+
+
+def test_the_two_workbooks_do_not_actually_disagree():
+    # An earlier note in this repo claimed three columns vs four. They agree
+    # once segment role is accounted for: SD's tables are all data-bearing.
+    sd = {c["name"] for c in S.audit_columns("stage", data_bearing=True)}
+    caqh_dtl = {c["name"] for c in S.audit_columns("stage", data_bearing=True)}
+    assert sd == caqh_dtl
+
+
+def test_a_one_workbook_audit_column_is_off_by_default():
+    # FILE_TYPE appears on CAQH's detail table only. Emitting it for a new
+    # feed would be an invention.
+    assert "FILE_TYPE" not in [c["name"] for c in S.audit_columns("stage")]
+    withit = [c["name"] for c in S.audit_columns("stage", include_feed_specific=True)]
+    assert "FILE_TYPE" in withit
+    feed_specific = [c for c in S.audit_columns("stage", include_feed_specific=True)
+                     if c["audit_group"] == "feed_specific"]
+    assert all(c["confidence"] == "OBSERVED_SINGLE_PAIR" for c in feed_specific)
+
+
+def test_audit_column_datatypes_match_both_workbooks():
+    types = {c["name"]: c["datatype"] for c in S.audit_columns("standard")}
     assert types["SRC_FILE_NAME"] == "String"
     assert types["REC_CREATION_TIME"] == "timestamp"
+    assert types["REC_UPDATED_TIME"] == "timestamp"
+    assert types["LOB"] == "String"
+
+
+def test_audit_columns_are_no_longer_part_of_a_convention():
+    # v1.1.0 moved them out: they are consistent across BOTH pairs.
+    for conv in S.NAMING_STANDARDS["column_rules"]["conventions"].values():
+        assert "audit_columns" not in conv
 
 
 def test_no_default_convention_is_declared():

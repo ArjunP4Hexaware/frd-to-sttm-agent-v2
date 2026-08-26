@@ -221,41 +221,61 @@ def derivation_status(name: str, naming: Optional[dict] = None) -> Optional[str]
 # --------------------------------------------------------------------------
 
 def column_rules_are_sourced(naming: Optional[dict] = None) -> bool:
-    """True once the client has confirmed the column-level conventions.
+    """True once the client has CONFIRMED the column-level conventions.
 
     Neither standards document contains a target column naming rule or the
-    audit-column set (both grepped 2026-08-26). Until ``confirmed_by`` is
-    set in the contract, every column-level value is this repo's
-    observation, not the client's rule.
+    audit-column set (both grepped 2026-08-26). ``confirmed_by`` stays null
+    until the client says otherwise. Note this is about CONFIRMATION, not
+    about whether a rule is derivable: :func:`column_convention` lets a
+    measured-100% convention through on its own evidence.
     """
     src = naming if naming is not None else NAMING_STANDARDS
     return bool(src.get("column_rules", {}).get("confirmed_by"))
 
 
-def column_convention(
-    name: str, naming: Optional[dict] = None, allow_unsourced: bool = False
-) -> dict:
-    """Return one column convention (target case, prefix, audit columns).
+def convention_status(name: str, naming: Optional[dict] = None) -> str:
+    """``DERIVABLE`` or ``NOT_DERIVABLE`` for one naming convention.
 
-    Raises unless the convention is confirmed by the client or the caller
-    passes ``allow_unsourced=True`` — which commits it to recording the
-    cells as ``standards:unsourced`` and raising a gated ambiguity, per
-    ``column_rules._about`` in the contract.
+    Measured against the mapped STTMs, not asserted: ``as_is`` reproduces
+    399/399 rows, ``prefixed_upper_snake`` 22/115. The contract carries the
+    numbers.
     """
     src = naming if naming is not None else NAMING_STANDARDS
-    rules = src.get("column_rules", {})
-    conventions = rules.get("conventions", {})
+    conventions = src.get("column_rules", {}).get("conventions", {})
     if name not in conventions:
         raise StandardsError(
             f"Naming standards declares no column convention {name!r}. "
             f"Available: {sorted(conventions)}"
         )
-    if not column_rules_are_sourced(src) and not allow_unsourced:
+    return conventions[name].get("_status", "NOT_DERIVABLE")
+
+
+def column_convention(
+    name: str, naming: Optional[dict] = None, allow_unsourced: bool = False
+) -> dict:
+    """Return one column naming convention (target case, prefix).
+
+    Allowed without an opt-in when the convention is DERIVABLE — it
+    reproduces the mapped workbook exactly, so applying it is a measurement,
+    not a guess — or once the client has confirmed the rules. Otherwise the
+    caller must pass ``allow_unsourced=True``, committing it to recording
+    those cells as provenance ``standards:unsourced`` with a gated
+    ambiguity.
+
+    Audit columns are NOT part of a convention any more (v1.1.0): they are
+    consistent across both mapped pairs once segment role is accounted for.
+    See :func:`audit_columns`.
+    """
+    src = naming if naming is not None else NAMING_STANDARDS
+    conventions = src.get("column_rules", {}).get("conventions", {})
+    status = convention_status(name, src)
+    if status != "DERIVABLE" and not column_rules_are_sourced(src) and not allow_unsourced:
         raise StandardsError(
-            "Column-level rules are UNSOURCED: neither client standards document "
-            "states a target column naming rule or the audit-column set, and "
-            "contracts/naming_standards.json has confirmed_by=null. Pass "
-            "allow_unsourced=True and record the cells as provenance "
+            f"Column convention {name!r} is {status}: neither client standards "
+            "document states a target column naming rule, and this one does not "
+            "reproduce the mapped workbook "
+            f"({conventions[name].get('_evidence', 'see the contract')}). "
+            "Pass allow_unsourced=True and record the cells as provenance "
             "'standards:unsourced' with a gated ambiguity, or get the client to "
             "confirm the convention and set confirmed_by."
         )
@@ -263,15 +283,38 @@ def column_convention(
 
 
 def audit_columns(
-    convention: str, layer: str, naming: Optional[dict] = None, allow_unsourced: bool = False
+    layer: str,
+    naming: Optional[dict] = None,
+    data_bearing: bool = True,
+    include_feed_specific: bool = False,
 ) -> tuple[dict, ...]:
-    """The trailing audit columns a convention adds at ``layer``."""
-    spec = column_convention(convention, naming, allow_unsourced=allow_unsourced)
-    return tuple(
-        dict(col)
-        for col in spec.get("audit_columns", [])
-        if str(layer).lower() in [str(x).lower() for x in col.get("layers", [])]
-    )
+    """Target columns with no source field, for ``layer``.
+
+    The core three appear on every table of both mapped workbooks in both
+    layers. ``LOB`` appears on data-bearing tables only — it is absent from
+    CAQH's header and trailer control tables, which is coherent: a line of
+    business is a per-record business attribute, meaningless on a file
+    control record. Pass ``data_bearing=False`` for a header/trailer table.
+
+    ``include_feed_specific`` adds columns seen in ONE workbook only
+    (``FILE_TYPE``). Off by default: emitting a one-feed column for a new
+    feed would be an invention.
+    """
+    src = naming if naming is not None else NAMING_STANDARDS
+    blocks = src.get("column_rules", {}).get("audit_columns", {})
+    groups = ["core"]
+    if data_bearing:
+        groups.append("data_bearing_only")
+    if include_feed_specific:
+        groups.append("feed_specific")
+    out = []
+    lay = str(layer).lower()
+    for g in groups:
+        for col in blocks.get(g, {}).get("columns", []):
+            if lay in [str(x).lower() for x in col.get("layers", [])]:
+                out.append({**col, "audit_group": g,
+                            "confidence": blocks[g].get("_status")})
+    return tuple(out)
 
 
 # --------------------------------------------------------------------------
