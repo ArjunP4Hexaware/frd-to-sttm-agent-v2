@@ -656,7 +656,39 @@ every run's provenance beside `system_prompt_sha256` — NOT yet wired into
 absent from the client's table — a real gap, not a typo. Callers fall
 through to the FRD's stated value and gate.
 
-Tests: `tests/test_standards.py` (49; suite now 340 passed / 4 skipped).
+**WIRED INTO THE PIPELINE 2026-08-26 (steps 1 + 2):**
+
+- **Provenance.** `standards_sha256()` is on 02's `extraction_meta` sidecar
+  beside `system_prompt_sha256`/`schema_sha256`, and on 04's `frd_sttm_runs`
+  row (new nullable column `standards_sha256`; `mergeSchema` carries older
+  tables forward). 04 also writes `_provenance.standards` (both versions, the
+  hash, and `column_rules_sourced`) onto the v2 contract.
+- **04 consumes the contracts.** New `apply_standards_targets(contract,
+  feed_match)` runs immediately BEFORE `derive_field_mappings` (ordering is
+  load-bearing — the per-field rows must carry the filled values, and a test
+  pins it). Three rules:
+  1. **the FRD always wins**, per ATTRIBUTE not per layer — a stated schema
+     with an unstated catalog fills only the catalog;
+  2. every fill is recorded in `_provenance.standards_fill` with the
+     contract's own confidence (`OBSERVED` for schema,
+     `OBSERVED_SINGLE_PAIR` for the catalogs) so a reviewer can tell a client
+     rule from an inference this repo made;
+  3. an underivable value stays **NULL and is gated** (`kind:
+     "standards_gap"`, options = the client's own domain vocabulary), never
+     invented. The rows still render — a gated cell, never a sparse workbook.
+
+  Verified end-to-end on the synthetic smoke: those FRDs state catalog and
+  schema, so nothing is filled and nothing is gated — rule 1 holding on a
+  real run, not just in tests.
+
+**NOT done yet:** the review app's `run_manifest.json` does not carry
+`standards_sha256`; `column_convention()` is still unused by 04, so target
+COLUMN names and audit rows continue to come from the template — that is the
+next step and it is blocked on the client confirming the column rules (see
+UNSOURCED above).
+
+Tests: `tests/test_standards.py` (49) + `tests/test_render_standards.py` (15);
+suite now 355 passed / 4 skipped.
 
 ## SharePoint / Microsoft Graph (added 2026-08-21; READ-ONLY 2026-08-22; sync on app start-up decided 2026-08-22 late — see the decision block at the top)
 
@@ -850,7 +882,9 @@ and auditable* without changing what it does. The rules that now hold:
 - **`frd_sttm_runs` is APPEND + mergeSchema, never overwrite** — it is the
   render log. New columns: `run_label`, `triggered_by`, `job_run_id`,
   `provider`, `model`, `system_prompt_sha256`, `input/output_tokens`,
-  `frd_sha256`, `rendered_sha256`. `triggered_by` / `run_label` are job
+  `frd_sha256`, `rendered_sha256`, `standards_sha256` (2026-08-26 — which
+  revision of the client's standards decided this render's target side).
+  `triggered_by` / `run_label` are job
   parameters on BOTH job ymls (the app overrides them per run; a hand run
   records `manual`), `job_run_id` is `{{job.run_id}}`; local subprocess
   mode passes `TRIGGERED_BY` / `RUN_LABEL` env vars — `_param` reads both.

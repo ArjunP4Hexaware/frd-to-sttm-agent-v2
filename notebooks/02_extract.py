@@ -358,6 +358,11 @@ if not IS_DATABRICKS:
 # and the local import (script mode) both put src/ on sys.path first.
 from frdsttm.corpus import load_corpus_index  # noqa: E402
 from frdsttm.exemplars import build_exemplar_block  # noqa: E402
+# The client's standards contracts do not steer extraction -- 02 reads the FRD,
+# not the target rules -- but their fingerprint belongs on every artifact this
+# run produces, so a reviewer can tell which revision of the client's naming /
+# engineering documents was in force. Same role as system_prompt_sha256.
+from frdsttm.standards import standards_sha256  # noqa: E402
 
 # COMMAND ----------
 
@@ -542,6 +547,7 @@ for d in docs:
         "schema_sha256": hashlib.sha256(
             json.dumps(FrdIngestionSpec.model_json_schema(by_alias=True), sort_keys=True).encode("utf-8")
         ).hexdigest(),
+        "standards_sha256": standards_sha256(),
         "stop_reason": response.stop_reason,
         "usage": {
             "input_tokens": getattr(u, "input_tokens", 0),

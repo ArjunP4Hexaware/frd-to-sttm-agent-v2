@@ -136,6 +136,7 @@ if not IS_DATABRICKS:
 
 # Importable in both modes: the %run shim above (Databricks) and the local
 # import (script mode) both put src/ on sys.path first.
+from frdsttm import standards as _std  # noqa: E402
 from frdsttm.corpus import (  # noqa: E402
     frd_features_from_index,
     load_corpus_index,
@@ -579,15 +580,127 @@ def _table_for_segment(tables, segment):
     return tables[0] if tables else ""
 
 
+# --------------------------------------------------------------------------- #
+# standards fill — the client's target-side rules, where the FRD is silent
+# --------------------------------------------------------------------------- #
+# Until 2026-08-26 a catalog/schema the FRD did not state came out null, and the
+# renderer then leaned on whichever reference workbook matched to make the
+# output look complete. That is the implicit borrow docs/THREE_INPUT_ARCHITECTURE
+# .md §5 exists to remove: it only works when the FRD being rendered is already
+# mapped, which makes the accuracy figure self-referential.
+#
+# Now the gap is filled from contracts/naming_standards.json instead -- the
+# client's own vocabulary, versioned and hashed into this run's provenance.
+# Three rules hold, and they are the whole point:
+#   1. the FRD ALWAYS wins. A stated catalog/schema is never overwritten.
+#   2. a fill is recorded in `_provenance.standards_fill` with the contract's
+#      own confidence for that derivation (STATED / OBSERVED /
+#      OBSERVED_SINGLE_PAIR), so a reviewer can tell a client rule from an
+#      inference this repo made.
+#   3. an underivable value stays NULL and raises a gated ambiguity naming the
+#      feed and what was missing. `abbreviate("domains", "sdoh")` returning None
+#      is a real answer -- the SD FRD's own domain is absent from the client's
+#      table -- and the correct response is to ask, never to invent.
+
+
+def _standards_fill_target(feed, layer, target, prov):
+    """Fill catalog/schema for one layer from the standards contract.
+
+    Mutates `target` only where the FRD stated nothing; appends one record per
+    filled or unfillable cell to `prov`. Returns the list of attribute names
+    that could not be resolved, for the caller to gate on.
+    """
+    unresolved = []
+    domain = feed.get("domain")
+    for attr, derive, status_key in (
+        ("catalog", lambda: _std.catalog_for(layer), "catalog"),
+        ("schema", lambda: _std.schema_for(layer, domain), "schema"),
+    ):
+        if target.get(attr):
+            continue                      # rule 1: the FRD always wins
+        value = derive()
+        if value:
+            target[attr] = value
+            prov.append({
+                "feed": feed.get("feed_name"), "layer": layer, "attribute": attr,
+                "value": value, "source": "standards",
+                "confidence": _std.derivation_status(status_key),
+                "standards_version": _std.NAMING_VERSION,
+            })
+        else:
+            unresolved.append(attr)
+            prov.append({
+                "feed": feed.get("feed_name"), "layer": layer, "attribute": attr,
+                "value": None, "source": "unresolved",
+                "confidence": _std.derivation_status(status_key),
+                "standards_version": _std.NAMING_VERSION,
+                "reason": (
+                    f"domain {domain!r} is not in the client's naming standards"
+                    if attr == "schema" and _std.abbreviate("domains", domain) is None
+                    else f"the naming standards declare no {attr} for layer {layer!r}"
+                ),
+            })
+    return unresolved
+
+
+def apply_standards_targets(contract, feed_match):
+    """Fill every matched feed's unstated catalog/schema from the standards.
+
+    Runs BEFORE `derive_field_mappings`, so the per-field rows it writes carry
+    the filled values rather than nulls. Gated ambiguities are appended to
+    `_provenance.ambiguities` in the same shape the rest of the stage uses.
+    """
+    prov = []
+    gated = []
+    for i in feed_match:
+        feed = contract["feeds"][i]
+        for layer, key in (("stage", "stage_target"), ("standard", "standard_target")):
+            target = feed.get(key)
+            if target is None:
+                continue
+            unresolved = _standards_fill_target(feed, layer, target, prov)
+            for attr in unresolved:
+                text = (
+                    f"{layer} {attr} for feed {feed.get('feed_name') or i!r} is stated "
+                    f"neither in the FRD nor derivable from the client's naming standards "
+                    f"(domain: {feed.get('domain')!r})"
+                )
+                gated.append({
+                    "id": _ambiguity_id("standards_gap", text,
+                                        {"feed": feed.get("feed_name"), "layer": layer,
+                                         "attribute": attr}),
+                    "kind": "standards_gap",
+                    "text": text,
+                    "context": {"feed": feed.get("feed_name"), "layer": layer,
+                                "attribute": attr, "domain": feed.get("domain")},
+                    "options": sorted(_std.known_terms("domains")) if attr == "schema" else [],
+                })
+    p = contract.setdefault("_provenance", {})
+    p["standards_fill"] = prov
+    p["standards"] = {
+        "naming_version": _std.NAMING_VERSION,
+        "engineering_version": _std.ENGINEERING_VERSION,
+        "standards_sha256": _std.standards_sha256(),
+        "column_rules_sourced": _std.column_rules_are_sourced(),
+    }
+    if gated:
+        p.setdefault("ambiguities", []).extend(gated)
+    return contract
+
+
 def derive_field_mappings(contract, dictionary, feed_match):
     """Attach derived stage/standard mappings to each matched feed's fields.
     Rules (the pipeline's explicit, contestable defaults):
       - stage: 1:1 column name, datatype from the template's stage target for
-        that row (else String), schema/catalog from contract, table chosen by
-        record segment suffix (HDR/DTL/TRL) when present.
+        that row (else String), schema/catalog from contract -- and, since
+        2026-08-26, from the client's naming standards where the FRD stated
+        none (`apply_standards_targets`, which must run first) -- table chosen
+        by record segment suffix (HDR/DTL/TRL) when present.
       - standard: same 1:1 name; schema/catalog from contract when stated,
-        else null (the FRD may genuinely not state it); datatype from the
-        template's standard target (else the stage datatype).
+        else the standards fill, else null and gated (the FRD may genuinely
+        not state it, and the client's vocabulary may not cover its domain);
+        datatype from the template's standard target (else the stage
+        datatype).
       - AUDIT rows (source "NA", `audit: True` from the dictionary parser,
         2026-08-22): the template's ETL audit columns — a workbook
         convention, not an FRD fact, so there is no 1:1 source name to
@@ -1362,6 +1475,10 @@ for doc_id, contract in contracts.items():
     contract["_provenance"]["resolution_audit"].extend(
         {"ambiguity_id": None, "kind": None, "ambiguity_text": None, "resolution_source": "automatic",
          "resolution_type": None, "applied": True, "target": None, "detail": r} for r in resolutions)
+    # Standards BEFORE derivation: the per-field rows must carry the filled
+    # catalog/schema, not the nulls the FRD left. Anything the client's
+    # vocabulary cannot resolve stays null and is gated, never invented.
+    apply_standards_targets(contract, fm)
     derive_field_mappings(contract, dictionary, fm)
     out_xlsx = str(Path(RENDERED_DIR) / f"{doc_id}.sttm.xlsx")
     # Render INTO the lead template's own layout (2026-08-22): its sheets,
@@ -1538,6 +1655,9 @@ for doc_id, contract in contracts.items():
                  "output_tokens": int(_usage.get("output_tokens") or 0),
                  "frd_sha256": _meta.get("content_sha256"),
                  "rendered_sha256": hashlib.sha256(Path(out_xlsx).read_bytes()).hexdigest(),
+                 # Which revision of the client's naming/engineering standards
+                 # decided this render's target side (docs/AI_GOVERNANCE.md).
+                 "standards_sha256": _std.standards_sha256(),
                  # comma-joined template list, or the mode marker when none
                  "reference": ", ".join(order) if order else "(freeform)",
                  "template_mode": decision["mode"],
@@ -1570,6 +1690,7 @@ if IS_DATABRICKS:
         T.StructField("output_tokens", T.IntegerType(), False),
         T.StructField("frd_sha256", T.StringType(), True),
         T.StructField("rendered_sha256", T.StringType(), False),
+        T.StructField("standards_sha256", T.StringType(), True),
         T.StructField("reference", T.StringType(), False),
         T.StructField("template_mode", T.StringType(), False),
         T.StructField("eval_reference", T.StringType(), False),
