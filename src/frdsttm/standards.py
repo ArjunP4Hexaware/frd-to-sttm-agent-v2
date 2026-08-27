@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -280,6 +281,48 @@ def column_convention(
             "confirm the convention and set confirmed_by."
         )
     return dict(conventions[name])
+
+
+def upper_snake(name: str) -> str:
+    """``Member ID`` -> ``MEMBER_ID``. The half of a target column name that
+    IS a function of the source name."""
+    return "_".join(w.upper() for w in re.split(r"[^A-Za-z0-9]+", str(name or "")) if w)
+
+
+def infer_column_convention(sub_domain: str | None, target_tables) -> dict:
+    """Does this feed RENAME its columns? Answered from the FRD alone.
+
+    Both inputs are Structural Metadata rows the FRD already carries:
+    ``Domain and Sub-domain`` and ``Target Table Name``. The signal is simple
+    and it holds on every real feed on hand — **if the sub-domain token also
+    appears in the target table names, the columns carry it too**:
+
+        CAQH  sub-domain TPL   tables EXT_TPL_CAQH_HDR/DTL/TRL  -> renames 115/115
+        SD    sub-domain Public  tables sd_community_risk, ...  -> renames   4/411
+
+    Returns ``{"convention", "prefix", "why"}`` where convention is
+    ``prefixed_upper_snake`` or ``as_is``.
+
+    This is a DERIVED GUESS, not a client rule — neither standards document
+    states a column-naming convention (both grepped 2026-08-26). It exists
+    because the alternative was emitting the bare source name for a feed that
+    renames, which is further from the truth and gives a reviewer nothing to
+    correct. Measured on CAQH: the bare source name scores 0/115 exact at mean
+    similarity 0.59; this convention scores 22/115 exact at mean 0.79, with 63
+    of 115 either exact or within 0.80 — a rename a BSA finishes, not a
+    rebuild. The caller must record it as derived and flag it for review.
+    """
+    token = re.sub(r"[^a-z0-9]+", "", str(sub_domain or "").lower())
+    tables = [re.sub(r"[^a-z0-9]+", "", str(t or "").lower()) for t in (target_tables or [])]
+    if token and tables and any(token in t for t in tables):
+        return {"convention": "prefixed_upper_snake",
+                "prefix": f"{token.upper()}_",
+                "why": f"the FRD's sub-domain {sub_domain!r} appears in its target table "
+                       f"names, so the columns are assumed to carry it too"}
+    return {"convention": "as_is", "prefix": "",
+            "why": "the FRD's sub-domain does not appear in the target table names, so the "
+                   "source column names are assumed to carry through unchanged "
+                   "(measured 399/399 on the one approved feed that works this way)"}
 
 
 def audit_columns(

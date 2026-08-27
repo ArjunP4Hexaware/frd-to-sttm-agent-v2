@@ -21,6 +21,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from frdsttm import standards as _std
 from frdsttm import term_catalog
 
 import pytest
@@ -60,7 +61,7 @@ def _load():
     ns = {"re": re, "datetime": datetime, "timezone": timezone, "Workbook": Workbook,
           "PatternFill": PatternFill, "Font": Font, "Alignment": Alignment,
           "get_column_letter": get_column_letter, "_n": _n, "_nl": _nl,
-          "_tc": term_catalog, "hashlib": hashlib, "json": json}
+          "_tc": term_catalog, "hashlib": hashlib, "json": json, "_std": _std}
     exec(compile(ast.fix_missing_locations(ast.Module(body=picked, type_ignores=[])),
                  str(RENDER_SRC), "exec"), ns)
     return ns

@@ -19,6 +19,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from frdsttm import standards as _std
 from frdsttm import term_catalog
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -57,7 +58,7 @@ def _load():
     ns = {"re": re, "copy": copy, "datetime": datetime, "timezone": timezone, "Path": Path,
           "Workbook": Workbook, "PatternFill": PatternFill, "Font": Font, "Alignment": Alignment,
           "get_column_letter": get_column_letter, "_n": _n, "_nl": _nl,
-          "hashlib": hashlib, "json": json, "_tc": term_catalog}
+          "hashlib": hashlib, "json": json, "_tc": term_catalog, "_std": _std}
     exec(compile(ast.fix_missing_locations(ast.Module(body=picked, type_ignores=[])),
                  str(RENDER_SRC), "exec"), ns)
     return ns

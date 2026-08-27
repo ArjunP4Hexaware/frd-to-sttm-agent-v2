@@ -902,6 +902,71 @@ corpus the agent already syncs) — see the column-rules section above.
 
 So: stop iterating on the template. Issue it.
 
+## WHAT FRD + VDD ACTUALLY PRODUCE — measured 2026-08-27
+
+Arjun's framing, and it is the right one: **the agent is not there to be
+perfect. It is there to get as far as FRD + VDD can go, so the BSA finishes
+and uploads.** So the question is not "is the column name exact" but "is what
+the reviewer receives a RENAME or a REBUILD". Measured, not asserted:
+
+**Everything except the target column name, CAQH:**
+
+| cell | source | correct |
+|---|---|---|
+| source column / type / length / description / segment | VDD | all |
+| catalog | standards `catalog_for` | **115/115** |
+| schema | standards `schema_for(MEMBER)` → `STG_MBR` | **115/115** |
+| target datatype | standards `promote_type` | **95/115 (83%)** |
+| rows, tables, segment routing | VDD + FRD | all |
+
+*(The VDD here was derived from the STTM, so the SOURCE side is faithful by
+construction. That tests the PIPELINE given a complete vendor dictionary, not
+the dictionary's provenance — which is the right thing to test, because in
+production the vendor supplies it. The TARGET side above is not circular: it
+comes from the standards contracts and the FRD.)*
+
+**The target column name.** `standards.infer_column_convention` decides from
+the FRD ALONE whether a feed renames — if the sub-domain token appears in the
+target table names, the columns carry it too. It holds on both real feeds:
+
+    CAQH  sub-domain TPL     tables EXT_TPL_CAQH_*    -> renames 115/115
+    SD    sub-domain Public  tables sd_community_*    -> renames   4/411
+
+Emitting the derived guess instead of the bare source name, on CAQH:
+
+| | |
+|---|---|
+| exact | 22/115 (19%) |
+| recognisable rename (similarity ≥ 0.70) | 63/115 (55%) |
+| **the BSA just edits the name** | **85/115 (74%)** |
+| materially different | 30/115 (26%) |
+| mean similarity | **0.79** (bare source name: 0.59) |
+
+What that looks like in the workbook — the row, table, position and source
+field are all right, only the string differs:
+
+    TPL_FILE_FORMAT_VERSION    ->  TPL_FILE_FMT_VER
+    TPL_DATE_OF_EXTRACT        ->  TPL_DATE_EXTRACT
+    TPL_FILE_SEQUENCE_NUMBER   ->  TPL_FILE_SEQ_NO
+    TPL_DATA_SET_ID            ->  TPL_DATE_SET_ID   <- the client's STTM has a typo
+
+**Do not "fix" this by emitting the bare source name again.** That was the
+behaviour until 2026-08-27 and it measures 0/115 exact at 0.59 similarity: it
+hands the reviewer something to rebuild rather than something to rename.
+
+**Word-level learning was tried and does not work.** Learning substitutions
+from answered rows and applying them to the rest: with 80 of 115 answered it
+can attempt 33% and gets 54% of those right, because there are **109 distinct
+source words across 115 rows** — almost no reuse to generalise from. The
+vocabulary has to come from the target warehouse; there is no derivation.
+
+**And the warehouse is not in this workspace.** `pr_dlk` / `pr_std` are ACFC's
+catalogs; `databricks catalogs list` in the Hexaware workspace does not show
+them and cannot. The CAQH column-name gap is an artifact of building OUTSIDE
+the client's environment, and it closes on the ACFC rebuild with one grant:
+`SELECT` on `information_schema.columns`, feeding the candidate pool that the
+2026-08-27 experiment scored at 95/101 with a high band right 92 of 92.
+
 ## TWO INPUTS AT RUN TIME — a run never opens an STTM (Arjun, 2026-08-27)
 
 **A live run ingests exactly two documents: the FRD and the VDD.** No STTM.

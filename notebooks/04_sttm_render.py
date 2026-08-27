@@ -690,7 +690,7 @@ def apply_standards_targets(contract, feed_match):
     return contract
 
 
-def target_column(source, layer, catalog, exclude, gated, seen):
+def target_column(source, layer, catalog, exclude, gated, seen, convention=None):
     """The TARGET column name for one source field, and where it came from.
 
     The vocabulary decides, not a string rule. Measured 2026-08-27 on the CAQH
@@ -705,9 +705,14 @@ def target_column(source, layer, catalog, exclude, gated, seen):
       conflict  they disagree                               -> fall back, GATE
       miss      the vocabulary has never seen it            -> fall back (as_is)
 
-    The fallback is the source column itself, which IS the `as_is` convention
-    and reproduced one approved workbook 399 times out of 399. So a miss is
-    not a hole — it is the other measured convention, recorded as such.
+    The fallback is the convention `standards.infer_column_convention`
+    derives from the FRD alone. For a feed that carries its sub-domain into
+    its table names it is `TPL_` + UPPER_SNAKE(source); otherwise it is the
+    source name unchanged. Emitting the BARE source name for a renaming feed
+    was measurably worse and is why this exists: on CAQH the bare name scores
+    0/115 exact at mean similarity 0.59, the derived convention 22/115 exact
+    at 0.79, with 63 of 115 exact or within 0.80 — the difference between a
+    reviewer renaming and a reviewer rebuilding.
 
     `exclude` is the feed's own paired workbook and is never empty in a real
     run: a workbook that contains this feed's mapping would hand it its own
@@ -734,12 +739,18 @@ def target_column(source, layer, catalog, exclude, gated, seen):
                             "candidates": r["candidates"]},
                 "options": options,
             })
-        return source, "as_is_after_conflict"
+        conv = convention or {"convention": "as_is", "prefix": ""}
+        return ((conv["prefix"] + _std.upper_snake(source)
+                 if conv["convention"] == "prefixed_upper_snake" else source),
+                "derived_after_conflict")
+    conv = convention or {"convention": "as_is", "prefix": ""}
+    guess = (conv["prefix"] + _std.upper_snake(source)
+             if conv["convention"] == "prefixed_upper_snake" else source)
     if r["verdict"] == "identity_only":
         seen["identity_only"] += 1
-        return source, "as_is_identity"
+        return guess, f"derived:{conv['convention']}"
     seen["miss"] += 1
-    return source, "as_is"
+    return guess, f"derived:{conv['convention']}"
 
 
 def derive_field_mappings(contract, dictionary, feed_match, catalog=None, exclude=()):
@@ -774,6 +785,13 @@ def derive_field_mappings(contract, dictionary, feed_match, catalog=None, exclud
         stg = feed.get("stage_target") or {}
         std = feed.get("standard_target") or {}
         ref_feed = dictionary["feeds"][key]
+        # Which column-naming convention this feed uses, from the FRD alone
+        # (sub-domain + target table names). Recorded per feed so a reviewer
+        # can see it was DERIVED, not stated by any client document.
+        convention = _std.infer_column_convention(
+            feed.get("sub_domain") or feed.get("subdomain") or feed.get("domain"),
+            (stg.get("tables") or []) + (std.get("tables") or []))
+        seen.setdefault("conventions", {})[feed.get("feed_name") or i] = convention
         derived = []
         for f, rt in zip(ref_feed["fields"], ref_feed.get("ref_targets") or
                          [{"stage": {}, "standard": {}}] * len(ref_feed["fields"])):
@@ -787,9 +805,11 @@ def derive_field_mappings(contract, dictionary, feed_match, catalog=None, exclud
                 std_dt = rt["standard"].get("datatype") or stage_dt
             else:
                 stage_col, stage_prov = target_column(
-                    f["source_column"], "stage", catalog or {}, exclude, gated, seen)
+                    f["source_column"], "stage", catalog or {}, exclude, gated, seen,
+                    convention)
                 std_col, std_prov = target_column(
-                    f["source_column"], "standard", catalog or {}, exclude, gated, seen)
+                    f["source_column"], "standard", catalog or {}, exclude, gated, seen,
+                    convention)
                 f = {**f, "_target_source": {"stage": stage_prov, "standard": std_prov}}
                 # Datatypes come from the template's own targets for this row
                 # (2026-08-25). Until then every derived row said "String",
@@ -815,6 +835,7 @@ def derive_field_mappings(contract, dictionary, feed_match, catalog=None, exclud
         "fell_back_identity_pair_only": seen["identity_only"],
         "conflicts_gated": seen["conflict"],
         "excluded_workbooks": sorted(exclude),
+        "column_conventions": seen.get("conventions", {}),
     }
     if gated:
         p.setdefault("ambiguities", []).extend(gated)
