@@ -77,7 +77,7 @@ ws.title = "README"
 widths(ws, {"A": 30, "B": 96, "C": 44})
 ws.sheet_view.showGridLines = False
 
-ws["A1"] = "Vendor Data Dictionary — unified template  (v1.2)"
+ws["A1"] = "Vendor Data Dictionary — unified template  (v1.3)"
 ws["A1"].font = Font(name=FONT, size=15, bold=True, color=CORE_BG)
 ws.merge_cells("A1:B1")
 ws.row_dimensions[1].height = 26
@@ -97,7 +97,7 @@ for k, v in [
      "It is not a mapping document and it says nothing about our warehouse. No target table names, "
      "no target column names, no load rules — those are ours to decide, from this."),
     ("How to return it",
-     "One workbook per delivery. Keep the file name as DICT_<delivery name>.xlsx. Return the .xlsx "
+     "One workbook per delivery. Name the file VDD_<delivery name>.xlsx (DICT_ is also accepted, for anyone already issued the earlier template). Return the .xlsx "
      "itself, "
      "not a PDF or a screenshot."),
 ]:
