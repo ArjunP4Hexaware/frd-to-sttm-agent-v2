@@ -808,8 +808,12 @@ def _vdd_row(f):
         "nullable": (not req) if req is not None else None,
         "nullable_raw": "",
         "segment": f.get("segment"),
-        "comment": f.get("notes") or f.get("description") or "",
-        "business_rule": "",
+        # The client's own workbook puts the DESCRIPTION in `Comments` and the
+        # handling note ("Load as is") in `Business Rule` — checked against the
+        # approved CAQH sheet, row by row. Putting the vendor's note in
+        # `Comments` instead dropped description agreement to 0/111.
+        "comment": f.get("description") or "",
+        "business_rule": f.get("notes") or "",
         "fixed_start": f.get("start_position"),
         "fixed_end": f.get("end_position"),
         "fixed_length": f.get("length"),
@@ -976,7 +980,7 @@ def vdd_backed_dictionary(template_dict, vdd_parsed, contract):
                                  "segments": [x for x in segments if x]}
         report["n_rows"] += len(rows)
     report["ungraded_types"] = sorted(set(report["ungraded_types"]))
-    dialect = template_dict.get("dialect") or "sheet_per_table"
+    dialect = template_dict.get("dialect") or freeform_dialect(contract)
     return {**template_dict, "dialect": dialect, "feeds": feeds}, report
 
 
@@ -1698,6 +1702,23 @@ for _name, _d in dicts_by_name.items():
 _FREEFORM_DICT = {"dialect": "sheet_per_table", "feeds": {}, "meta": {}, "feed_sources": {}}
 
 
+def freeform_dialect(contract):
+    """Which built-in dialect to use when NO template matched.
+
+    Hardcoding `sheet_per_table` put CAQH — whose approved workbook is
+    single-sheet — into the wrong dialect, and that dialect's header set has
+    no Length / Segment / fixed-width / Business Rule / Catalog columns, so
+    111 lengths the vendor DID supply were dropped on the floor.
+
+    The two approved workbooks disagree on dialect, so there is no single
+    house style to copy. What reproduces BOTH is one mapping sheet per SOURCE
+    FILE: SD has three files and a sheet each; CAQH has one file (three record
+    segments inside it) and one sheet. That is derivable from the FRD and the
+    VDD, which is the point — it needs no workbook to decide.
+    """
+    return "single_sheet" if len(contract.get("feeds") or []) <= 1 else "sheet_per_table"
+
+
 def _own_reference(doc_id):
     """The doc's own paired workbook: corpus pairing first, exact-stem naming
     convention (<doc_id>.sttm.xlsx / <doc_id>.xlsx) as the index-less guard."""
@@ -1772,7 +1793,7 @@ for doc_id, contract in contracts.items():
                     "pinned": None, "thresholds": {}}
     order = [sel["reference"] for sel in decision["selections"]]
     if decision["mode"] == "freeform":
-        dictionary = dict(_FREEFORM_DICT)
+        dictionary = {**_FREEFORM_DICT, "dialect": freeform_dialect(contract)}
     elif len(order) == 1:
         dictionary = dicts_by_name[order[0]]
     else:
@@ -1797,7 +1818,7 @@ for doc_id, contract in contracts.items():
         # SKIP) left the document with no workbook at all.
         decision = {**decision, "mode": "freeform", "demoted_from": order}
         order = []
-        dictionary = dict(_FREEFORM_DICT)
+        dictionary = {**_FREEFORM_DICT, "dialect": freeform_dialect(contract)}
         fm = {}
 
     human_settled, human_audit = apply_human_resolutions(contract)
