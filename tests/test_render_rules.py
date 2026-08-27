@@ -38,7 +38,9 @@ _NEEDED = {
     "_PER_TABLE_SRC_HEADERS", "_PER_TABLE_TGT_HEADERS", "_RECYCLE_HEADER",
     "render_sheet_per_table", "render_single_sheet", "render_contract",
     "_SEGMENT_SUFFIX", "_table_for_segment", "derive_field_mappings",
-    "evaluate_cross_reference",
+    # 2026-08-27 evening: the eval is functional; the two old names are
+    # aliases of evaluate_functional, which needs its two helpers.
+    "evaluate_cross_reference", "evaluate_functional", "_type_family", "_norm_ident",
     # 2026-08-27: target names come from the harvested term catalog, so
     # derive_field_mappings calls target_column, which calls _ambiguity_id.
     "target_column", "_ambiguity_id",
@@ -373,6 +375,9 @@ def test_cross_eval_aligns_audit_rows_by_target_column(tmp_path):
     contract = _contract({**_feed([], None), "fields": []})
     R["derive_field_mappings"](contract, dictionary, {0: key})
     ev = R["evaluate_cross_reference"](contract, dictionary, {0: key})
-    # every reference target cell (2 real + 2 audit rows × 2 layers × 4 attrs) matches
-    assert ev["totals"]["cells"] == 4 * 2 * 4
+    # every reference ROW (2 real + 2 audit) is structurally correct — the eval
+    # is functional since 2026-08-27 evening: rows, not cells, and audit rows
+    # still align by their target column rather than colliding on source "NA"
+    assert ev["totals"]["cells"] == 4
     assert ev["totals"]["pct"] == 100.0, ev["feeds"][0]["sample_diffs"]
+    assert ev["totals"]["structural"] == 0

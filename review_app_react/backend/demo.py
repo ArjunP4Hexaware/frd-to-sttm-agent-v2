@@ -668,7 +668,8 @@ def load_results(set_id: str, doc_id: str) -> dict:
         p2.get("grounding", {}).get("advisory_flagged", [])
     )
 
-    totals = er.read_eval_totals(str(directory), doc_id)
+    ev = er.read_eval(str(directory), doc_id)
+    totals = (ev["match"], ev["cells"]) if ev else None
     return {
         "set_id": set_id,
         "doc_id": doc_id,
@@ -704,9 +705,15 @@ def load_results(set_id: str, doc_id: str) -> dict:
         },
         "eval": {
             "available": totals is not None,
+            # "functional" (rows with no structural difference; 2026-08-27
+            # evening) or "cells" (the older positional cell match, still
+            # carried by artifact sets rendered before then).
+            "kind": ev["kind"] if ev else None,
             "matched_cells": totals[0] if totals else None,
             "total_cells": totals[1] if totals else None,
             "pct": round(totals[0] / totals[1] * 100, 1) if totals else None,
+            "naming": ev.get("naming") if ev else None,
+            "cosmetic": ev.get("cosmetic") if ev else None,
             "is_golden": doc_id == GOLDEN_DOC_ID,
         },
         "mappings": [

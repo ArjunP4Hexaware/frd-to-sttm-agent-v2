@@ -1,10 +1,13 @@
-"""Reads the already-computed golden-pair eval figure out of a run's
-`<doc_id>.phase5.md` render report.
+"""Reads the already-computed eval figure out of a run's `<doc_id>.phase5.md`
+render report.
 
 This module only *reads* a number 04_sttm_render.py already computed and
 printed. It does not recompute, approximate, or reconstruct it -- see
-`evaluate_against_reference()` in that notebook for the computation, which
-is deliberately untouched.
+`evaluate_functional()` in that notebook for the computation (since
+2026-08-27 evening the score is ROWS WITH NO STRUCTURAL DIFFERENCE vs the
+approved workbook — a different name for the right column is counted
+beside the score, never against it; before that it was a positional cell
+match, and artifact sets from then still carry that line).
 
 Why parse markdown rather than read a table
 -------------------------------------------
@@ -57,6 +60,15 @@ _EVAL_LINE = re.compile(
     r"\(\s*(?P<match>\d+)\s*/\s*(?P<cells>\d+)\s+target\s+cells\s+match\s+the\s+reference\s*\)\s*$",
     re.MULTILINE,
 )
+# The FUNCTIONAL line (2026-08-27 evening): the score is rows with no
+# structural difference; naming / cosmetic counts ride along and are never
+# folded in. Artifact sets rendered before this still carry the line above.
+_FUNCTIONAL_LINE = re.compile(
+    r"^\*\*Functional\s+eval(?:\s+vs\s+(?P<ref>.+?))?:\s*(?P<pct>\d+(?:\.\d+)?)\s*%\*\*\s*"
+    r"\(\s*(?P<match>\d+)\s*/\s*(?P<cells>\d+)\s+rows\s+structurally\s+correct"
+    r"(?:\s*;\s*(?P<naming>\d+)\s+named\s+differently\s*,\s*(?P<cosmetic>\d+)\s+cosmetic)?\s*\)\s*$",
+    re.MULTILINE,
+)
 
 
 def phase5_report_path(out_root: Path | str, doc_id: str) -> Path:
@@ -65,39 +77,50 @@ def phase5_report_path(out_root: Path | str, doc_id: str) -> Path:
     return Path(out_root) / "reports" / f"{doc_id}.phase5.md"
 
 
+def parse_eval(text: str) -> dict | None:
+    """The eval as a dict — ``kind`` ("functional" | "cells"), ``match``,
+    ``cells``, ``pct``, and for functional lines ``naming`` / ``cosmetic``.
+    None on every abnormality, exactly as :func:`parse_eval_totals`."""
+    for kind, rx in (("functional", _FUNCTIONAL_LINE), ("cells", _EVAL_LINE)):
+        matches = list(rx.finditer(text))
+        if len(matches) > 1:
+            return None
+        if not matches:
+            continue
+        m = matches[0]
+        try:
+            printed_pct = float(m.group("pct"))
+            matched, total = int(m.group("match")), int(m.group("cells"))
+        except ValueError:
+            return None
+        if total <= 0 or matched < 0 or matched > total:
+            return None
+        if round(100 * matched / total, 1) != printed_pct:
+            return None
+        out = {"kind": kind, "match": matched, "cells": total, "pct": printed_pct}
+        if kind == "functional":
+            out["naming"] = int(m.group("naming")) if m.group("naming") else None
+            out["cosmetic"] = int(m.group("cosmetic")) if m.group("cosmetic") else None
+        return out
+    return None
+
+
 def parse_eval_totals(text: str) -> tuple[int, int] | None:
-    """(matched_cells, total_cells) from a phase5.md body, or None.
-
-    None on every abnormality -- line absent, reworded, duplicated,
+    """(matched, total) from a phase5.md body, or None — either line shape.
+    None on every abnormality: line absent, reworded, duplicated,
     zero-denominator, numerator above denominator, or a printed percentage
-    that disagrees with the one implied by the two counts. Callers render
-    nothing on None; there is deliberately no partial or best-effort return.
-    """
-    matches = list(_EVAL_LINE.finditer(text))
-    if len(matches) != 1:
-        # 0 = absent or reworded; >1 = ambiguous, refuse to pick.
-        return None
+    that disagrees with the two counts. No partial or best-effort return."""
+    ev = parse_eval(text)
+    return (ev["match"], ev["cells"]) if ev else None
 
-    m = matches[0]
+
+def read_eval(out_root: Path | str, doc_id: str) -> dict | None:
+    """:func:`parse_eval` over the report on disk; None when missing."""
     try:
-        printed_pct = float(m.group("pct"))
-        matched_cells = int(m.group("match"))
-        total_cells = int(m.group("cells"))
-    except ValueError:
+        text = phase5_report_path(out_root, doc_id).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
         return None
-
-    if total_cells <= 0 or matched_cells < 0 or matched_cells > total_cells:
-        return None
-
-    # Self-consistency: the line carries the same fact twice (a percentage
-    # and the pair it came from). Requiring them to agree is what makes a
-    # silently-misparsed number essentially impossible -- it would have to
-    # misread the counts in exactly the way that reproduces the percentage.
-    # Same round(..., 1) the notebook used to print it.
-    if round(100 * matched_cells / total_cells, 1) != printed_pct:
-        return None
-
-    return matched_cells, total_cells
+    return parse_eval(text)
 
 
 def read_eval_totals(out_root: Path | str, doc_id: str) -> tuple[int, int] | None:

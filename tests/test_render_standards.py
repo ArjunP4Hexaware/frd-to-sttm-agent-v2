@@ -247,3 +247,69 @@ def test_a_gated_feed_still_renders_its_rows_with_null_schema():
     assert len(fields) == 3
     assert all(f["stage"]["schema"] is None for f in fields)
     assert c["_provenance"]["ambiguities"]
+
+
+# --------------------------------------------------------------------------
+# AS-IS UNLESS CONFIRMED (Arjun, 2026-08-27 evening) — no guessed names
+# --------------------------------------------------------------------------
+
+def _renaming_contract():
+    """A source whose FRD SIGNALS a rename: sub-domain TPL carried into the
+    table names (the CAQH shape)."""
+    return {"feeds": [{
+        "feed_name": "caqh", "domain": "Member", "sub_domain": "Third Party Liability",
+        "stage_target": {"tables": ["EXT_TPL_CAQH_DTL"]},
+        "standard_target": {"tables": ["EXT_TPL_CAQH_DTL"]},
+        "fields": [],
+    }]}
+
+
+def _catalog_with_a_leak():
+    """Another workbook that maps zip_code to a TPL_ name."""
+    parsed = {"feeds": {"t": {
+        "fields": [{"source_column": "zip_code", "audit": False},
+                   {"source_column": "member_id", "audit": False}],
+        "ref_targets": [{"stage": {"column": "TPL_RECIP_ZIP_CODE"}, "standard": {"column": "TPL_RECIP_ZIP_CODE"}},
+                        {"stage": {"column": "TPL_MEME_ID"}, "standard": {"column": "TPL_MEME_ID"}}],
+    }}}
+    return term_catalog.build_catalog({"STTM_OTHER.xlsx": parsed})
+
+
+def test_unconfirmed_rule_carries_names_as_is_and_gates_the_signal(monkeypatch):
+    monkeypatch.setitem(S.NAMING_STANDARDS["column_rules"], "confirmed_by", None)
+    c = _renaming_contract()
+    R["derive_field_mappings"](c, _dictionary(2), {0: "k"})
+    names = [(f["stage"]["column"], f["standard"]["column"]) for f in c["feeds"][0]["fields"]]
+    assert names == [("col_0", "col_0"), ("col_1", "col_1")]        # vendor's names, unchanged
+    g = [a for a in c["_provenance"]["ambiguities"] if a["kind"] == "column_convention_unconfirmed"]
+    assert len(g) == 1 and "carried as-is" in g[0]["text"]          # once per source, not per row
+    conv = c["_provenance"]["term_catalog"]["column_conventions"]["caqh"]
+    assert conv["inferred"]["convention"] == "prefixed_upper_snake"
+    assert conv["applied"]["convention"] == "as_is" and conv["confirmed_by_client"] is False
+    assert c["_provenance"]["term_catalog"]["carried_as_is"] == 4    # 2 rows x 2 layers
+
+
+def test_a_confirmed_rule_applies_the_inferred_rename_again(monkeypatch):
+    """Flipping it back is config, not code."""
+    monkeypatch.setitem(S.NAMING_STANDARDS["column_rules"], "confirmed_by", "client sign-off")
+    c = _renaming_contract()
+    R["derive_field_mappings"](c, _dictionary(1), {0: "k"})
+    assert c["feeds"][0]["fields"][0]["stage"]["column"] == "TPL_COL_0"
+    assert not [a for a in c["_provenance"].get("ambiguities", [])
+                if a["kind"] == "column_convention_unconfirmed"]
+
+
+def test_the_catalog_is_not_consulted_under_as_is(monkeypatch):
+    """The SD leak: zip_code -> TPL_RECIP_ZIP_CODE came from CAQH's workbook
+    landing on an as-is source. Under as-is the vocabulary is never asked."""
+    monkeypatch.setitem(S.NAMING_STANDARDS["column_rules"], "confirmed_by", None)
+    c = {"feeds": [{"feed_name": "sd", "domain": "sdoh", "sub_domain": "Public",
+                    "stage_target": {"tables": ["sd_community_risk"]},
+                    "standard_target": {"tables": ["sd_community_risk"]}, "fields": []}]}
+    d = {"feeds": {"k": {"fields": [{"source_column": "zip_code", "segment": None},
+                                    {"source_column": "member_id", "segment": None}],
+                         "ref_targets": [{"stage": {}, "standard": {}}] * 2}}}
+    R["derive_field_mappings"](c, d, {0: "k"}, _catalog_with_a_leak(), set())
+    assert [f["stage"]["column"] for f in c["feeds"][0]["fields"]] == ["zip_code", "member_id"]
+    assert c["_provenance"]["term_catalog"]["filled_from_catalog"] == 0
+    assert not c["_provenance"].get("ambiguities")                    # as-is source: nothing to ask

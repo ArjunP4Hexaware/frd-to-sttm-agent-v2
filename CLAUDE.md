@@ -1231,6 +1231,66 @@ amalgam / freeform and still writes `_provenance.template_decision` onto
 the v2 contract; only the ranked-score dump a reviewer never acted on is
 gone. The one-line mode summary in the phase5 status line stays.
 
+## TARGET COLUMN NAMES: AS-IS UNLESS CONFIRMED — no guessing (Arjun, 2026-08-27 evening)
+
+**"Unless the FRD clearly states the target column names, use the names
+from the VDD as-is. Don't even try to guess it — once you guess, it comes
+back to the self-referential problem."** This SUPERSEDES the "do not emit
+the bare source name" doctrine under "WHAT FRD + VDD ACTUALLY PRODUCE"
+and the convention fallback under "TWO INPUTS AT RUN TIME". The reasoning
+that won: the `prefixed_upper_snake` convention and the "sub-domain token
+in the table names ⇒ columns rename" heuristic were both READ OFF the two
+approved workbooks (`naming_standards.json` `column_rules`:
+`PARTIALLY_SOURCED`, `confirmed_by: null`, n=2). Applying an unconfirmed
+convention learned from the references is a quieter form of the
+self-reference the run-time rule exists to remove; the 22/115 it bought
+on CAQH rested on that. So:
+
+- **As-is is the rule.** `derive_field_mappings` carries every source
+  column name through unchanged unless `standards.column_rules_are_sourced()`
+  is true — i.e. the client has set `column_rules.confirmed_by` in
+  `contracts/naming_standards.json`. Flipping it back is CONFIG, not code:
+  set `confirmed_by`, and the FRD-inferred rename applies again.
+- **The FRD signal is kept as a QUESTION, never applied.**
+  `infer_column_convention` still runs; when it says "this source
+  renames" and the rule is unconfirmed, 04 gates ONE item per source
+  (`kind: "column_convention_unconfirmed"`) telling the reviewer the
+  names were carried as-is and why, and records both the inferred and the
+  applied convention in `_provenance.term_catalog.column_conventions`.
+- **The term catalog runs only under a confirmed rename.** Under as-is it
+  is skipped entirely (`carried_as_is` counted in provenance). This is
+  also the fix for the 3-column SD leak found by the functional check:
+  `zip_code → TPL_RECIP_ZIP_CODE` was the catalog applying CAQH's
+  vocabulary to an as-is source.
+- Consequence to say in the room: on a renaming source the reviewer now
+  gets the vendor's names and a gated note, not a guess. Fewer cells
+  right, none of them invented.
+
+## THE APP'S EVAL IS FUNCTIONAL NOW (Arjun, 2026-08-27 evening)
+
+"When the output is tested against a reference workbook, test the
+FUNCTIONALITY of the STTM, not whether they have the exact same names."
+04's two evals (`evaluate_against_reference`, positional cell match;
+`evaluate_cross_reference`, by-source-column cell match) are both
+`evaluate_functional` now — same signatures, same `totals` keys (`cells`
+= reference ROWS, `match` = rows with NO structural difference, `pct`),
+plus `structural` / `naming` / `cosmetic` counts. Rows align by source
+column (audit rows by target column). STRUCTURAL = row missing, different
+stage/standard schema or table, different type FAMILY, different
+nullability on a data row. NAMING = same column, different name (not a
+case/separator variant). COSMETIC = type spelling, case. The score is
+structural only; naming rides beside it, never inside it. The phase5 line
+is now `**Functional eval vs X: 98.5%** (405/411 rows structurally
+correct; 3 named differently, 82 cosmetic)`; `eval_report.parse_eval`
+reads that AND the old `Golden-pair eval … target cells` line (artifact
+sets rendered before this keep it) and returns `kind`; the results
+payload's `eval` block carries `kind` / `naming` / `cosmetic`; the panel
+says "rows land in the right table with the right type". The runs
+table's `eval_pct` / `eval_cells` columns keep their names — the meaning
+changed (rows, not cells) on 2026-08-27; compare across that date with
+care. `scripts/functional_eval.py` is the standalone version with more
+buckets (rules, PHI, description) for offline analysis.
+
 ## CORRECT, NOT SIMILAR — the functional check (Arjun, 2026-08-27 evening)
 
 "Don't just test whether the output resembles the approved STTM; test

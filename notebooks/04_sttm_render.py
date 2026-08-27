@@ -700,31 +700,32 @@ def apply_standards_targets(contract, feed_match):
 def target_column(source, layer, catalog, exclude, gated, seen, convention=None):
     """The TARGET column name for one source field, and where it came from.
 
-    The vocabulary decides, not a string rule. Measured 2026-08-27 on the CAQH
-    feed: generating a name from the source scored 0/115 (and marked 71 of
-    those wrong answers HIGH confidence); matching against a real catalog
-    scored 95/101 with a high band right 92 times out of 92.
+    AS-IS UNLESS CONFIRMED (Arjun, 2026-08-27 evening): when the applied
+    convention is `as_is` — which it is for every source until the client
+    confirms a column-naming rule in `naming_standards.json` — the source
+    name is carried through unchanged and the term catalog is NOT consulted.
+    A catalog hit under as-is is another source's vocabulary landing on this
+    one (the SD leak: `zip_code -> TPL_RECIP_ZIP_CODE`, borrowed from CAQH),
+    and a derived `PREFIX_UPPER_SNAKE` guess rests on a convention that was
+    read off two approved workbooks — a quieter form of the self-reference
+    the run-time rule exists to remove. Fewer cells right, none invented.
 
-    Three verdicts, three behaviours, and the last two are the point of the
-    whole design:
+    Under a CONFIRMED rename convention the vocabulary decides, then the
+    convention: measured 2026-08-27 on CAQH, generating a name scored 0/115
+    while matching against a real catalog scored 95/101. Three verdicts:
 
       hit       every workbook that knows this term agrees  -> FILL
       conflict  they disagree                               -> fall back, GATE
-      miss      the vocabulary has never seen it            -> fall back (as_is)
+      miss      the vocabulary has never seen it            -> convention
 
-    The fallback is the convention `standards.infer_column_convention`
-    derives from the FRD alone. For a feed that carries its sub-domain into
-    its table names it is `TPL_` + UPPER_SNAKE(source); otherwise it is the
-    source name unchanged. Emitting the BARE source name for a renaming feed
-    was measurably worse and is why this exists: on CAQH the bare name scores
-    0/115 exact at mean similarity 0.59, the derived convention 22/115 exact
-    at 0.79, with 63 of 115 exact or within 0.80 — the difference between a
-    reviewer renaming and a reviewer rebuilding.
-
-    `exclude` is the feed's own paired workbook and is never empty in a real
-    run: a workbook that contains this feed's mapping would hand it its own
+    `exclude` is the source's own paired workbook and is never empty in a
+    real run: a workbook that contains this mapping would hand it its own
     answers back.
     """
+    conv = convention or {"convention": "as_is", "prefix": ""}
+    if conv["convention"] == "as_is":
+        seen["as_is"] += 1
+        return source, "as_is"
     r = _tc.lookup(source, catalog, layer, exclude=exclude)
     if r["verdict"] == "hit":
         seen["hit"] += 1
@@ -1010,19 +1011,44 @@ def derive_field_mappings(contract, dictionary, feed_match, catalog=None, exclud
         contract's own targets.
     """
     gated, seen = [], {"hit": 0, "miss": 0, "conflict": 0,
-                       "identity_only": 0, "gated_keys": set()}
+                       "identity_only": 0, "as_is": 0, "gated_keys": set()}
+    confirmed = _std.column_rules_are_sourced()
     for i, key in feed_match.items():
         feed = contract["feeds"][i]
         stg = feed.get("stage_target") or {}
         std = feed.get("standard_target") or {}
         ref_feed = dictionary["feeds"][key]
-        # Which column-naming convention this feed uses, from the FRD alone
-        # (sub-domain + target table names). Recorded per feed so a reviewer
-        # can see it was DERIVED, not stated by any client document.
-        convention = _std.infer_column_convention(
+        # What the FRD SUGGESTS about column naming (sub-domain + target
+        # table names) is kept as a signal; what is APPLIED is as-is unless
+        # the client has confirmed a column rule (naming_standards.json
+        # column_rules.confirmed_by). Arjun, 2026-08-27: don't guess.
+        inferred = _std.infer_column_convention(
             feed.get("sub_domain") or feed.get("subdomain") or feed.get("domain"),
             (stg.get("tables") or []) + (std.get("tables") or []))
-        seen.setdefault("conventions", {})[feed.get("feed_name") or i] = convention
+        if confirmed:
+            convention = inferred
+        else:
+            convention = {"convention": "as_is", "prefix": "",
+                          "why": "the client's column-naming rule is unconfirmed "
+                                 "(naming_standards.column_rules.confirmed_by is null); "
+                                 "source column names carried through unchanged"}
+            if inferred["convention"] != "as_is":
+                fname = feed.get("feed_name") or str(i)
+                text = (f"source {fname!r}: {inferred['why']} — on the approved workbooks "
+                        f"that meant {inferred['prefix']}UPPER_SNAKE names, but the client "
+                        f"has not confirmed a column-naming rule, so the vendor's column "
+                        f"names were carried as-is. Confirm the rule "
+                        f"(naming_standards.json column_rules.confirmed_by) to rename.")
+                gated.append({
+                    "id": _ambiguity_id("column_convention_unconfirmed", text,
+                                        {"feed": fname}),
+                    "kind": "column_convention_unconfirmed", "text": text,
+                    "context": {"feed": fname, "inferred": inferred},
+                    "options": ["keep the vendor's column names as-is",
+                                f"rename to {inferred['prefix']}UPPER_SNAKE (confirm the rule first)"],
+                })
+        seen.setdefault("conventions", {})[feed.get("feed_name") or i] = {
+            "applied": convention, "inferred": inferred, "confirmed_by_client": confirmed}
         derived = []
         for f, rt in zip(ref_feed["fields"], ref_feed.get("ref_targets") or
                          [{"stage": {}, "standard": {}}] * len(ref_feed["fields"])):
@@ -1064,7 +1090,9 @@ def derive_field_mappings(contract, dictionary, feed_match, catalog=None, exclud
         "filled_from_catalog": seen["hit"],
         "fell_back_to_source_name": seen["miss"],
         "fell_back_identity_pair_only": seen["identity_only"],
+        "carried_as_is": seen["as_is"],
         "conflicts_gated": seen["conflict"],
+        "column_rules_confirmed_by_client": confirmed,
         "excluded_workbooks": sorted(exclude),
         "column_conventions": seen.get("conventions", {}),
     }
@@ -1574,84 +1602,135 @@ def render_into_single_sheet_template(contract, layout, out_path, placements):
 # --------------------------------------------------------------------------- #
 # golden-pair eval: derived mappings vs reference targets
 # --------------------------------------------------------------------------- #
-def evaluate_against_reference(contract, dictionary, feed_match):
-    report = {"feeds": [], "totals": {"cells": 0, "match": 0}}
+def _type_family(t):
+    """string / int / decimal / date / bool — the difference that changes a
+    load, as opposed to the spelling (varchar vs String) that does not."""
+    t = _nl(t)
+    if not t:
+        return ""
+    if re.match(r"(decimal|numeric\s*\(|float|double|money|number\s*\()", t):
+        return "decimal"
+    if re.match(r"(int|bigint|smallint|tinyint|numeric$|number$|integer)", t):
+        return "int"
+    if re.match(r"(date|datetime|timestamp|time)", t):
+        return "date"
+    if re.match(r"(bool|bit)", t):
+        return "bool"
+    return "string"
+
+
+def _norm_ident(s):
+    return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+
+def evaluate_functional(contract, ref_dictionary, feed_match):
+    """Is the rendered mapping CORRECT, not merely similar? (Arjun, 2026-08-27
+    evening: "if the output STTM is correct, it's fine if the wording is a
+    little different; if it's functionally incorrect, that's the problem".)
+
+    Rows are aligned by SOURCE COLUMN (audit rows, which all share source
+    "NA", by their target column), and the reference defines the
+    denominator: a reference column the render never produced is a
+    structural miss, not an ignored row. Per row, three kinds of difference:
+
+      STRUCTURAL  missing row; a different stage/standard SCHEMA or TABLE;
+                  a different type FAMILY (string vs int vs decimal vs date);
+                  different nullability on a data row  -> the load would be wrong
+      NAMING      the same column under a different NAME (not a pure case /
+                  separator variant)                    -> a rename, not a rebuild
+      COSMETIC    type spelling, case/underscore in a name
+
+    The score is the share of reference rows with NO structural difference.
+    Naming and cosmetic counts are reported beside it, never folded in — the
+    old positional cell match treated a synonym and a wrong table alike.
+    Keys `cells` / `match` / `pct` are kept so the runs table, the run list
+    and the phase5 line need no schema change: cells = rows, match = rows
+    that are structurally correct.
+    """
+    report = {"feeds": [], "totals": {"cells": 0, "match": 0, "structural": 0,
+                                       "naming": 0, "cosmetic": 0}}
+
+    def _keyed(fields_and_targets):
+        """{(name, k): field} — the k-th occurrence of a source name, so a
+        multi-record file whose HDR and TRL both carry 'Payer ID' pairs
+        header with header and trailer with trailer, not last-wins. Audit
+        rows all share source "NA" and pair by their target column."""
+        seen, out = {}, {}
+        for f, stage_col in fields_and_targets:
+            base = _nl(f.get("source_column"))
+            if f.get("audit"):
+                out[(f"{base}:{_nl(stage_col)}", 0)] = f
+                continue
+            k = seen.get(base, 0); seen[base] = k + 1
+            out[(base, k)] = f
+        return out
+
     for i, key in feed_match.items():
         feed = contract["feeds"][i]
-        ref = dictionary["feeds"][key]["ref_targets"]
-        diffs, cells, match = [], 0, 0
-        for f, rt in zip(feed.get("fields") or [], ref):
-            for layer in ("stage", "standard"):
-                for attr in ("schema", "table", "column", "datatype"):
-                    ref_v = _nl(rt[layer].get(attr))
-                    if not ref_v:
-                        continue
-                    cells += 1
-                    der_v = _nl(f[layer].get(attr))
-                    if der_v == ref_v:
-                        match += 1
-                    elif len(diffs) < 8:
-                        diffs.append(f"{f['source_column']}.{layer}.{attr}: "
-                                     f"derived={der_v!r} ref={ref_v!r}")
-        pct = round(100 * match / cells, 1) if cells else 100.0
-        report["feeds"].append({"feed": feed["feed_name"], "cells": cells,
-                                "match": match, "pct": pct, "sample_diffs": diffs})
-        report["totals"]["cells"] += cells
-        report["totals"]["match"] += match
-    t = report["totals"]
-    t["pct"] = round(100 * t["match"] / t["cells"], 1) if t["cells"] else 100.0
-    return report
-
-
-def evaluate_cross_reference(contract, own_dictionary, feed_match_own):
-    """Eval against the document's OWN reference workbook when the render was
-    driven by a DIFFERENT template (exclude-own-reference cross-validation,
-    2026-08-22). `evaluate_against_reference` zips rows positionally, which
-    is only valid when the dictionary that derived the fields IS the eval
-    reference; here rows are aligned by source column name instead, and the
-    reference defines the denominator — a reference column the render never
-    produced counts as unmatched cells, not as ignored.
-    """
-    report = {"feeds": [], "totals": {"cells": 0, "match": 0}}
-
-    def _key(source_column, audit, stage_column):
-        # Audit rows all share source "NA" — align them by target column
-        # instead, or every audit row would collide on one key.
-        base = _nl(source_column)
-        return f"{base}:{_nl(stage_column)}" if audit else base
-
-    for i, key in feed_match_own.items():
-        feed = contract["feeds"][i]
-        derived_by_col = {_key(f.get("source_column"), f.get("audit"),
-                               (f.get("stage") or {}).get("column")): f
-                          for f in (feed.get("fields") or [])}
-        ref_feed = own_dictionary["feeds"][key]
-        diffs, cells, match = [], 0, 0
-        for src_f, rt in zip(ref_feed["fields"], ref_feed["ref_targets"]):
-            col = _key(src_f.get("source_column"), src_f.get("audit"),
-                       rt["stage"].get("column"))
+        derived_by_col = _keyed((f, (f.get("stage") or {}).get("column"))
+                                for f in (feed.get("fields") or []))
+        ref_feed = ref_dictionary["feeds"][key]
+        ref_keyed = _keyed((sf, rt["stage"].get("column"))
+                           for sf, rt in zip(ref_feed["fields"], ref_feed["ref_targets"]))
+        ref_target_of = {id(sf): rt for sf, rt in zip(ref_feed["fields"], ref_feed["ref_targets"])}
+        diffs, rows, ok, n_struct, n_name, n_cosm = [], 0, 0, 0, 0, 0
+        for col, src_f in ref_keyed.items():
+            rt = ref_target_of[id(src_f)]
+            rows += 1
             derived = derived_by_col.get(col)
-            for layer in ("stage", "standard"):
-                for attr in ("schema", "table", "column", "datatype"):
-                    ref_v = _nl(rt[layer].get(attr))
-                    if not ref_v:
-                        continue
-                    cells += 1
-                    der_v = _nl((derived or {}).get(layer, {}).get(attr)) if derived else ""
-                    if der_v == ref_v:
-                        match += 1
-                    elif len(diffs) < 8:
-                        diffs.append(f"{col}.{layer}.{attr}: "
-                                     f"derived={der_v!r} ref={ref_v!r}"
-                                     + ("" if derived else " (column not rendered)"))
-        pct = round(100 * match / cells, 1) if cells else 100.0
-        report["feeds"].append({"feed": feed["feed_name"], "cells": cells,
-                                "match": match, "pct": pct, "sample_diffs": diffs})
-        report["totals"]["cells"] += cells
-        report["totals"]["match"] += match
+            src = src_f.get("source_column")
+            structural, naming, cosmetic = [], [], []
+            if derived is None:
+                structural.append("row missing")
+            else:
+                for layer in ("stage", "standard"):
+                    d, r = derived.get(layer) or {}, rt.get(layer) or {}
+                    for attr in ("schema", "table"):
+                        if _nl(r.get(attr)) and _nl(d.get(attr)) != _nl(r.get(attr)):
+                            structural.append(f"{layer}.{attr} {d.get(attr)!r} vs {r.get(attr)!r}")
+                    if _nl(r.get("column")):
+                        if not _nl(d.get("column")):
+                            structural.append(f"{layer}.column blank")
+                        elif _norm_ident(d["column"]) != _norm_ident(r["column"]):
+                            naming.append(f"{layer}.column {d['column']!r} vs {r['column']!r}")
+                        elif _nl(d["column"]) != _nl(r["column"]):
+                            cosmetic.append(f"{layer}.column case")
+                    if _nl(r.get("datatype")):
+                        if _type_family(d.get("datatype")) != _type_family(r.get("datatype")):
+                            structural.append(f"{layer}.datatype {d.get('datatype')!r} vs {r.get('datatype')!r}")
+                        elif _nl(d.get("datatype")) != _nl(r.get("datatype")):
+                            cosmetic.append(f"{layer}.datatype spelling")
+                # Nullability only when BOTH sides state it: a VDD row with no
+                # Required flag is unknown, not "nullable", and must not score.
+                if not src_f.get("audit") and src_f.get("nullable") is not None \
+                        and derived.get("nullable") is not None \
+                        and bool(src_f["nullable"]) != bool(derived["nullable"]):
+                    structural.append(f"nullable {derived['nullable']!r} vs {src_f['nullable']!r}")
+            n_struct += bool(structural); n_name += bool(naming); n_cosm += bool(cosmetic)
+            if not structural:
+                ok += 1
+            elif len(diffs) < 8:
+                diffs.append(f"{src}: " + "; ".join(structural))
+            if naming and len(diffs) < 8 and not structural:
+                diffs.append(f"{src}: " + "; ".join(naming))
+        pct = round(100 * ok / rows, 1) if rows else 100.0
+        report["feeds"].append({"feed": feed["feed_name"], "cells": rows, "match": ok,
+                                "pct": pct, "structural": n_struct, "naming": n_name,
+                                "cosmetic": n_cosm, "sample_diffs": diffs})
+        t = report["totals"]
+        t["cells"] += rows; t["match"] += ok; t["structural"] += n_struct
+        t["naming"] += n_name; t["cosmetic"] += n_cosm
     t = report["totals"]
     t["pct"] = round(100 * t["match"] / t["cells"], 1) if t["cells"] else 100.0
     return report
+
+
+# Both former evals — the positional cell match used when the render's own
+# dictionary WAS the eval reference, and the by-source-column cross eval —
+# are the functional eval now. Same signatures, same `totals` keys.
+evaluate_against_reference = evaluate_functional
+evaluate_cross_reference = evaluate_functional
+
 
 # COMMAND ----------
 
@@ -1905,8 +1984,9 @@ for doc_id, contract in contracts.items():
                        if "demoted_from" in decision else ""),
     }[decision["mode"]]
     eval_line = (
-        f"**Golden-pair eval vs {ev_reference}: {ev['totals']['pct']}%** "
-        f"({ev['totals']['match']}/{ev['totals']['cells']} target cells match the reference)"
+        f"**Functional eval vs {ev_reference}: {ev['totals']['pct']}%** "
+        f"({ev['totals']['match']}/{ev['totals']['cells']} rows structurally correct; "
+        f"{ev['totals']['naming']} named differently, {ev['totals']['cosmetic']} cosmetic)"
         if ev else
         "**No eval** — no paired reference workbook for this document"
     )
@@ -1968,7 +2048,8 @@ for doc_id, contract in contracts.items():
     if ev:
         lines += ["## Per-source eval"]
         for f in ev["feeds"]:
-            lines.append(f"- **{f['feed']}**: {f['pct']}% ({f['match']}/{f['cells']})")
+            lines.append(f"- **{f['feed']}**: {f['pct']}% ({f['match']}/{f['cells']} rows structurally correct; "
+                         f"{f.get('naming', 0)} named differently, {f.get('cosmetic', 0)} cosmetic)")
             for d in f["sample_diffs"]:
                 lines.append(f"    - {d}")
     (Path(REPORTS_DIR) / f"{doc_id}.phase5.md").write_text("\n".join(lines), encoding="utf-8")

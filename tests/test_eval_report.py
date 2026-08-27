@@ -59,3 +59,32 @@ def test_read_from_disk_layout(tmp_path):
         "**Golden-pair eval vs STTM_X.xlsx: 95.5" + TAIL + "\n", encoding="utf-8")
     assert er.read_eval_totals(tmp_path, "doc") == (3141, 3288)
     assert er.read_eval_totals(tmp_path, "missing") is None
+
+
+# --------------------------------------------------------------------------
+# the FUNCTIONAL line (2026-08-27 evening) — rows, not cells; naming and
+# cosmetic counts ride along and never fold into the score
+# --------------------------------------------------------------------------
+FUNC = "**Functional eval vs STTM_X.xlsx: 98.5%** (405/411 rows structurally correct; 3 named differently, 82 cosmetic)"
+
+
+def test_functional_line_parses_with_its_side_counts():
+    ev = er.parse_eval(f"# STTM render — doc\n\n**Status: PASS**\n{FUNC}\n")
+    assert ev == {"kind": "functional", "match": 405, "cells": 411, "pct": 98.5,
+                  "naming": 3, "cosmetic": 82}
+    assert er.parse_eval_totals(FUNC + "\n") == (405, 411)
+
+
+def test_functional_line_without_side_counts_still_parses():
+    ev = er.parse_eval("**Functional eval vs X.xlsx: 100.0%** (4/4 rows structurally correct)\n")
+    assert ev["kind"] == "functional" and (ev["match"], ev["cells"]) == (4, 4)
+    assert ev["naming"] is None and ev["cosmetic"] is None
+
+
+def test_old_cells_line_reports_its_kind():
+    ev = er.parse_eval("**Golden-pair eval vs X.xlsx: 95.5" + TAIL + "\n")
+    assert ev["kind"] == "cells" and (ev["match"], ev["cells"]) == (3141, 3288)
+
+
+def test_functional_line_refuses_inconsistent_percentage():
+    assert er.parse_eval("**Functional eval vs X.xlsx: 90.0%** (405/411 rows structurally correct; 3 named differently, 82 cosmetic)\n") is None

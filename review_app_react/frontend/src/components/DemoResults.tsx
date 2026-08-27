@@ -273,16 +273,37 @@ function EvalPanel({ r }: { r: R }) {
   const ev = r.eval;
   return (
     <div>
-      <h2 className="eyebrow-blue mb-2">Accuracy vs golden STTM</h2>
+      <h2 className="eyebrow-blue mb-2">
+        {ev.kind === "functional" ? "Functionally correct vs approved STTM" : "Accuracy vs golden STTM"}
+      </h2>
       <Card>
         <CardContent className="py-4 text-center">
           {ev.available ? (
             <>
               <div className="text-3xl font-semibold mono-id">{ev.pct}%</div>
               <div className="text-sm text-muted-foreground mt-1">
-                {ev.matched_cells?.toLocaleString()} / {ev.total_cells?.toLocaleString()} target cells match the
-                golden workbook
+                {ev.kind === "functional" ? (
+                  <>
+                    {ev.matched_cells?.toLocaleString()} / {ev.total_cells?.toLocaleString()} rows land in the
+                    right table with the right type
+                    {ev.naming != null && ev.cosmetic != null && (
+                      <>
+                        {" "}· {ev.naming} named differently · {ev.cosmetic} cosmetic
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {ev.matched_cells?.toLocaleString()} / {ev.total_cells?.toLocaleString()} target cells match the
+                    golden workbook
+                  </>
+                )}
               </div>
+              {ev.kind === "functional" && (
+                <div className="text-xs text-muted-foreground mt-2">
+                  A different name for the right column is a rename, not an error, and is counted separately.
+                </div>
+              )}
               {ev.is_golden && (
                 <div className="text-xs text-muted-foreground mt-2">
                   The non-matching cells are the fixture's deliberate datatype divergences — they are expected to

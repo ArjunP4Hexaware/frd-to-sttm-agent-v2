@@ -152,9 +152,14 @@ export interface DemoResults {
   verdict: { status: string | null; n_feeds: number };
   eval: {
     available: boolean;
+    /** "functional" = rows with no structural difference (2026-08-27 evening);
+     *  "cells" = the older positional cell match on pre-existing artifact sets. */
+    kind: "functional" | "cells" | null;
     matched_cells: number | null;
     total_cells: number | null;
     pct: number | null;
+    naming: number | null;
+    cosmetic: number | null;
     is_golden: boolean;
   };
   mappings: { feed_name: string | null; rows: DemoMappingRow[] }[];
