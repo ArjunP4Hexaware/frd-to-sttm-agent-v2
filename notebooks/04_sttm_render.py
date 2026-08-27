@@ -813,7 +813,15 @@ def _vdd_row(f):
         # handling note ("Load as is") in `Business Rule` — checked against the
         # approved CAQH sheet, row by row. Putting the vendor's note in
         # `Comments` instead dropped description agreement to 0/111.
-        "comment": f.get("description") or "",
+        # ...but the SD approved workbook (sheet-per-table dialect) puts the
+        # ALLOWED VALUES there ("integer, valid range 1 - 5") and repeating the
+        # description made every SD row read "Total population" twice
+        # (2026-08-27). The two client workbooks disagree, so: `comment` is the
+        # vendor's allowed values (what the per-table renderer prints), and the
+        # single-sheet renderer prints the DESCRIPTION in its Comments column
+        # explicitly. A template-sourced field keeps whatever its workbook had.
+        "comment": f.get("allowed_values") or "",
+        "allowed_values": f.get("allowed_values") or "",
         "business_rule": f.get("notes") or "",
         "fixed_start": f.get("start_position"),
         "fixed_end": f.get("end_position"),
@@ -1243,6 +1251,11 @@ def render_sheet_per_table(contract, out_path, placements=None):
             ws.cell(2, c, h)
         _style_row(ws, 2, n_cols, _HDR_FILL)
         for f in fields:
+            # Sheet-per-table (the SD dialect): Comment = the FRD rules named
+            # on this column + the field's own comment, which for a VDD-sourced
+            # field is the vendor's allowed values / range and for a
+            # template-sourced field is the template's Comment. Never the
+            # description — that has its own column two cells to the left.
             comment = "\n".join(placement["by_column"].get(f["source_column"], [])
                                 + ([f["comment"]] if f.get("comment") else []))
             row = [
@@ -1322,7 +1335,10 @@ def render_single_sheet(contract, out_path, sheet_name="mapping", placements=Non
                                   + ([f["business_rule"]] if f.get("business_rule") else []))
         ws.append([idx, f["source_column"], f.get("datatype", ""), f.get("length", ""),
                    f.get("fixed_length", ""), f.get("fixed_start", ""), f.get("fixed_end", ""),
-                   f.get("segment", ""), "Yes" if f["phi"] else "", f.get("comment", ""),
+                   f.get("segment", ""), "Yes" if f["phi"] else "",
+                   # Single-sheet (the CAQH dialect): Comments = the description,
+                   # as the approved CAQH workbook does row by row.
+                   f.get("description") or f.get("comment", ""),
                    business_rule]
                   + tgt(f["stage"]) + tgt(f["standard"]))
     ws.freeze_panes = ws.cell(label_r + 2, 1).coordinate
