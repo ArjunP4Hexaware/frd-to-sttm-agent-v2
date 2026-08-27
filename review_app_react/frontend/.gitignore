@@ -8,7 +8,17 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# `dist` is TRACKED as of 2026-08-27, and it is a deliberate exception.
+#
+# The Databricks workspace folder is a GIT FOLDER (Arjun's call: the workspace
+# must reflect pushes to GitHub, not local `databricks sync` runs). Databricks
+# Git folders have NO BUILD STEP — they check out exactly what is committed —
+# and review_app_react/backend/app.py serves `frontend/dist`. So a branch
+# without a built dist deploys an app that serves nothing.
+#
+# THE COST, and it is real: `npm run build` must be run BEFORE committing any
+# UI change, or the workspace gets a stale frontend with no error to warn you.
+# `npm run build` is idempotent, so when in doubt, run it and commit.
 dist-ssr
 *.local
 
