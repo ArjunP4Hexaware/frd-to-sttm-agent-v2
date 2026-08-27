@@ -129,6 +129,9 @@ CALL_ESTIMATE = {
 
 API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
 
+#: Providers that make a real, billed model call. "mock" is deliberately absent.
+_LIVE_PROVIDERS = ("anthropic", "databricks")
+
 
 def llm_provider() -> str:
     """The configured extraction provider, read at CALL time.
@@ -362,11 +365,20 @@ def _subprocess_env(suffix: str, raw_volume: str, identity: dict | None = None,
     env["OUT_VOLUME"] = f"sttm_out_{suffix}"
     env["PREVIEW_VOLUME"] = f"sttm_out_{suffix}"
     env["RAW_VOLUME"] = raw_volume
-    env["STTM_LLM_PROVIDER"] = "anthropic"
+    # The provider is pinned to a LIVE one so that a stray STTM_MOCK_EXTRACTION
+    # (or STTM_LLM_PROVIDER=mock) can never make a billed-looking run quietly
+    # return hand-authored specs — the worst failure to have in front of a
+    # client. Pinning it to "anthropic" OUTRIGHT, though, also discarded a
+    # deliberate databricks configuration, and the run then died in 02 asking
+    # for an ANTHROPIC_API_KEY it does not need: the Foundation Model APIs
+    # authenticate with the workspace credential. Honour a configured live
+    # provider; fall back to anthropic only when none is set.
+    _configured = llm_provider()
+    env["STTM_LLM_PROVIDER"] = _configured if _configured in _LIVE_PROVIDERS else "anthropic"
     env.pop("STTM_MOCK_EXTRACTION", None)
     env["TRIGGERED_BY"] = (identity or {}).get("actor") or ident.ACTOR_UNKNOWN
     env["RUN_LABEL"] = run_label or suffix
-    if not env.get(API_KEY_ENV_VAR, "").strip():
+    if env["STTM_LLM_PROVIDER"] == "anthropic" and not env.get(API_KEY_ENV_VAR, "").strip():
         key = _api_key_from_dotenv()
         if key:
             env[API_KEY_ENV_VAR] = key

@@ -137,7 +137,17 @@ function MappingSetup({
   const spConfig = useSharePointConfig();
 
   const mode = configQuery.data?.mode ?? "local";
-  const keyPresent = mode === "databricks" ? true : (configQuery.data?.api_key_present ?? false);
+  // A model credential is required only on the ANTHROPIC path. The
+  // databricks provider authenticates with the workspace credential and reads
+  // no Anthropic key at all, whichever mode the app itself runs in — the
+  // backend already encodes exactly this in `needs_anthropic_key()`. Keying
+  // this on app MODE instead of PROVIDER showed "Runs unavailable" on a
+  // perfectly runnable local run against Foundation Model APIs.
+  const provider = configQuery.data?.provider ?? "";
+  const keyPresent =
+    mode === "databricks" || provider === "databricks"
+      ? true
+      : (configQuery.data?.api_key_present ?? false);
   const configured = spConfig.data?.configured ?? false;
 
   return (
@@ -297,6 +307,7 @@ function ConfirmDialog({
   const start = useStartDemoRun();
   const est = configQuery.data?.call_estimate;
   const isJob = configQuery.data?.mode === "databricks";
+  const provider = configQuery.data?.provider ?? "";
   const duration =
     est && est.seconds >= 120 ? `~${Math.round(est.seconds / 60)} min` : `roughly ${est?.seconds}s`;
 
@@ -311,7 +322,12 @@ function ConfirmDialog({
               as the Databricks Job <span className="mono-id">frd_sttm_pipeline</span> in this workspace
             </>
           ) : (
-            <>using the Anthropic API</>
+            <>
+              using{" "}
+              {provider === "databricks"
+                ? "this workspace's Databricks Foundation Model APIs"
+                : "the Anthropic API"}
+            </>
           )}
           .
         </CardDescription>

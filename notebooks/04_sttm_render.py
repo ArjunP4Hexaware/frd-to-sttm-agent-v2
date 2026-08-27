@@ -63,6 +63,7 @@ SCHEMA = _param("schema", "sttm_agent")
 CONTRACTS_TABLE_NAME = _param("contracts_table", "frd_contracts")
 RUNS_TABLE_NAME = _param("runs_table", "frd_sttm_runs")
 REFERENCE_VOLUME = _param("reference_volume", "sttm_reference")
+VDD_VOLUME = _param("vdd_volume", "vdd_raw")
 OUT_VOLUME = _param("out_volume", "sttm_out")
 # Provenance (docs/AI_GOVERNANCE.md): who asked for this render, the app's
 # run label, and the Databricks job run id — job parameters in the two job
@@ -76,11 +77,13 @@ if IS_DATABRICKS:
     CONTRACTS_TABLE = f"{CATALOG}.{SCHEMA}.{CONTRACTS_TABLE_NAME}"
     RUNS_TABLE = f"{CATALOG}.{SCHEMA}.{RUNS_TABLE_NAME}"
     REFERENCE_DIR = f"/Volumes/{CATALOG}/{SCHEMA}/{REFERENCE_VOLUME}"
+    VDD_DIR = f"/Volumes/{CATALOG}/{SCHEMA}/{VDD_VOLUME}"
     OUT_ROOT = f"/Volumes/{CATALOG}/{SCHEMA}/{OUT_VOLUME}"
 else:
     CONTRACTS_TABLE = CONTRACTS_TABLE_NAME
     RUNS_TABLE = RUNS_TABLE_NAME
     REFERENCE_DIR = str(LOCAL_ROOT / REFERENCE_VOLUME)
+    VDD_DIR = str(LOCAL_ROOT / VDD_VOLUME)
     OUT_ROOT = str(LOCAL_ROOT / OUT_VOLUME)
 RENDERED_DIR = f"{OUT_ROOT}/rendered"
 CONTRACTS_DIR = f"{OUT_ROOT}/contracts"
@@ -138,7 +141,11 @@ if not IS_DATABRICKS:
 # import (script mode) both put src/ on sys.path first.
 from frdsttm import standards as _std  # noqa: E402
 from frdsttm import term_catalog as _tc  # noqa: E402
+from frdsttm.dictionary import (  # noqa: E402
+    parse_dictionary_workbook,
+)
 from frdsttm.corpus import (  # noqa: E402
+    dictionary_for,
     frd_features_from_index,
     load_corpus_index,
     own_reference_for,
@@ -751,6 +758,226 @@ def target_column(source, layer, catalog, exclude, gated, seen, convention=None)
         return guess, f"derived:{conv['convention']}"
     seen["miss"] += 1
     return guess, f"derived:{conv['convention']}"
+
+
+# --------------------------------------------------------------------------- #
+# the VENDOR DICTIONARY as the row source (2026-08-27)
+# --------------------------------------------------------------------------- #
+# Until today the rows a rendered STTM carried came from `dictionary`, which is
+# the matched TEMPLATE workbook — another feed's approved STTM. Every source
+# cell (name, type, length, description, PHI, sample) was therefore borrowed
+# from a document the run is not supposed to be reading, which is the exact
+# implicit borrow the two-input architecture exists to remove: it only looks
+# right when the FRD being rendered is ALREADY mapped.
+#
+# Now the VDD supplies the rows and the template supplies only the LAYOUT
+# (sheets, bands, headers, widths, styles — `layout_of`). Structure, never
+# content. The seam is deliberately narrow: this function returns a dictionary
+# in exactly the shape `match_feeds` / `derive_field_mappings` / `render_contract`
+# already consume, so nothing downstream changes.
+#
+# Two things a VDD legitimately does NOT carry, and where each comes from:
+#   * TARGET DATATYPES — the client's coding standard states the rule ("Standard
+#     table should be created with proper datatype as per the source column
+#     datatype"), so they are computed by `standards.promote_type` from the
+#     VENDOR's type. They are put on `ref_targets` because that is where
+#     `derive_field_mappings` already looks — the slot now holds what the
+#     STANDARDS say, instead of what another workbook happened to have.
+#   * AUDIT ROWS — SRC_FILE_NAME / REC_CREATION_TIME / REC_UPDATED_TIME / LOB
+#     are the CLIENT's columns, never a vendor's, and must never appear in a
+#     document a vendor fills in. They come from `standards.audit_columns`,
+#     per segment, with LOB on data-bearing segments only (measured: absent
+#     from CAQH's header and trailer control tables).
+_DATA_BEARING_SEGMENTS = {"", "detail", "dtl", "data", "body", "record"}
+
+
+def _vdd_row(f):
+    """One VDD field in the shape the renderer's field records use."""
+    req = f.get("required")
+    return {
+        "source_column": f.get("name"),
+        "datatype": f.get("datatype"),
+        "length": f.get("length"),
+        "description": f.get("description") or "",
+        "description_raw": "",
+        "sample": f.get("example") or "",
+        "phi": f.get("phi"),
+        "phi_raw": "",
+        "mandatory": req,
+        "mandatory_raw": "",
+        "nullable": (not req) if req is not None else None,
+        "nullable_raw": "",
+        "segment": f.get("segment"),
+        "comment": f.get("notes") or f.get("description") or "",
+        "business_rule": "",
+        "fixed_start": f.get("start_position"),
+        "fixed_end": f.get("end_position"),
+        "fixed_length": f.get("length"),
+        "position": f.get("position"),
+        "allowed_values": f.get("allowed_values"),
+        "audit": False,
+    }
+
+
+def _vdd_targets(f, promoted):
+    """What the STANDARDS say this row's target datatypes are.
+
+    `column` is deliberately absent — the column NAME is decided later by
+    `target_column` (term catalog + the convention inferred from the FRD), and
+    filling it here would put a template's name back in the path.
+    """
+    stage_dt = _std.stage_default_type()
+    return {"stage": {"datatype": stage_dt},
+            "standard": {"datatype": promoted or stage_dt}}
+
+
+def _audit_rows(segment, data_bearing):
+    """The client's audit columns for one segment, from the standards."""
+    stage_cols = _std.audit_columns("stage", data_bearing=data_bearing)
+    std_by_name = {c["name"]: c for c in
+                   _std.audit_columns("standard", data_bearing=data_bearing)}
+    rows, targets = [], []
+    for col in stage_cols:
+        rows.append({**_vdd_row({"name": "NA", "segment": segment}),
+                     "source_column": "NA", "audit": True,
+                     "description": "", "comment": ""})
+        std = std_by_name.get(col["name"], col)
+        targets.append({
+            "stage": {"column": col["name"], "datatype": col.get("datatype", "String")},
+            "standard": {"column": std["name"], "datatype": std.get("datatype", "String")},
+        })
+    return rows, targets
+
+
+def _file_tokens(f):
+    return (loose_tokens(f.get("file_name_pattern") or "") |
+            loose_tokens(f.get("field_sheet") or ""))
+
+
+def _token_score(want, have, weights):
+    """Token agreement, tolerant of TRUNCATION and weighted by rarity.
+
+    Two effects, both found on the real SD dictionary:
+      * Excel caps a sheet name at 31 characters, so its
+        `sd_community_demographic_risk` sheet is stored as
+        `sd_community_demographi`. A token that is a PREFIX of the other has
+        to count, or the truncated name scores as a non-match.
+      * `community` and `risk` appear in several of that feed's files, so
+        counting every token equally made `sd_community_demographic_risk` tie
+        against BOTH files and the pairing refused to decide. Weighting each
+        token by 1/(files containing it) lets the DISTINCTIVE token —
+        `demographic`, in exactly one file — carry the decision.
+    """
+    score = 0.0
+    for w in want:
+        if any(w == h or w.startswith(h) or h.startswith(w) for h in have):
+            score += weights.get(w, 1.0)
+    return score
+
+
+def _pair_vdd_files(contract, vdd_parsed):
+    """{contract feed index: VDD file record}, or {} when it cannot be decided.
+
+    The VDD defines the feeds — NOT the template. (A template may not exist at
+    all: with the feed's own workbook excluded, a two-workbook corpus renders
+    freeform, and keying off the template meant the vendor's rows had nowhere
+    to attach and the workbook came out empty.)
+
+    Assignment is GLOBAL BEST-FIRST, never greedy in feed order — the same
+    lesson `scripts/build_vdd_from_sttm.py` learned: taking each feed's best
+    remaining file in order lets an early feed consume the file a later one
+    matches better. A wrongly-guessed file puts another file's columns on this
+    feed — fabrication, not a degraded answer — so a tie at the top refuses to
+    decide and the caller gates.
+    """
+    files = [f for f in vdd_parsed.get("files", []) if f.get("field_sheet")]
+    feeds = contract.get("feeds", [])
+    if not files or not feeds:
+        return {}
+    if len(files) == 1 and len(feeds) == 1:
+        return {0: files[0]}
+    have = [_file_tokens(f) for f in files]
+    weights = {}
+    for toks in have:
+        for tok in toks:
+            weights[tok] = weights.get(tok, 0) + 1
+    weights = {k: 1.0 / v for k, v in weights.items()}
+    cand = []
+    for i, feed in enumerate(feeds):
+        want = (loose_tokens(feed.get("source_file_pattern") or "") |
+                loose_tokens(feed.get("feed_name") or ""))
+        for j in range(len(files)):
+            s = _token_score(want, have[j], weights)
+            if s > 0:
+                cand.append((s, i, j))
+    cand.sort(key=lambda x: (-x[0], x[1], x[2]))
+    out, used_i, used_j = {}, set(), set()
+    for k, (s, i, j) in enumerate(cand):
+        if i in used_i or j in used_j:
+            continue
+        rivals = [c for c in cand[k + 1:]
+                  if c[0] == s and c[1] not in used_i and c[2] not in used_j
+                  and (c[1] == i) != (c[2] == j)]
+        if rivals:            # an equally good competing assignment — refuse
+            continue
+        out[i] = files[j]
+        used_i.add(i)
+        used_j.add(j)
+    return out
+
+
+def vdd_backed_dictionary(template_dict, vdd_parsed, contract):
+    """A dictionary whose ROWS are the vendor's, keyed so `match_feeds` hits.
+
+    Each feed is keyed by the normalised name of its contract feed's first
+    stage table, which is exactly what `match_feeds` looks for — so the
+    existing matcher works unchanged and no template is required.
+
+    Returns `(dictionary, report)`. The template, when one matched, keeps its
+    dialect and sheet names: layout only, never content.
+    """
+    pairing = _pair_vdd_files(contract, vdd_parsed)
+    report = {"paired": {}, "unpaired_feeds": [], "n_rows": 0,
+              "n_audit_rows": 0, "ungraded_types": []}
+    if not pairing:
+        report["unpaired_feeds"] = [f.get("feed_name") for f in contract.get("feeds", [])]
+        return template_dict, report
+    tmpl_feeds = list((template_dict.get("feeds") or {}).values())
+    feeds = {}
+    for i, feed in enumerate(contract.get("feeds", [])):
+        frec = pairing.get(i)
+        if frec is None:
+            report["unpaired_feeds"].append(feed.get("feed_name"))
+            continue
+        sheet = frec["field_sheet"]
+        vfields = vdd_parsed.get("fields", {}).get(sheet, [])
+        rows, targets, segments = [], [], []
+        for f in vfields:
+            promoted = _std.promote_type(f.get("datatype"))
+            if promoted is None and f.get("datatype"):
+                report["ungraded_types"].append(f.get("datatype"))
+            rows.append(_vdd_row(f))
+            targets.append(_vdd_targets(f, promoted))
+            if f.get("segment") not in segments:
+                segments.append(f.get("segment"))
+        for seg in segments or [None]:
+            arows, atargets = _audit_rows(seg, _nl(seg or "") in _DATA_BEARING_SEGMENTS)
+            rows.extend(arows)
+            targets.extend(atargets)
+            report["n_audit_rows"] += len(arows)
+        tables = (feed.get("stage_target") or {}).get("tables") or []
+        key = _nl(tables[0]) if tables else _nl(feed.get("feed_name") or f"feed{i}")
+        base = tmpl_feeds[i] if i < len(tmpl_feeds) else {}
+        feeds[key] = {"recycle_note": base.get("recycle_note", ""), **base,
+                      "sheet": base.get("sheet") or (tables[0] if tables else sheet),
+                      "fields": rows, "ref_targets": targets}
+        report["paired"][key] = {"file": frec.get("file_name_pattern"), "sheet": sheet,
+                                 "n_vendor_rows": len(vfields),
+                                 "segments": [x for x in segments if x]}
+        report["n_rows"] += len(rows)
+    report["ungraded_types"] = sorted(set(report["ungraded_types"]))
+    dialect = template_dict.get("dialect") or "sheet_per_table"
+    return {**template_dict, "dialect": dialect, "feeds": feeds}, report
 
 
 def derive_field_mappings(contract, dictionary, feed_match, catalog=None, exclude=()):
@@ -1550,6 +1777,19 @@ for doc_id, contract in contracts.items():
         dictionary = dicts_by_name[order[0]]
     else:
         dictionary = merge_dictionaries(dicts_by_name, order)
+    # THE VENDOR DICTIONARY SUPPLIES THE ROWS (2026-08-27). The template above
+    # is now a LAYOUT source only. A feed with no VDD keeps the old behaviour
+    # and is GATED below, so "no dictionary" is visible rather than silently
+    # filled from another feed's workbook.
+    vdd_name = dictionary_for(corpus_index, doc_id) if corpus_index else None
+    vdd_report = {"dictionary": vdd_name}
+    if vdd_name:
+        vdd_parsed = parse_dictionary_workbook(str(Path(VDD_DIR) / vdd_name))
+        dictionary, _rep = vdd_backed_dictionary(dictionary, vdd_parsed, contract)
+        vdd_report.update(_rep)
+        vdd_report["problems"] = [p_["kind"] for p_ in vdd_parsed.get("problems", [])]
+    contract.setdefault("_provenance", {})["vendor_dictionary"] = vdd_report
+
     fm = match_feeds(contract, dictionary)
     if not fm and decision["mode"] != "freeform":
         # The scored template did not structurally match any feed. Demote to

@@ -312,13 +312,26 @@ def infer_column_convention(sub_domain: str | None, target_tables) -> dict:
     of 115 either exact or within 0.80 — a rename a BSA finishes, not a
     rebuild. The caller must record it as derived and flag it for review.
     """
-    token = re.sub(r"[^a-z0-9]+", "", str(sub_domain or "").lower())
+    raw = str(sub_domain or "")
+    words = re.findall(r"[A-Za-z0-9]+", raw)
+    # A real FRD spells the sub-domain out ("Third Party Liability") while the
+    # tables carry its ACRONYM (EXT_TPL_CAQH_*). Testing only the collapsed
+    # phrase missed that on the one feed we know renames, so the acronym of a
+    # multi-word sub-domain is a candidate too — longest candidate first, so
+    # an exact phrase match still wins over a coincidental acronym.
+    candidates = [re.sub(r"[^a-z0-9]+", "", raw.lower())]
+    if len(words) > 1:
+        candidates.append("".join(w[0] for w in words).lower())
+    candidates = [c for c in dict.fromkeys(candidates) if c]
     tables = [re.sub(r"[^a-z0-9]+", "", str(t or "").lower()) for t in (target_tables or [])]
-    if token and tables and any(token in t for t in tables):
-        return {"convention": "prefixed_upper_snake",
-                "prefix": f"{token.upper()}_",
-                "why": f"the FRD's sub-domain {sub_domain!r} appears in its target table "
-                       f"names, so the columns are assumed to carry it too"}
+    for token in sorted(candidates, key=len, reverse=True):
+        if tables and any(token in t for t in tables):
+            how = ("appears in" if token == candidates[0]
+                   else f"abbreviates to {token.upper()!r}, which appears in")
+            return {"convention": "prefixed_upper_snake",
+                    "prefix": f"{token.upper()}_",
+                    "why": f"the FRD's sub-domain {sub_domain!r} {how} its target table "
+                           f"names, so the columns are assumed to carry it too"}
     return {"convention": "as_is", "prefix": "",
             "why": "the FRD's sub-domain does not appear in the target table names, so the "
                    "source column names are assumed to carry through unchanged "
