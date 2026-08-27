@@ -56,9 +56,10 @@ L, R = 0.72, W_IN - 0.72
 STATIONS = [
     (BLUE, ("unitycatalog",), None, "01", "enters", "What data?",
      "Classified at the door",
-     "Two documents per feed — the FRD and the vendor data dictionary — land in Unity Catalog, "
-     "where every folder and table carries an owner, a steward, its sensitivity, its source and "
-     "its retention rule. The standards are config in the agent, not a document.",
+     "Two documents per feed — the FRD and the vendor data dictionary — land in frd_raw and "
+     "vdd_raw, where every folder and table carries an owner, a steward, its sensitivity, its "
+     "source and its retention rule. The standards and the column vocabulary are config inside "
+     "the agent, not documents anyone hands over.",
      "Unity Catalog tags & comments"),
     (NAVY, ("entra", "databricks"), None, "02", "opened", "Who?",
      "Only named BSAs",

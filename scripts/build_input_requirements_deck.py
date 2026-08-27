@@ -105,14 +105,17 @@ def s01_why(prs):
     # transcribed into the agent as versioned contracts. Drawn as a strip
     # beneath the two documents, not as a third card beside them.
     ky = y + 2.90
-    panel(s, L, ky, CW, 0.78, accent=NAVY, fill=BAND)
+    panel(s, L, ky, CW, 0.82, accent=NAVY, fill=BAND)
     text(s, L + 0.32, ky + 0.12, 4.4, 0.22, [("BUILT INTO THE AGENT — NOT HANDED OVER", {})],
          size=8.2, color=NAVY, font=SANS, bold=True, spacing=1.1)
-    text(s, L + 0.32, ky + 0.36, CW - 0.7, 0.36,
+    text(s, L + 0.32, ky + 0.34, CW - 0.7, 0.44,
          [[("ACFC's naming + engineering standards", {"bold": True, "color": NAVY}),
-           ("  are transcribed into versioned contracts the agent ships with — layer, domain and "
-            "load-strategy codes, catalog and schema per layer, type promotion — and hashed into "
-            "every run. Nobody attaches them to a feed.", {})]],
+           ("  are versioned contracts the agent ships with, hashed into every run. So is the ", {}),
+           ("term catalog", {"bold": True, "color": NAVY}),
+           (" — the warehouse's own column vocabulary, harvested from approved STTMs when they "
+            "sync. Nobody attaches either to a feed, and ", {}),
+           ("a run never opens an STTM", {"bold": True, "color": RED}),
+           (".", {})]],
          size=10, color=SLATE, font=SANS, line_spacing=1.18)
 
     yy = y + 3.78
@@ -122,14 +125,14 @@ def s01_why(prs):
          size=15, color=NAVY, font=SANS, bold=True, spacing=-0.2)
     text(s, L + 0.32, yy + 0.54, CW - 0.7, 0.58,
          [[("Ask the vendor for ", {"color": SLATE}),
-           ("DICT_<feed>.xlsx", {"font": MONO, "bold": True, "color": BLUE}),
+           ("VDD_<feed>.xlsx", {"font": MONO, "bold": True, "color": BLUE}),
            (", put it beside ", {"color": SLATE}),
            ("FRD_<feed>.docx", {"font": MONO, "bold": True, "color": BLUE}),
            (" in the library, and name it in the FRD row that already exists for it: ", {"color": SLATE}),
            ("Structural Metadata › Source Data Dictionary", {"font": MONO, "bold": True, "color": NAVY}),
            (". No new section, no new field, no re-approval of the template.", {"color": SLATE})]],
          size=11, color=SLATE, font=SANS, line_spacing=1.22)
-    foot(s, 1, "docs/THREE_INPUT_ARCHITECTURE.md · the agent ingests DICT_ workbooks as of 2026-08-27")
+    foot(s, 1, "docs/THREE_INPUT_ARCHITECTURE.md · the agent ingests VDD_ workbooks as of 2026-08-27")
     notes(s, """
 WHY THE ROW IS EMPTY TODAY — the circular reference. Structural Metadata >
 Source Data Dictionary, verbatim in all three real FRDs on hand:
@@ -149,7 +152,7 @@ THE STANDARDS ARE NOT A PER-RUN INPUT. They are versioned config in the agent
 run as standards_sha256. Nobody hands them over with an FRD.
 
 THE PAIRING ALREADY WORKS: the sync pairs FRD_X to STTM_X by the stem after the
-prefix. DICT_X joins the same convention, into its own volume (dict_source), and
+prefix. VDD_X joins the same convention, into its own volume (vdd_raw), and
 the picker shows the pairing with a column count.
 """)
 
@@ -182,7 +185,7 @@ def s02_frd(prs):
          [("1 / 3", {"color": MUTED})], "State files and data separately"],
         ["Source Data Dictionary",
          [("The vendor dictionary the source side is built from", {"bold": True, "color": NAVY})],
-         [("0 / 3", {"color": RED})], [("Name the DICT_<feed>.xlsx here", {"font": MONO, **G})]],
+         [("0 / 3", {"color": RED})], [("Name the VDD_<feed>.xlsx here", {"font": MONO, **G})]],
         ["ADLS Location", "Where the landing-zone check looks for the file",
          [("2 / 3", {"color": BLUE})],
          [("mftlanding/inbound/<domain>/<sub>/<vendor>", {"font": MONO, "size": 8.8})]],
@@ -232,7 +235,7 @@ def s03_vdd(prs):
     w, gap = 5.75, 0.33
 
     # ---- FILES
-    panel(s, L, y, w, 3.80, accent=BLUE, fill=TINT_BLUE)
+    panel(s, L, y, w, 3.90, accent=BLUE, fill=TINT_BLUE)
     panel_title(s, L, y, w, "FILES — one row per delivered file",
                 kicker="sheet 1 · usually 1–5 rows")
     files = [
@@ -245,6 +248,7 @@ def s03_vdd(prs):
         ("Delivery Cadence", "cross-checked against the FRD"),
         ("Content Description", "what ONE ROW of this file means"),
         ("Field Sheet", "the tab holding this file's columns"),
+        ("Null Representation", "what a MISSING value looks like in the file"),
     ]
     ty = y + 0.86
     for name, what in files:
@@ -253,9 +257,9 @@ def s03_vdd(prs):
              size=9.0, color=NAVY, font=MONO, bold=True)
         text(s, L + 2.46, ty - 0.02, w - 2.78, 0.24, [(what, {})],
              size=8.8, color=SLATE, font=SANS)
-        ty += 0.262
-    line(s, L + 0.32, y + 3.42, L + w - 0.28, y + 3.42, color=HAIR2)
-    text(s, L + 0.32, y + 3.50, w - 0.62, 0.28,
+        ty += 0.240
+    line(s, L + 0.32, y + 3.50, L + w - 0.28, y + 3.50, color=HAIR2)
+    text(s, L + 0.32, y + 3.58, w - 0.62, 0.28,
          [[("Multi-record files add:", {"bold": True, "color": NAVY}),
            ("  Multi-Record-Type · Record Type Field · Record Type Values · "
             "Expected Field Count", {"color": SLATE})]],
@@ -263,7 +267,7 @@ def s03_vdd(prs):
 
     # ---- field sheets
     x2 = L + w + gap
-    panel(s, x2, y, w, 3.80, accent=SKY, fill=TINT_SKY)
+    panel(s, x2, y, w, 3.90, accent=SKY, fill=TINT_SKY)
     panel_title(s, x2, y, w, "Field sheets — one row per source column",
                 kicker="sheet 2 · one tab per file", accent=BLUE)
     NO, YES = {"color": RED, "bold": True}, {"color": BLUE, "bold": True}
@@ -277,6 +281,7 @@ def s03_vdd(prs):
         ("Allowed Values / Range", [("never — a sample is not a domain", NO)]),
         ("Example Value", [("the vendor's, never a real member's", YES)]),
         ("PHI / PII (Y/N)", [("never — a compliance answer", NO)]),
+        ("Key / Uniqueness", [("never — the match key an Upsert needs", NO)]),
         ("Segment", [("multi-record files only", {"color": MUTED})]),
     ]
     ty = y + 0.86
@@ -286,19 +291,19 @@ def s03_vdd(prs):
              size=9.0, color=NAVY, font=MONO, bold=True)
         text(s, x2 + 2.50, ty - 0.02, w - 2.82, 0.24, [mark],
              size=8.6, color=SLATE, font=SANS)
-        ty += 0.262
-    line(s, x2 + 0.32, y + 3.42, x2 + w - 0.28, y + 3.42, color=HAIR2)
-    text(s, x2 + 0.32, y + 3.50, w - 0.62, 0.24,
+        ty += 0.240
+    line(s, x2 + 0.32, y + 3.50, x2 + w - 0.28, y + 3.50, color=HAIR2)
+    text(s, x2 + 0.32, y + 3.58, w - 0.62, 0.24,
          [("Blue = a data file could tell us.   Red = only the vendor can.", {})],
          size=8.4, color=MUTED, font=SANS)
 
-    callout(s, L, y + 4.06, CW, 0.80,
-            [[("Six of these ten can never be recovered from a data file.",
+    callout(s, L, y + 4.10, CW, 0.84,
+            [[("Eight of these eleven can never be recovered from a data file.",
                {"bold": True, "color": RED})],
              [("They exist only in the vendor's specification. Where the dictionary is missing "
-               "them, the agent leaves the cell blank and raises a named question — it will not "
-               "write a description it inferred.", {})]])
-    foot(s, 3, "templates/DICT_TEMPLATE — issue it to the vendor as-is; src/frdsttm/dictionary.py parses it")
+               "them the agent leaves the cell blank and raises a named question — it will not "
+               "write a description, a null rule or a key it inferred.", {})]])
+    foot(s, 3, "templates/DICT_TEMPLATE_v1.3.xlsx — issue it to the vendor as-is; src/frdsttm/dictionary.py parses what comes back")
     notes(s, """
 "CAN'T THE AGENT JUST READ A SAMPLE FILE?" It can, and it does - as a CHECK, never
 as the source of the mapping. Given the FRD's ADLS Location, code (not the model -
@@ -316,13 +321,22 @@ sample value, mandatory, PHI), four derived from the standards plus the FRD's
 frame (stage catalog/schema/table, stage column+datatype, standard schema/table,
 standard datatype) - and exactly one that is neither: the TARGET COLUMN NAME.
 
-THE TARGET COLUMN NAME, MEASURED. Target = source reproduces an approved STTM
-399/399 and ships today. Prefix + upper snake reproduces 22/115: "Member ID" ->
-TPL_MEME_ID, "Subscriber or Dependent indicator" -> TPL_SBSB_IND. MEME/SBSB/GRP are
-Facets column names - an existing warehouse vocabulary, not a transformation. The
-agent infers the convention per feed by measuring candidates against the nearest
-approved STTM and reporting the fit; what it cannot do is manufacture a vocabulary
-nobody gave it. Those cells render blank and gated until it has one.
+THE TARGET COLUMN NAME, MEASURED - and this is the one cell neither document
+supplies. The agent decides from the FRD ALONE whether a feed renames: if the
+sub-domain appears in the target table names, the columns carry it too. That holds
+on both real feeds (CAQH renames 115/115, SD 4/411).
+
+What the reviewer then receives, on the renaming feed: 22 of 115 exact, 63 more
+recognisable renames - so 85 of 115 (74%) are a NAME EDIT, not a rebuild. Mean
+similarity 0.79. TPL_FILE_SEQUENCE_NUMBER -> TPL_FILE_SEQ_NO is the shape of it;
+the row, table, position and source field are already correct. One "miss",
+TPL_DATA_SET_ID vs the approved TPL_DATE_SET_ID, is a typo in the client's own
+workbook. On a feed that does not rename, the agent is at 388/391.
+
+Asking a model to GENERATE the name scored 0 of 115 - and marked 71 of those wrong
+answers high confidence. Given a real catalog to match against it scored 95/101
+with a high band right 92 of 92. So the missing input is not a document and not a
+better prompt: it is read access to the existing warehouse columns.
 
 SCALE: the worked dictionary built from one approved STTM holds 399 fields across
 three files (86 / 267 / 46). That is the volume the FRD cannot carry.

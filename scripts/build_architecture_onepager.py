@@ -15,7 +15,7 @@ REDESIGNED 2026-08-27 (Arjun), on two axes at once:
 
 2. ARCHITECTURE — two real changes since the previous version:
 
-   a. THREE INPUTS, not one. The vendor data dictionary (DICT_<feed>.xlsx) is a
+   a. TWO DOCUMENT INPUTS. The vendor data dictionary (VDD_<feed>.xlsx) is a
       first-class input beside the FRD, and the client's naming + engineering
       standards are versioned contracts hashed into every run's provenance.
       Honesty rule kept from the old deck: the standards contracts ARE wired
@@ -134,7 +134,7 @@ def build(out: Path) -> Path:
                  "layer, load strategy, landing folder, DQ and recycle rules. Authored and "
                  "approved by ACFC's BSAs.",
              status="live", status_color=BLUE),
-        dict(mark="excel", name="DICT_<feed>.xlsx", accent=SKY,
+        dict(mark="excel", name="VDD_<feed>.xlsx", accent=SKY,
              sub="The vendor data dictionary — every source column: name, position, type, "
                  "length, required, description, allowed values, PHI. Supplied by the vendor.",
              status="ingested · not yet read by stages 02–04", status_color=RED),
@@ -178,7 +178,7 @@ def build(out: Path) -> Path:
          [("Unity Catalog — volumes + Delta", {})],
          size=9.4, color=NAVY, font=SANS, bold=True)
     text(s, ux + 0.16, BY + 0.68, uw - 0.32, 0.22,
-         [("frd_raw · sttm_reference · sttm_out_app · sttm_audit", {})],
+         [("frd_raw · vdd_raw · sttm_reference · sttm_out_app · sttm_audit", {})],
          size=8.2, color=BLUE, font=MONO, bold=True)
     text(s, ux + 0.16, BY + 0.90, uw - 0.32, 0.22,
          [[("The review app reads THIS.", {"bold": True, "color": NAVY}),
@@ -187,7 +187,7 @@ def build(out: Path) -> Path:
 
     # ---- band C: the Databricks platform ------------------------------------
     step_down(s, BY + BH, 4.72, "the app triggers the job; the job reads and writes the volumes natively")
-    CY, CH = 4.72, 1.76
+    CY, CH = 4.72, 1.84
     band(s, CY, CH, "Databricks platform", accent=BLUE)
     logo(s, "databricks", L + 0.22, CY + 0.42, 1.16, 0.26)
 
@@ -239,24 +239,30 @@ def build(out: Path) -> Path:
     # agent as versioned contracts. Same for the approved-STTM corpus. Drawing
     # them here rather than on the input row is the difference between "three
     # things you must supply" and "two documents; the agent brings the rest".
-    ky = CY + 1.32
-    rect(s, L + 0.22, ky, CW - 0.46, 0.40, fill=WHITE, line=HAIR2)
-    rect(s, L + 0.22, ky, 0.05, 0.40, fill=NAVY)
-    text(s, L + 0.44, ky + 0.11, 2.5, 0.22, [("BUILT INTO THE AGENT", {})],
+    ky = CY + 1.30
+    rect(s, L + 0.22, ky, CW - 0.46, 0.50, fill=WHITE, line=HAIR2)
+    rect(s, L + 0.22, ky, 0.05, 0.50, fill=NAVY)
+    text(s, L + 0.44, ky + 0.06, 2.4, 0.22, [("BUILT INTO THE AGENT", {})],
          size=7.8, color=NAVY, font=SANS, bold=True, spacing=1.2)
-    text(s, L + 2.42, ky + 0.10, CW - 2.72, 0.24,
-         [[("Naming + engineering standards", {"bold": True, "color": NAVY}),
-           (" — versioned contracts, hashed into every run as ", {}),
-           ("standards_sha256", {"font": MONO, "color": BLUE}),
+    text(s, L + 0.44, ky + 0.26, 2.4, 0.22, [("not handed over per run", {})],
+         size=7.4, color=MUTED, font=SANS)
+    text(s, L + 2.90, ky + 0.06, CW - 3.20, 0.22,
+         [[("Standards contracts", {"bold": True, "color": NAVY}),
+           ("  naming + engineering, hashed into every run", {}),
            ("      ·      ", {"color": HAIR2}),
-           ("Approved-STTM corpus", {"bold": True, "color": NAVY}),
-           (" — layout template + golden eval", {})]],
-         size=8.2, color=SLATE, font=SANS)
+           ("Term catalog", {"bold": True, "color": NAVY}),
+           ("  the column vocabulary, harvested at sync", {})]],
+         size=8.0, color=SLATE, font=SANS)
+    text(s, L + 2.90, ky + 0.27, CW - 3.20, 0.22,
+         [[("Approved-STTM corpus", {"bold": True, "color": NAVY}),
+           ("  layout only, plus the after-the-fact eval.  ", {}),
+           ("A RUN NEVER OPENS AN STTM.", {"bold": True, "color": RED})]],
+         size=8.0, color=SLATE, font=SANS)
 
     # ---- band D: human review + outputs -------------------------------------
-    step_down(s, CY + CH, 6.64, "draft STTM .xlsx  +  feed contract .json   →   to a named person",
+    step_down(s, CY + CH, 6.68, "draft STTM .xlsx  +  feed contract .json   →   to a named person",
               x=L + 1.4)
-    hy, hw = 6.64, 5.90
+    hy, hw = 6.68, 5.90
     rect(s, L, hy, hw, 0.54, fill=WHITE, line=BLUE)
     icon(s, "user", L + 0.16, hy + 0.14, 0.28)
     text(s, L + 0.54, hy + 0.08, hw - 0.70, 0.44,
