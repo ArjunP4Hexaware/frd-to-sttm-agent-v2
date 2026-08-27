@@ -94,7 +94,7 @@ def test_contract_carries_provenance_banner_fields():
     contract = res["contract"]
     assert contract["generator"] == GENERATOR
     assert contract["generated_from_frd"] == "doc1.docx"
-    assert contract["contract_name"] == "doc1 feed-level mapping contract"
+    assert contract["contract_name"] == "doc1 source-level mapping contract"
     assert contract["status"] == "PASS"
 
 

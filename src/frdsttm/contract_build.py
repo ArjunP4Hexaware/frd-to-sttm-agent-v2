@@ -266,7 +266,7 @@ def attribution_check(spec: FrdIngestionSpec) -> List[dict]:
     for entry in seen.values():
         if len(entry["feeds"]) > 1:
             text = (
-                f"rule applied to {len(entry['feeds'])} feeds ({', '.join(entry['feeds'])}) — "
+                f"rule applied to {len(entry['feeds'])} sources ({', '.join(entry['feeds'])}) — "
                 f"attribution unconfirmed pending source dictionary: {entry['rule'][:120]!r}"
             )
             context = {"feed_names": entry["feeds"], "feed_indices": entry["feed_indices"], "rule": entry["rule"]}
@@ -314,7 +314,7 @@ def build_contract(doc_id: str, source_file: str, raw_extraction: dict, content:
         status = "PASS"
 
     contract = {
-        "contract_name": f"{doc_id} feed-level mapping contract",
+        "contract_name": f"{doc_id} source-level mapping contract",
         "generated_from_frd": source_file,
         "generated_date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "generator": GENERATOR,

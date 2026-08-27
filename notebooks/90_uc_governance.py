@@ -156,7 +156,7 @@ TABLES = {
         {"content_kind": "client_document", "data_class": "requirements_document",
          "phi_possible": "true", "direction": "input", "writer": "01_frd_ingest"}),
     "frd_contracts": (
-        "Validated feed-level mapping contracts from 03_contract_build (grounding audit, "
+        "Validated source-level mapping contracts from 03_contract_build (grounding audit, "
         "ambiguity gating, status PASS/PASS_WITH_FLAGS/FAIL).",
         {"content_kind": "llm_generated", "data_class": "source_to_target_mapping",
          "phi_possible": "true", "direction": "output", "writer": "03_contract_build",

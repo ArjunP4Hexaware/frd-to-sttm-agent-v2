@@ -62,7 +62,7 @@ def _contract(rule_feeds, candidates):
             "ambiguities": [{
                 "id": "attribution-test1",
                 "kind": "attribution",
-                "text": f"rule applied to {len(candidates)} feeds: {ZIP_RULE[:60]}",
+                "text": f"rule applied to {len(candidates)} sources: {ZIP_RULE[:60]}",
                 "has_candidates": True,
                 "candidates": [feeds[i]["feed_name"] for i in candidates],
                 "context": {"feed_indices": sorted(candidates), "rule": ZIP_RULE},

@@ -6,7 +6,7 @@ contract JSON. These tests pin that every FRD-stated rule lands somewhere a
 human sees, that attributed rules land on the row of the column they name in
 the exact headers CodeGen's `extract-sttm` reads (`Comment` → value_spec,
 `Recycle Flag` → `Y ( verbatim )`), and that an unattributable rule is
-placed in a feed-level cell and recorded in provenance — never pinned to an
+placed in a source-level cell and recorded in provenance — never pinned to an
 arbitrary row, never dropped.
 
 04_sttm_render.py runs driver code at import, so (like
@@ -275,7 +275,7 @@ def test_single_sheet_places_rules_in_business_rule_and_metadata(tmp_path):
     rows = _rows(load_workbook(out)["mapping"])
     meta = {r[0]: r[1] for r in rows if r and r[0] and r[1] is not None}
     assert meta["Recycle rule"] == RECYCLE_RULE
-    assert meta["Validation rules (feed-level)"] == FEED_RULE
+    assert meta["Validation rules (source-level)"] == FEED_RULE
     header_r = next(i for i, r in enumerate(rows) if r and r[0] == "#")
     headers = rows[header_r]
     br_i, name_i = headers.index("Business Rule"), headers.index("Field Name")
@@ -288,7 +288,7 @@ def test_single_sheet_without_rules_adds_no_metadata_rows(tmp_path):
     out = tmp_path / "out.xlsx"
     R["render_single_sheet"](_contract(_feed([], None)), str(out), sheet_name="mapping")
     keys = {r[0] for r in _rows(load_workbook(out)["mapping"]) if r}
-    assert "Recycle rule" not in keys and "Validation rules (feed-level)" not in keys
+    assert "Recycle rule" not in keys and "Validation rules (source-level)" not in keys
 
 
 # --------------------------------------------------------------------------- #

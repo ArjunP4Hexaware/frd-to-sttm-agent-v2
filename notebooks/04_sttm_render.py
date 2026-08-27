@@ -244,7 +244,7 @@ def _attribution_groups(contract):
     groups = {}
     for entry in seen.values():
         if len(entry["feed_indices"]) > 1:
-            text = (f"rule applied to {len(entry['feed_names'])} feeds ({', '.join(entry['feed_names'])}) — "
+            text = (f"rule applied to {len(entry['feed_names'])} sources ({', '.join(entry['feed_names'])}) — "
                     f"attribution unconfirmed pending source dictionary: {entry['rule'][:120]!r}")
             context = {"feed_names": entry["feed_names"], "feed_indices": entry["feed_indices"], "rule": entry["rule"]}
             aid = _ambiguity_id("attribution", text, context)
@@ -276,7 +276,7 @@ def _apply_advisory_override(contract, context, rationale):
     if idx is None or field is None:
         return False, None, f"advisory path shape not recognized for structural write-back: {context.get('path')!r}"
     if idx >= len(contract["feeds"]):
-        return False, None, f"feed index {idx} out of range for this contract"
+        return False, None, f"source index {idx} out of range for this contract"
     feed = contract["feeds"][idx]
     target = f"feeds[{idx}].{field}"
     if field in _ADVISORY_SCALAR_FIELDS:
@@ -392,7 +392,7 @@ def apply_human_resolutions(contract):
                     group = attribution_groups_by_id.get(aid)
                     if group is None:
                         entry["reason_not_applied"] = (
-                            "no matching cross-feed rule group found in the current contract "
+                            "no matching cross-source rule group found in the current contract "
                             "(validation_rules/recycle_rule may have changed since this "
                             "ambiguity was gated)")
                     else:
@@ -1266,7 +1266,7 @@ def render_single_sheet(contract, out_path, sheet_name="mapping", placements=Non
     if placement["recycle"]:
         meta_rows.append(("Recycle rule", placement["recycle"]["text"]))
     if placement["unattributed"]:
-        meta_rows.append(("Validation rules (feed-level)", "\n".join(placement["unattributed"])))
+        meta_rows.append(("Validation rules (source-level)", "\n".join(placement["unattributed"])))
     for k, v in meta_rows:
         ws.append([k, v])
         ws.cell(ws.max_row, 1).font = _BOLD
@@ -1938,7 +1938,7 @@ for doc_id, contract in contracts.items():
         if tf.get("unfilled_meta"):
             lines.append("- metadata keys left empty: " + ", ".join(tf["unfilled_meta"]))
         if tf.get("feed_level_rules_unplaced"):
-            lines.append("- feed-level rules with no home in this layout (see Rule placement): "
+            lines.append("- source-level rules with no home in this layout (see Rule placement): "
                          + _quote_rule(tf["feed_level_rules_unplaced"], 120))
         for c in tf.get("created_sheets", []):
             lines.append(f"- created sheet: {c}")
@@ -1959,14 +1959,14 @@ for doc_id, contract in contracts.items():
                                 if rec["column"] and p["dialect"] == "sheet_per_table" else
                                 f"→ metadata block" if p["dialect"] != "sheet_per_table" else
                                 "→ NOT attributed to a column — FILE_DETAILS › File Description only; "
-                                "CodeGen will see no recycle spec for this feed")
+                                "CodeGen will see no recycle spec for this source")
                              + f": {_quote_rule(rec['text'], 120)!r}")
             for r in p["unattributed"]:
                 lines.append(f"- **{p['feed']}** › NOT attributed (names no rendered column) → "
-                             f"feed-level cell only: {_quote_rule(r, 120)!r}")
+                             f"source-level cell only: {_quote_rule(r, 120)!r}")
         lines += [""]
     if ev:
-        lines += ["## Per-feed eval"]
+        lines += ["## Per-source eval"]
         for f in ev["feeds"]:
             lines.append(f"- **{f['feed']}**: {f['pct']}% ({f['match']}/{f['cells']})")
             for d in f["sample_diffs"]:

@@ -1237,12 +1237,21 @@ The unit the code calls `Feed` (one source file pattern with its own
 target tables) is a **source** in every word a person reads: the app's UI
 strings, the three decks (regenerated from their scripts), the screens
 catalogue script, the stage-03 report header (`sources: N`), 04's
-provenance notes, the artifacts. NOT renamed, deliberately: `Feed`,
-`feed_name`, `feeds`, `n_feeds`, the contract JSON and its
-`contract_name` value (CodeGen consumes `feeds` across the boundary), and
-the gated AMBIGUITY texts ("rule applied to 3 feeds…") — ambiguity ids
-are hashes of kind+text+context and the join key for saved resolutions,
-so rewording them would orphan every stored decision. Collision to watch:
+provenance notes and phase5 lines, the workbook's `Validation rules
+(source-level)` cell, the `contract_name` value, the UC table COMMENT,
+the artifacts — and, **since later the same evening (Arjun's manager:
+remove it completely), the gated AMBIGUITY texts too**: "rule applied to
+3 sources (…)". That text is built in TWO places that must stay
+byte-identical — `contract_build.py` (03 writes it) and
+`04_sttm_render.py:~247` (04 REBUILDS it to recompute the ambiguity id
+when matching saved resolutions). Change one, change both. Consequence:
+artifact sets written before this change carry the old text and old ids;
+their own stored resolutions still match (ids live inside the set), but
+the SD demo set from 18:09Z still SAYS "feeds" — re-run it. NOT renamed:
+`Feed`, `feed_name`, `feeds`, `n_feeds` and every other identifier
+(CodeGen consumes `feeds` across the boundary), and the model-facing
+prompt text in `models.py` descriptions / 02's system prompt, which a
+person never reads and which would change `schema_sha256`. Collision to watch:
 `source_system` means the VENDOR; say "vendor" for that, never "source
 system", so the two do not blur. `context/FRD_to_STTM_Agent_Screens.html`
 still carries the old word — it embeds real captures and needs a
