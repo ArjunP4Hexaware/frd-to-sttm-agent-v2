@@ -137,17 +137,12 @@ function MappingSetup({
   const spConfig = useSharePointConfig();
 
   const mode = configQuery.data?.mode ?? "local";
-  // A model credential is required only on the ANTHROPIC path. The
-  // databricks provider authenticates with the workspace credential and reads
-  // no Anthropic key at all, whichever mode the app itself runs in — the
-  // backend already encodes exactly this in `needs_anthropic_key()`. Keying
-  // this on app MODE instead of PROVIDER showed "Runs unavailable" on a
-  // perfectly runnable local run against Foundation Model APIs.
-  const provider = configQuery.data?.provider ?? "";
-  const keyPresent =
-    mode === "databricks" || provider === "databricks"
-      ? true
-      : (configQuery.data?.api_key_present ?? false);
+  // Runs execute in the Databricks workspace only (the local subprocess
+  // runner was removed 2026-08-27). A local-mode backend serves the corpus,
+  // past runs and review; it cannot start one, and the backend says so with
+  // a 400 if asked. No credential is checked here: the job's extract task
+  // authenticates with the workspace credential.
+  const canRun = mode === "databricks";
   const configured = spConfig.data?.configured ?? false;
 
   return (
@@ -164,12 +159,12 @@ function MappingSetup({
           </span>
         </div>
       )}
-      {!keyPresent && (
+      {!canRun && configQuery.isSuccess && (
         <div className="acfc-notice acfc-notice--warn">
-          <b>Runs unavailable</b>
+          <b>Runs execute in the Databricks workspace</b>
           <span>
-            No model credential is configured on this backend, so an FRD cannot be processed. Existing
-            STTMs and past runs remain viewable.
+            This backend is in local mode, which serves the corpus, past runs and review only. Start a
+            run from the deployed App.
           </span>
         </div>
       )}
@@ -184,7 +179,7 @@ function MappingSetup({
         </p>
       </div>
 
-      <CorpusPanel onGenerate={onGenerate} onExisting={onExisting} canRun={keyPresent} />
+      <CorpusPanel onGenerate={onGenerate} onExisting={onExisting} canRun={canRun} />
     </div>
   );
 }

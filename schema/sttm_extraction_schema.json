@@ -137,7 +137,7 @@
           },
           "sttm_reference": {
             "type": "string",
-            "description": "How the document refers to the accompanying mapping/STTM document for this feed (e.g. 'Refer CVX STTM'). Null if none."
+            "description": "How the document refers to the accompanying mapping/STTM document for this feed (e.g. 'Refer CVX STTM'). Copy the cited cell VALUE(S) verbatim and nothing else: never include the row label they sit under (e.g. 'Link to STTM'), never add words. If more than one cell cites it, join the values with '; '. Null if none."
           },
           "requirement_ids": {
             "type": "array",

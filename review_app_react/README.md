@@ -20,7 +20,7 @@ as a **Databricks App**. One surface since 2026-08-21, reshaped 2026-08-22:
      is never touched).
    - `Rebuild index…` re-pairs whatever the volumes already hold, no
      SharePoint needed (unwired tenant, smoke fixtures).
-2. **Results** — extraction summary → template decision → the stage-03
+2. **Results** — extraction summary → the stage-03
    ambiguity gate → **Human-in-the-loop review** (every gated question as a
    card: pick a candidate / none of these / free text; saved into the
    run's contract; `Apply resolutions & re-render` re-runs stage 04 only —
@@ -33,17 +33,22 @@ as a **Databricks App**. One surface since 2026-08-21, reshaped 2026-08-22:
 
 ## Modes (`STTM_APP_MODE`)
 
-- `local` (default; laptops, tests): runs spawn `notebooks/01..04` as
-  subprocesses with `demo_<ts>` env insulation (suffixed schema/volumes,
-  provider pinned to `anthropic`, mock stripped); the sync and re-render
-  run the same code in-process / as a subprocess.
-- `databricks` (the deployed App): the container never runs notebooks.
-  Runs trigger the bundle job `frd_sttm_pipeline` via the Jobs API
+- `databricks` (the deployed App) — **the only mode that can start a run
+  (2026-08-27).** The container never runs notebooks. Runs trigger the
+  bundle job `frd_sttm_pipeline` via the Jobs API
   (`backend/jobs_runner.py`); the start-up sync and "Sync now" trigger
   `frd_sttm_sharepoint_sync` and then mirror `frd_raw` + `sttm_reference`
-  down; re-render triggers
-  `frd_sttm_render` over the same run suffix. Artifacts land natively in
-  Unity Catalog and are mirrored to the container as a rehydratable cache.
+  down; re-render triggers `frd_sttm_render` over the same run suffix.
+  Artifacts land natively in Unity Catalog and are mirrored to the
+  container on first request (so a bookmarked `?set=&doc=` link survives
+  an App restart).
+- `local` (default; laptops, tests): serves the corpus picker, past runs,
+  the results/review screens and the audit list against
+  `local_dev_fixtures/`. `POST /api/demo/runs` and re-render answer 400
+  naming the workspace job. The former local subprocess runner (01→04 on
+  the laptop, gated on `ANTHROPIC_API_KEY`) and the mock upload flow were
+  removed on 2026-08-27 — they kept being the path that ran when a
+  workspace run was intended.
 
 ## Guardrails
 
@@ -52,9 +57,10 @@ as a **Databricks App**. One surface since 2026-08-21, reshaped 2026-08-22:
   from any UI-triggered write.
 - One run at a time (409); one sync at a time (409); one re-render per set
   at a time (409). Billed run, sync and re-render are each explicit clicks.
-- `ANTHROPIC_API_KEY`: presence boolean to the frontend only; from the
-  environment or the repo `.env` locally, the secret scope in Databricks.
-  Never sent to the frontend, never logged.
+- The backend handles no model credential at all (2026-08-27): the job's
+  extract task authenticates with the workspace credential (Foundation
+  Model APIs) or reads the secret scope. Nothing key-shaped is read,
+  reported or logged by the App.
 - **No write path to SharePoint exists** (no publish endpoint, no upload
   method on the Graph client) — read-only by construction.
 - Resolutions: structural pick required when an item has candidates

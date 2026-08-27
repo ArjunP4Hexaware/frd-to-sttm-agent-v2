@@ -1914,20 +1914,6 @@ for doc_id, contract in contracts.items():
              f"**Status: {contract['status']}** | dialect: {dictionary['dialect']} | "
              f"{template_desc}",
              eval_line, ""]
-    lines += ["## Template decision",
-              f"- mode: **{decision['mode']}**"
-              + (f" | own reference {own_ref} excluded from candidacy" if exclude else "")]
-    for r in decision["ranked"][:5]:
-        marker = " (excluded — own reference)" if r["excluded"] else ""
-        chosen = " ← chosen" if r["reference"] in order else ""
-        lines.append(f"- {r['reference']}: score {r['score']:.3f} "
-                     f"(columns {r['components']['columns']:.2f}, tables "
-                     f"{r['components']['tables']:.2f}, prose "
-                     f"{r['components']['tokens']:.2f}){marker}{chosen}")
-    if dictionary.get("feed_sources") and decision["mode"] == "amalgam":
-        lines += [f"- sheet {k!r} from {v}" for k, v in
-                  sorted(dictionary["feed_sources"].items())]
-    lines += [""]
     if human_audit:
         lines += ["## Resolution audit (human vs. automatic)"]
         for a in human_audit:

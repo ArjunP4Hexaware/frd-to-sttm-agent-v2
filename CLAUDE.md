@@ -514,15 +514,21 @@ context/                THE DECK HOME. **All three decks below were restyled
                         honest gaps. Regenerate: drive the app in a browser,
                         then `python scripts/build_screens_doc.py <shots dir>`.
                         No RAW client documents — ever.
-templates/DICT_TEMPLATE_v1.3.xlsx   the blank vendor data dictionary issued to a
+templates/DICT_TEMPLATE.xlsx   the blank vendor data dictionary issued to a
                         vendor, built by scripts/build_dict_template.py. FILES
                         sheet + one field sheet per file; the first 9 columns of
                         each are frozen so ONE parser reads both this and the
                         worked example. Gitignored by `.gitignore` line 2
                         (`*.xlsx`) — regenerate it, never hunt for it in git.
-                        **v1.3 (2026-08-27) added the two columns that stood
-                        between "a filled-in dictionary" and "an STTM
-                        generatable from the FRD + VDD ALONE":**
+                        **NOT VERSIONED (Arjun, 2026-08-27):** one file name,
+                        no `_vN.N` suffix, no version in the README title, no
+                        template change log inside the workbook — git history
+                        is the record. The vendor's own "Dictionary version"
+                        cell and CHANGE_LOG sheet are THEIR revisions of THEIR
+                        dictionary and stay. (Earlier the same day, as "v1.3",
+                        it) **added the two columns that stood between "a
+                        filled-in dictionary" and "an STTM generatable from the
+                        FRD + VDD ALONE":**
                         `Null Representation` (FILES) — the FRD's reject rules
                         say "when MEMBER_ID is NULL" without saying what null
                         LOOKS LIKE in a delimited file (empty field? the text
@@ -531,11 +537,27 @@ templates/DICT_TEMPLATE_v1.3.xlsx   the blank vendor data dictionary issued to a
                         sheets) — an Upsert load strategy needs a match key, and
                         the FRD's own Business Key / Primary Key rows read "NA"
                         on every real document, so the vendor is the only one
-                        who knows. Watch the EXAMPLE ROWS when adding a column:
-                        they are positional lists, and inserting a header
-                        without inserting its value shifts every later cell by
-                        one (which silently un-marked a template example row and
-                        made the blank template parse as a real file).
+                        who knows. **The example rows are no longer positional
+                        (2026-08-27, later the same day).** They were lists
+                        written by index, and the parser recognises an example
+                        only by the marker in the LAST column, so a header
+                        inserted without its value shifted the marker left and
+                        un-marked the row. Found when the guard was built: the
+                        SHIPPED v1.3 still parsed as ONE real file — the COB
+                        example row's Notes never carried the marker at all.
+                        Now: example rows are header-keyed dicts through
+                        `row_from(headers, cells)` (a missing key is a blank, an
+                        unknown key raises); the script SELF-CHECKS after saving
+                        by parsing its own output with `frdsttm.dictionary` and
+                        refuses to ship unless `n_files == 0` and every FILES
+                        example row was dropped; `tests/test_dict_template.py`
+                        (3) runs the script and pins the same thing, plus that
+                        the marker appears in NO column other than Notes.
+                        `OUT` is `sys.argv[1]` when given. Rebuilt workbook
+                        differs from the old v1.3 in exactly one cell (the fixed
+                        Notes). Pre-existing and untouched: the parser reports
+                        `CODE_SETS` as `sheet_not_listed` on the blank template
+                        — a known-sheet allow-list would quiet it.
 
 scripts/build_vdd_from_sttm.py   derives a WORKED VDD from an approved STTM's
                         SOURCE band — the band that is itself a transcription of
@@ -620,8 +642,8 @@ review_app_react/       FastAPI + Vite/React review app (Databricks App; its
                         free text → POST /api/demo/artifacts/{set}/resolutions,
                         merged into the run's v1 contract exactly like the
                         legacy flow) and "Apply resolutions & re-render"
-                        (POST .../rerender: stage 04 only — subprocess
-                        locally, the frd_sttm_render job in databricks mode).
+                        (POST .../rerender: stage 04 only — the
+                        frd_sttm_render job; local mode refuses, 400).
                         No SharePoint lookup on the
                         request path; NO publish control anywhere — the
                         reviewer uploads the finished workbook to the
@@ -629,16 +651,23 @@ review_app_react/       FastAPI + Vite/React review app (Databricks App; its
                         pairs it (the results view says exactly where). The
                         Corpus panel's "Sync now"/"Rebuild index" start one
                         background sync (POST /api/demo/corpus/sync, 202 +
-                        polled state). Runs are MODE-SWITCHED on STTM_APP_MODE:
-                        local = 01→04 subprocesses with demo_<ts> env
-                        insulation; databricks (the deployed App) = trigger
-                        the bundle job via the Jobs API with the same
-                        insulation as job parameters (backend/jobs_runner.py)
-                        so artifacts land natively in UC and survive a
-                        restart. Artifact-set replay remains the shared
-                        results renderer ("Past runs"). The mock upload flow
-                        (orchestration.py) and upload endpoints stay in the
-                        backend, UI-less, for tests and local dev. In
+                        polled state). **Runs execute in the Databricks
+                        workspace ONLY (2026-08-27):** the deployed App
+                        (STTM_APP_MODE=databricks) triggers the bundle job
+                        via the Jobs API with demo_<ts> insulation as job
+                        parameters (backend/jobs_runner.py) so artifacts land
+                        natively in UC and survive a restart; a local-mode
+                        backend serves corpus / replay / review and answers
+                        POST /api/demo/runs with a 400 naming the job. The
+                        local 01→04 subprocess runner, the local re-render,
+                        the ANTHROPIC_API_KEY preflight, the mock upload flow
+                        (orchestration.py, /api/demo/uploads,
+                        /api/demo/documents) and the unrendered legacy
+                        frontend tree (api.ts, NewRunFlow → UploadScreen /
+                        ProgressView / ReviewScreen / ResultsScreen …) are
+                        GONE — see "LOCAL RUN PATH REMOVED" below.
+                        Artifact-set replay remains the shared results
+                        renderer. In
                         databricks mode "Sync now" triggers the sync JOB and
                         then mirrors frd_raw + sttm_reference down to the
                         container; reads re-mirror lazily after
@@ -1193,6 +1222,54 @@ Deliberately NOT a router: one query pair, nothing else in the app is
 addressable, and a bare URL still opens the picker. Do not grow this into
 client-side routing without a reason — the app is one surface.
 
+**The "Template decision" section is GONE (Arjun, 2026-08-27: "useless").**
+Removed from the results screen (`TemplatePanel` in `DemoResults.tsx`, the
+`template` field of the results payload in `demo.py`, the `TemplateScore` /
+`TemplateDecision` types in `demoApi.ts`) and from 04's `phase5.md`
+report. The DECISION itself is untouched — 04 still chooses single /
+amalgam / freeform and still writes `_provenance.template_decision` onto
+the v2 contract; only the ranked-score dump a reviewer never acted on is
+gone. The one-line mode summary in the phase5 status line stays.
+
+## LOCAL RUN PATH REMOVED (Arjun, 2026-08-27)
+
+**"We can just run it from the Hexaware environment instead."** The review
+app's local subprocess runner kept being the thing that ran when the
+intent was a workspace run, so it is gone rather than merely unused.
+Removed: `demo._subprocess_env` / `_run_worker`, the local branches of
+`start_run` and `_rerender_worker`, `needs_anthropic_key` /
+`api_key_present` / `_api_key_from_dotenv` (the backend now handles NO
+model credential at all), `/api/demo/uploads` + `/api/demo/documents` +
+`UPLOADS_DIR`, all of `backend/orchestration.py` (the mock upload flow),
+and the unrendered legacy frontend tree (`api.ts`, `NewRunFlow`,
+`UploadScreen`, `ProgressView`, `ReviewScreen`, `ResultsScreen`,
+`ContractJsonView`, `SummaryHeader`, `RunGatedItemList`,
+`WorkbookDownload`, `DocumentPicker`, `GatedItemList`). What a local-mode
+backend still does: corpus, replay, review, audit, config. What it says to
+a run request: a 400 naming `frd_sttm_pipeline` and the deployed App.
+`GET /api/demo/config` no longer reports `api_key_present` /
+`upload_max_bytes`; the frontend gates the run button on `mode ==
+"databricks"` alone. The notebooks KEEP their dual mode — the offline
+synthetic smoke (`tools/make_synthetic_smoke_fixture.py` → 01/03/04 as
+plain scripts) is unaffected; this is about the APP.
+
+Tests were the real cost: ~25 tests drove the run lifecycle, eligibility
+and audit through a faked `subprocess.Popen`. They now drive it through a
+faked `jobs_runner` in databricks mode (`fake_jobs` fixture in
+`test_demo_backend.py`, `_fake_jobs` helper in `test_governance.py`). Two
+tests pin the refusal (`test_local_mode_refuses_runs…`, one per file) and
+one pins that the upload routes are 404. `identity.IS_DATABRICKS_APP` and
+`demo.IS_DATABRICKS_APP` are separate flags and the tests rely on that: a
+databricks-mode RUN from a backend whose identity layer is local records
+the OS user. Suite: 432 passed / 4 skipped after the removal.
+
+Still referencing `orchestration.py` in comments as the ORIGIN of a
+behaviour (`eval_report`, `ambiguity_parsing`, `app.py`'s document routes,
+`displayText.ts`, `runReviewProgress.tsx`, `types.ts`): accurate history,
+left alone. `app.py`'s own `/api/documents*` routes (the pre-2026-08-21
+review tab's read path over `data_access`) were NOT removed — out of the
+decided scope, still tested.
+
 ## The review-app UI — ACFC HOUSE STYLE, rebuilt 2026-08-27
 
 **Standing rule (Arjun, 2026-08-27): the frontend must read essentially the
@@ -1554,6 +1631,67 @@ code, not a document, and was left in place; flagged, not silently kept.
   artifact produced the contract. This is a live demo-day hazard, not just a
   local-fixtures one.
 
+- **`sttm_reference` failed the strict gate 1 run in 2 until 2026-08-27
+  evening; now 5 / 5.** The CAQH FRD cites its STTM in two table cells
+  (`Source Data Dictionary | Refer CAQH STTM` and `Link to STTM |
+  STTM_…xlsx`). The model joined them and sometimes ADDED the row label —
+  `"Refer CAQH STTM; Link to STTM: STTM_…xlsx"` — and `Link to STTM:` with
+  a colon is in no cell, so `_strict_ok_any_split` (which grounds each
+  `;`-separated part) refused it: gate FAIL on a pointer field. Fix was the
+  FIELD DESCRIPTION, not the audit: `models.sttm_reference` (and the
+  schema mirror) now says "copy the cited cell VALUE(S) verbatim and
+  nothing else: never include the row label they sit under, never add
+  words; join several with '; '". Measured on the workspace, same FRD,
+  five consecutive runs: PASS ×5 (strict 52/52, 56/56, 54/54, 54/54,
+  52/52; eval 76.5% every time). Before the change: 1 pass, 1 fail in 2.
+  Do NOT "fix" a recurrence by relaxing the audit or demoting the field
+  without a decision — the instruction is the lever that measured well.
+  One of the five job runs took 363 s instead of ~220 s because its
+  extract task FAILED once ("Workload failed") and the job's task retry
+  succeeded — the retry policy is doing real work; watch it in the run
+  page, not just the App.
+- **A bookmarked `?set=&doc=` was a blank screen after every App restart
+  (found 2026-08-27, first verification in Chrome).** The container's
+  artifact mirror is empty after a restart until `GET /api/demo/artifacts`
+  (the LIST) rehydrates every set from the UC volume — 58 s for 36 sets —
+  and a direct results / workbook / review request for one set was a 404
+  until then. `demo._check_set_id`, the common entry of every artifact
+  route, now fetches just the requested set on a miss
+  (`jobs_runner.download_run_artifacts`); an unknown set still ends as the
+  caller's 404. `tests/test_artifact_rehydrate_on_miss.py` (4). Also
+  observed: the list endpoint returns each set THREE times (one row per
+  contract file, it seems) — cosmetic, not fixed.
+- **The App's eval panel was blank on every templated run from 2026-08-22
+  to 2026-08-27.** `eval_report.parse_eval_totals` — the ONLY reader of
+  04's golden-pair line, feeding the results payload's `eval` block and the
+  run list's `eval_pct` — knew one line shape, `**Golden-pair eval: 95.5%**`.
+  The template architecture changed 04 to `**Golden-pair eval vs
+  <reference>: 95.5%**` the same day it landed, and the parser (which
+  returns None on ANY mismatch, by design) has said `available: False` ever
+  since. Found on the first real-pair workspace run: phase5 said 95.5%, the
+  App said no eval. Fixed: the regex accepts an optional ` vs <reference>`
+  (captured, unused); `tests/test_eval_report.py` (11) pins both shapes and
+  every refusal. There were NO tests for this parser before. Rule: when 04's
+  report wording changes, run that file.
+- **The backend must import WITHOUT the editable install — the App crashed
+  at start-up on 2026-08-27 and the local suite was green.** The deployed
+  App never pip-installs this repo; `src/` reaches `sys.path` only through
+  a bootstrap in whichever backend module imports `frdsttm` FIRST. Commit
+  `71fb4ac` added `from frdsttm.corpus import load_corpus_index` to
+  `demo.py` under a comment claiming `data_access` had already done the
+  bootstrap — `data_access.py` has no such code and `demo.py` never
+  imported it. The container's chain is `app → corpus_routes → demo`, one
+  line BEFORE `sharepoint_routes` (where the real bootstrap lives), so:
+  `ModuleNotFoundError: frdsttm`. Locally the `.pth` from `pip install -e`
+  hid it. Fixed: `demo.py` bootstraps itself (same idiom as
+  `sharepoint_routes`), and `tests/test_app_imports_without_install.py`
+  imports `app` in a subprocess with every `…/src` entry stripped from
+  `sys.path` — the container's import path. Run it before any App deploy.
+  Rule: a backend module that imports `frdsttm` bootstraps `src/` itself;
+  never rely on import order in another module. (That probe ends with
+  `os._exit(0)` for the same reason the notebooks do — importing `app`
+  loads deltalake/pyarrow, and one full-suite run stalled >5 min at the
+  probe's interpreter exit before the guard was added.)
 - **A deployed Databricks App cannot read your laptop (2026-08-24).** The
   local documents folder (`STTM_LOCAL_SOURCE_DIR`, `frdsttm.local_folder`) is
   a LOCAL-MODE source: it works when the review app runs on your machine. The
@@ -1651,12 +1789,14 @@ code, not a document, and was left in place; flagged, not silently kept.
   values explicitly on the render task. (3) The corpus's exact-name pairing
   is now definitive at render time too: `decide_templates(..., pinned=)` —
   04 pins the own STTM when `pairs[doc_id].matched_by == "name"` AND
-  exclude-own is off. Both job ymls set `exclude_own_reference: "0"` for the
-  demo (the App regenerates ALREADY-MAPPED FRDs, so the approved STTM is the
-  template by identity); the cross-validation default in the notebook is
-  unchanged, and with exclude-own ON a pinned workbook is still excluded.
-  Consequence to say out loud in the room: with own as template, the
-  "accuracy vs golden" figure is self-referential. Not yet done: the
+  exclude-own is off. **Both job ymls now set `exclude_own_reference: "1"`
+  (Arjun, 2026-08-27)** — they carried `"0"` from the 2026-08-24 demo (the
+  App regenerated ALREADY-MAPPED FRDs, so the approved STTM was the template
+  by identity), which meant a WORKSPACE run and a LOCAL run (notebook
+  default `1`) rendered differently and the workspace's "accuracy vs golden"
+  was self-referential. With `1` a pinned workbook is still excluded; the
+  first real-pair workspace runs after the change are the two of
+  2026-08-27 18:09Z+ (see the demo-readiness report). Not yet done: the
   2-pair corpus cannot exercise amalgam mode; re-calibrate as it grows.
 - **Interpreter exit DEADLOCK on the py3.14 venv — worked around
   (2026-08-22 evening).** What was logged as a "slow exit" turned into a

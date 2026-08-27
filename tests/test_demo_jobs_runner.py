@@ -303,13 +303,13 @@ def test_rehydrate_unreadable_volume_raises_an_actionable_error(tmp_path, monkey
 def databricks_mode(monkeypatch, tmp_path):
     monkeypatch.setattr(demo, "IS_DATABRICKS_APP", True)
     monkeypatch.setattr(demo, "LOCAL_ROOT", tmp_path / "fixtures")
-    monkeypatch.setattr(demo, "UPLOADS_DIR", tmp_path / "uploads")
+    monkeypatch.setattr(demo, "PRELOADED_DIR", tmp_path / "fixtures" / "frd_raw")
     monkeypatch.setattr(demo, "LOGS_DIR", tmp_path / "logs")
     monkeypatch.setattr(demo, "_runs", {})
     monkeypatch.setattr(demo, "_active_run_id", None)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    demo.UPLOADS_DIR.mkdir(parents=True)
-    frd = demo.UPLOADS_DIR / "client_frd.docx"
+    demo.PRELOADED_DIR.mkdir(parents=True)
+    frd = demo.PRELOADED_DIR / "client_frd.docx"
     frd.write_bytes(b"DOCX")
     return frd
 
@@ -369,14 +369,15 @@ def test_databricks_run_failure_surfaces_and_clears_the_active_slot(databricks_m
     assert demo._active_run_id is None  # a failed run must free the slot
 
 
-def test_local_mode_still_requires_the_api_key(databricks_mode, monkeypatch):
+def test_local_mode_refuses_runs(databricks_mode, monkeypatch):
+    """Since 2026-08-27 there is no local runner: a local-mode backend
+    refuses with a message naming the workspace job, before any audit event
+    or slot is taken."""
     frd = databricks_mode
     monkeypatch.setattr(demo, "IS_DATABRICKS_APP", False)
-    # The fixture cleared the env var; also stub the repo-.env fallback so
-    # the test cannot pass or fail on a developer machine's local key.
-    monkeypatch.setattr(demo, "_api_key_from_dotenv", lambda: None)
-    with pytest.raises(demo.RunPreflightError, match="ANTHROPIC_API_KEY"):
+    with pytest.raises(demo.RunPreflightError, match="Databricks workspace"):
         demo.start_run(str(frd))
+    assert demo._active_run_id is None
 
 
 # --------------------------------------------------------------------------- #

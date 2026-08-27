@@ -1,8 +1,8 @@
 /**
- * API layer for the client-facing demo tab (backend/demo.py): live runs +
- * replay. Separate module from api.ts on purpose — the demo endpoints are a
- * distinct feature area (/api/demo/*) with their own types, and the existing
- * review/orchestration hooks stay untouched.
+ * API layer for the review app (backend/demo.py + corpus_routes.py): the
+ * corpus picker, live runs (workspace jobs only, since 2026-08-27), replay
+ * and the human-in-the-loop review. The legacy api.ts (mock upload flow)
+ * was removed the same day.
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { GatedItem, ResolutionSubmission } from "./types";
@@ -29,14 +29,13 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 // ---------------------------------------------------------------------------
 export interface DemoConfig {
   provider: string;
-  /** "local" = subprocess runs, gated on a backend API key; "databricks" =
-   *  the deployed App triggering the real bundle job, where the key lives in
-   *  the workspace secret scope so api_key_present is not a readiness gate. */
+  /** "databricks" = the deployed App, the only mode that can start a run
+   *  (it triggers the real bundle job); "local" = a laptop backend serving
+   *  the corpus, past runs and review only (the local runner was removed
+   *  2026-08-27). */
   mode: "local" | "databricks";
   call_estimate: { calls: number; usd: number; seconds: number };
-  api_key_present: boolean;
   golden_doc_id: string;
-  upload_max_bytes: number;
 }
 
 export interface DemoDocument {
@@ -159,36 +158,12 @@ export interface DemoResults {
     is_golden: boolean;
   };
   mappings: { feed_name: string | null; rows: DemoMappingRow[] }[];
-  /** Template decision from 04's provenance (docs/TEMPLATE_ARCHITECTURE.md);
-   *  null for artifact sets rendered before the template architecture. */
-  template: TemplateDecision | null;
   workbook_available: boolean;
 }
 
 // ---------------------------------------------------------------------------
 // Template architecture + corpus (backend/corpus_routes.py, 2026-08-22)
 // ---------------------------------------------------------------------------
-export interface TemplateScore {
-  reference: string;
-  score: number;
-  components: { columns: number; tables: number; tokens: number; name: number };
-  excluded?: boolean;
-}
-
-export interface TemplateDecision {
-  /** single = one workbook drove layout+dictionary; amalgam = merged top-k,
-   *  first-wins per sheet; freeform = nothing matched, best-effort, flagged. */
-  mode: "single" | "amalgam" | "freeform";
-  selections: TemplateScore[];
-  ranked: TemplateScore[];
-  own_reference: string | null;
-  own_excluded: boolean;
-  eval_reference: string | null;
-  feed_sources: Record<string, string>;
-  thresholds: Record<string, number>;
-  demoted_from?: string[];
-}
-
 /** One background sync (the SharePoint sync job, or a network-free
  *  reindex). Exactly one runs at a time; the state survives until the next
  *  one starts. */
@@ -284,30 +259,6 @@ export function useDemoConfig() {
     queryKey: ["demo", "config"],
     queryFn: () => fetchJson<DemoConfig>("/api/demo/config"),
     retry: false,
-  });
-}
-
-export function useDemoDocuments() {
-  return useQuery({
-    queryKey: ["demo", "documents"],
-    queryFn: () => fetchJson<{ documents: DemoDocument[] }>("/api/demo/documents"),
-  });
-}
-
-export function useDemoArtifactSets() {
-  return useQuery({
-    queryKey: ["demo", "artifacts"],
-    queryFn: () => fetchJson<{ artifact_sets: DemoArtifactSet[] }>("/api/demo/artifacts"),
-  });
-}
-
-export function useDemoUpload() {
-  return useMutation({
-    mutationFn: async (file: File) => {
-      const form = new FormData();
-      form.append("file", file);
-      return fetchJson<DemoDocument>("/api/demo/uploads", { method: "POST", body: form });
-    },
   });
 }
 

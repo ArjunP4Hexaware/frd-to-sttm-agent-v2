@@ -10,6 +10,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +23,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 import demo  # noqa: E402
+import jobs_runner as jr  # noqa: E402
 
 
 @pytest.fixture()
@@ -46,26 +48,44 @@ def live_dirs(tmp_path, monkeypatch):
     local_dev_fixtures. Replay tests deliberately do NOT use this fixture —
     they read the tracked artifact set."""
     preloaded = tmp_path / "frd_raw"
-    uploads = tmp_path / "demo_uploads"
     preloaded.mkdir()
     (preloaded / "demo_frd.docx").write_bytes(b"fake docx")
     monkeypatch.setattr(demo, "LOCAL_ROOT", tmp_path)
     monkeypatch.setattr(demo, "PRELOADED_DIR", preloaded)
-    monkeypatch.setattr(demo, "UPLOADS_DIR", uploads)
     monkeypatch.setattr(demo, "LOGS_DIR", tmp_path / "logs")
-    monkeypatch.setattr(demo, "api_key_present", lambda: True)
     return tmp_path
 
 
-class _FakeProc:
-    """Stands in for a pipeline-stage subprocess: emits one line, exits 0."""
+@pytest.fixture()
+def fake_jobs(live_dirs, monkeypatch):
+    """Databricks mode with the Jobs API faked — the ONLY way a run starts
+    since 2026-08-27 (the local subprocess runner is gone). Records what the
+    jobs layer was asked to do so a test can check the lifecycle end to end
+    without a workspace."""
+    monkeypatch.setattr(demo, "IS_DATABRICKS_APP", True)
+    calls = {"staged": [], "started": [], "polled": [], "downloaded": []}
+    monkeypatch.setattr(jr, "_workspace_client", lambda: SimpleNamespace(
+        jobs=SimpleNamespace(get_run=lambda rid: SimpleNamespace(run_page_url="https://ws/run/42"))))
+    monkeypatch.setattr(jr, "resolve_job_id", lambda w: 7)
+    monkeypatch.setattr(jr, "stage_frd", lambda w, s, p: calls["staged"].append((s, p.name)))
+    monkeypatch.setattr(jr, "start_job_run",
+                        lambda w, jid, s, **kw: (calls["started"].append(kw), 42)[1])
 
-    def __init__(self, cmd, **kwargs):
-        self.captured_env = kwargs.get("env", {})
-        self.stdout = iter([f"fake stage output for {Path(cmd[-1]).name}\n"])
+    def poll(w, run, rid):
+        calls["polled"].append(rid)
+        for key, _label in jr.JOB_STAGES:
+            run._set_stage(key, "done")
 
-    def wait(self, timeout=None):
-        return 0
+    monkeypatch.setattr(jr, "poll_job_run", poll)
+
+    def download(w, suffix, dest):
+        (dest / "rendered").mkdir(parents=True, exist_ok=True)
+        calls["downloaded"].append(suffix)
+        return 1
+
+    monkeypatch.setattr(jr, "download_run_artifacts", download)
+    monkeypatch.setattr(jr, "upload_run_manifest", lambda w, s, payload: None)
+    return calls
 
 
 # --------------------------------------------------------------------------- #
@@ -86,19 +106,6 @@ def test_suffix_uniquified_on_disk_collision(live_dirs):
     assert second.startswith("demo_")
 
 
-def test_subprocess_env_insulation():
-    env = demo._subprocess_env("demo_20260807_120000", "demo_raw/demo_20260807_120000")
-    assert env["OUT_VOLUME"] == "sttm_out_demo_20260807_120000"
-    assert env["PREVIEW_VOLUME"] == "sttm_out_demo_20260807_120000"
-    assert env["SCHEMA"] == "sttm_agent_demo_20260807_120000"
-    assert env["RAW_VOLUME"] == "demo_raw/demo_20260807_120000"
-    # The curated locations are unreachable: every knob embeds the suffix.
-    assert env["OUT_VOLUME"] != "sttm_out"
-    assert env["STTM_LLM_PROVIDER"] == "anthropic"
-    assert "STTM_MOCK_EXTRACTION" not in env
-    assert env["PYTHONUNBUFFERED"] == "1"
-
-
 # --------------------------------------------------------------------------- #
 # Run lifecycle
 # --------------------------------------------------------------------------- #
@@ -110,15 +117,14 @@ def _wait_terminal(run, timeout=5.0):
     return run.status
 
 
-def test_run_lifecycle_launch_status_completion(client, live_dirs, monkeypatch):
-    monkeypatch.setattr(demo.subprocess, "Popen", _FakeProc)
+def test_run_lifecycle_launch_status_completion(client, fake_jobs, live_dirs):
     res = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")})
     assert res.status_code == 201, res.text
     snap = res.json()
     assert snap["doc_id"] == "demo_frd"
     assert snap["is_golden"] is True
     assert snap["artifact_set"] == f"sttm_out_{snap['suffix']}"
-    assert [s["id"] for s in snap["stages"]] == [f for f, _ in demo._STAGES]
+    assert [s["id"] for s in snap["stages"]] == [k for k, _ in jr.JOB_STAGES]
 
     run = demo.get_run(snap["id"])
     assert _wait_terminal(run) == demo.STATUS_DONE
@@ -126,26 +132,22 @@ def test_run_lifecycle_launch_status_completion(client, live_dirs, monkeypatch):
     final = client.get(f"/api/demo/runs/{snap['id']}").json()
     assert final["status"] == "done"
     assert all(s["status"] == "done" for s in final["stages"])
-    assert any(e["kind"] == "console" for e in final["events"])
-    # Console log persisted to the gitignored logs dir.
-    assert (demo.LOGS_DIR / f"{snap['suffix']}.log").is_file()
+    assert final["job_run_id"] == 42 and final["run_page_url"] == "https://ws/run/42"
+    assert any(e["kind"] == "console" and "job run 42 started" in e.get("text", "")
+               for e in final["events"])
+    assert fake_jobs["staged"] == [(snap["suffix"], "demo_frd.docx")]
+    assert fake_jobs["polled"] == [42] and fake_jobs["downloaded"] == [snap["suffix"]]
     # Polling cursor: events strictly after `after` only.
     assert client.get(f"/api/demo/runs/{snap['id']}", params={"after": final["seq"]}).json()["events"] == []
 
 
-def test_second_run_409_while_active(client, live_dirs, monkeypatch):
-    started = {"n": 0}
+def test_second_run_409_while_active(client, fake_jobs, live_dirs, monkeypatch):
+    def slow_poll(w, run, rid):
+        time.sleep(0.3)
+        for key, _label in jr.JOB_STAGES:
+            run._set_stage(key, "done")
 
-    class _Blocking(_FakeProc):
-        def __init__(self, cmd, **kwargs):
-            super().__init__(cmd, **kwargs)
-            started["n"] += 1
-
-        def wait(self, timeout=None):
-            time.sleep(0.3)
-            return 0
-
-    monkeypatch.setattr(demo.subprocess, "Popen", _Blocking)
+    monkeypatch.setattr(jr, "poll_job_run", slow_poll)
     frd = str(live_dirs / "frd_raw" / "demo_frd.docx")
     first = client.post("/api/demo/runs", json={"frd": frd})
     assert first.status_code == 201
@@ -155,18 +157,18 @@ def test_second_run_409_while_active(client, live_dirs, monkeypatch):
     _wait_terminal(demo.get_run(first.json()["id"]))
 
 
-def test_failed_stage_marks_run_failed(client, live_dirs, monkeypatch):
-    class _Failing(_FakeProc):
-        def wait(self, timeout=None):
-            return 3
+def test_failed_job_marks_run_failed_and_frees_the_slot(client, fake_jobs, live_dirs, monkeypatch):
+    def fail(w, run, rid):
+        run._set_stage("extract", "failed")
+        raise jr.JobRunnerError("extract: Workload failed, see run output for details")
 
-    monkeypatch.setattr(demo.subprocess, "Popen", _Failing)
+    monkeypatch.setattr(jr, "poll_job_run", fail)
     res = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")})
     run = demo.get_run(res.json()["id"])
     assert _wait_terminal(run) == demo.STATUS_FAILED
     snap = run.snapshot()
-    assert "01_frd_ingest.py exited with code 3" in snap["error"]
-    assert snap["stages"][0]["status"] == "failed"
+    assert "Workload failed" in snap["error"]
+    assert [s["status"] for s in snap["stages"] if s["id"] == "extract"] == ["failed"]
     # The failure releases the single-run slot.
     assert demo._active_run_id is None
 
@@ -175,12 +177,15 @@ def test_failed_stage_marks_run_failed(client, live_dirs, monkeypatch):
 # Preflight
 # --------------------------------------------------------------------------- #
 
-def test_missing_key_blocks_run(client, live_dirs, monkeypatch):
-    monkeypatch.setattr(demo, "api_key_present", lambda: False)
+def test_local_mode_refuses_runs_and_says_where_they_execute(client, live_dirs, monkeypatch):
+    """The local subprocess runner was removed on 2026-08-27. A local-mode
+    backend still serves corpus/replay/review; a run request is a 400 that
+    names the workspace job — never a silent no-op, never a laptop run."""
+    monkeypatch.setattr(demo, "IS_DATABRICKS_APP", False)
     res = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")})
     assert res.status_code == 400
-    assert "ANTHROPIC_API_KEY" in res.json()["detail"]
-    assert demo._active_run_id is None
+    assert "Databricks workspace" in res.json()["detail"]
+    assert demo._active_run_id is None and demo._runs == {}
 
 
 def test_frd_path_containment(client, live_dirs, tmp_path):
@@ -208,37 +213,23 @@ def test_frd_must_be_a_type_01_can_parse(client, live_dirs):
 # Config + uploads
 # --------------------------------------------------------------------------- #
 
-def test_config_reports_key_presence_boolean_only(client, live_dirs, monkeypatch):
-    monkeypatch.setattr(demo, "api_key_present", lambda: True)
+def test_config_reports_provider_and_mode_only(client, live_dirs, monkeypatch):
+    """No key material, no key PRESENCE either — the backend handles no
+    model credential at all since the local runner went (2026-08-27)."""
+    monkeypatch.delenv("STTM_LLM_PROVIDER", raising=False)
     body = client.get("/api/demo/config").json()
-    assert body["api_key_present"] is True
+    assert set(body) == {"provider", "mode", "call_estimate", "golden_doc_id"}
     assert body["provider"] == "anthropic"
     assert set(body["call_estimate"]) == {"calls", "usd", "seconds"}
-    # No key material anywhere in the response.
     assert "sk-" not in str(body)
 
 
-def test_upload_rejects_non_docx(client, live_dirs):
-    res = client.post("/api/demo/uploads", files={"file": ("brd.md", b"# x", "text/markdown")})
-    assert res.status_code == 400
-
-
-def test_upload_rejects_oversize(client, live_dirs, monkeypatch):
-    monkeypatch.setattr(demo, "UPLOAD_MAX_BYTES", 10)
-    res = client.post("/api/demo/uploads", files={"file": ("a.docx", b"x" * 11, "application/octet-stream")})
-    assert res.status_code == 413
-
-
-def test_upload_sanitizes_and_saves(client, live_dirs):
-    res = client.post(
-        "/api/demo/uploads",
-        files={"file": ("my FRD (v2).docx", b"content", "application/octet-stream")},
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["name"] == "my_FRD_v2_.docx"
-    assert (demo.UPLOADS_DIR / body["name"]).read_bytes() == b"content"
-    assert body["is_golden"] is False
+def test_the_mock_upload_flow_is_gone(client, live_dirs):
+    """/api/demo/uploads and /api/demo/documents were the pre-corpus demo
+    convenience; both removed 2026-08-27 with the local runner."""
+    assert client.post("/api/demo/uploads",
+                       files={"file": ("a.docx", b"x", "application/octet-stream")}).status_code == 404
+    assert client.get("/api/demo/documents").status_code == 404
 
 
 # --------------------------------------------------------------------------- #
@@ -437,76 +428,82 @@ def test_resolution_is_validated_and_persisted_into_the_v1_contract(client, live
     assert list((d / "contracts").glob("*.part")) == []
 
 
-def test_rerender_runs_only_stage_04_with_the_runs_insulation(client, live_dirs, monkeypatch):
-    _gated_set(live_dirs)
-    launched = []
+def _fake_render_job(monkeypatch, *, fail=None):
+    calls = {"uploaded": [], "started": [], "waited": []}
+    monkeypatch.setattr(demo, "IS_DATABRICKS_APP", True)
+    monkeypatch.setattr(jr, "_workspace_client", lambda: SimpleNamespace(
+        jobs=SimpleNamespace(get_run=lambda rid: SimpleNamespace(run_page_url="https://ws/run/99"))))
+    monkeypatch.setattr(jr, "upload_contract",
+                        lambda w, s, d, payload: calls["uploaded"].append((s, d, payload)))
+    monkeypatch.setattr(jr, "resolve_render_job_id", lambda w: 8)
+    monkeypatch.setattr(jr, "start_render_job",
+                        lambda w, jid, s, **kw: (calls["started"].append((s, kw)), 99)[1])
 
-    class _Proc(_FakeProc):
-        def __init__(self, cmd, **kwargs):
-            launched.append((cmd, kwargs.get("env", {})))
-            super().__init__(cmd, **kwargs)
+    def wait(w, rid):
+        calls["waited"].append(rid)
+        if fail:
+            raise jr.JobRunnerError(fail)
 
-    monkeypatch.setattr(demo.subprocess, "Popen", _Proc)
-    demo._rerenders.clear()
-    r = client.post("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender?doc=syn_doc")
-    assert r.status_code == 202, r.text
+    monkeypatch.setattr(jr, "wait_for_run", wait)
+    monkeypatch.setattr(jr, "download_run_artifacts", lambda w, s, dest: 1)
+    return calls
+
+
+def _wait_rerender(client, set_id):
     deadline = time.time() + 5
     while time.time() < deadline:
-        st = client.get("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender").json()
+        st = client.get(f"/api/demo/artifacts/{set_id}/rerender").json()
         if st["state"] in ("done", "failed"):
-            break
+            return st
         time.sleep(0.05)
+    raise AssertionError("re-render never reached a terminal state")
+
+
+def test_rerender_runs_the_render_job_against_the_runs_own_suffix(client, live_dirs, monkeypatch):
+    """Stage 04 only, in the workspace: the resolved v1 contract is uploaded
+    to the run's UC out dir and frd_sttm_render runs on the same suffix."""
+    _gated_set(live_dirs)
+    calls = _fake_render_job(monkeypatch)
+    demo._rerenders.clear()
+    set_id = "sttm_out_demo_20260822_180000"
+    r = client.post(f"/api/demo/artifacts/{set_id}/rerender?doc=syn_doc")
+    assert r.status_code == 202, r.text
+    st = _wait_rerender(client, set_id)
     assert st["state"] == "done", st
-    assert len(launched) == 1
-    cmd, env = launched[0]
-    assert Path(cmd[-1]).name == "04_sttm_render.py"          # ONLY the render stage
-    assert env["SCHEMA"] == "sttm_agent_demo_20260822_180000"  # the run's own insulation
-    assert env["OUT_VOLUME"] == "sttm_out_demo_20260822_180000"
-    assert "STTM_MOCK_EXTRACTION" not in env
+    assert st["run_page_url"] == "https://ws/run/99"
+    (suffix, doc, payload), = calls["uploaded"]
+    assert suffix == "demo_20260822_180000" and doc == "syn_doc"
+    assert payload == demo._contract_v1_path(set_id, "syn_doc").read_bytes()
+    assert calls["started"][0][0] == "demo_20260822_180000" and calls["waited"] == [99]
     # the review payload reports it, and a second one while running is a 409
-    assert client.get("/api/demo/artifacts/sttm_out_demo_20260822_180000/review?doc=syn_doc").json()["rerender"]["state"] == "done"
-    demo._rerenders["sttm_out_demo_20260822_180000"]["state"] = "running"
-    assert client.post("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender?doc=syn_doc").status_code == 409
+    assert client.get(f"/api/demo/artifacts/{set_id}/review?doc=syn_doc").json()["rerender"]["state"] == "done"
+    demo._rerenders[set_id]["state"] = "running"
+    assert client.post(f"/api/demo/artifacts/{set_id}/rerender?doc=syn_doc").status_code == 409
     demo._rerenders.clear()
 
 
 def test_rerender_failure_is_surfaced_not_stuck(client, live_dirs, monkeypatch):
     _gated_set(live_dirs)
-
-    class _Failing(_FakeProc):
-        def wait(self, timeout=None):
-            return 3
-
-    monkeypatch.setattr(demo.subprocess, "Popen", _Failing)
+    _fake_render_job(monkeypatch, fail="render: task failed — boom")
     demo._rerenders.clear()
-    client.post("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender?doc=syn_doc")
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        st = client.get("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender").json()
-        if st["state"] in ("done", "failed"):
-            break
-        time.sleep(0.05)
-    assert st["state"] == "failed" and "04_sttm_render.py exited with code 3" in st["error"]
+    set_id = "sttm_out_demo_20260822_180000"
+    client.post(f"/api/demo/artifacts/{set_id}/rerender?doc=syn_doc")
+    st = _wait_rerender(client, set_id)
+    assert st["state"] == "failed" and "boom" in st["error"]
     demo._rerenders.clear()
+
+
+def test_rerender_is_refused_in_local_mode(client, live_dirs, monkeypatch):
+    _gated_set(live_dirs)
+    monkeypatch.setattr(demo, "IS_DATABRICKS_APP", False)
+    demo._rerenders.clear()
+    r = client.post("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender?doc=syn_doc")
+    assert r.status_code == 400 and "Databricks workspace" in r.json()["detail"]
 
 
 # --------------------------------------------------------------------------- #
 # provider-aware preflight (2026-08-24)
 # --------------------------------------------------------------------------- #
-def test_local_run_still_requires_the_key_on_the_anthropic_path(monkeypatch):
-    """Unchanged behaviour for the default provider — a live Anthropic run
-    without a key must still be refused before it starts."""
-    monkeypatch.delenv("STTM_LLM_PROVIDER", raising=False)
-    assert demo.needs_anthropic_key() is True
-
-
-def test_databricks_provider_needs_no_anthropic_key(monkeypatch):
-    """The whole point: that path reads no Anthropic key, so demanding one in
-    preflight would refuse a run that would have worked."""
-    monkeypatch.setenv("STTM_LLM_PROVIDER", "databricks")
-    assert demo.needs_anthropic_key() is False
-
-
 def test_provider_is_read_at_call_time_not_import_time(monkeypatch):
     monkeypatch.setenv("STTM_LLM_PROVIDER", "databricks")
     assert demo.llm_provider() == "databricks"

@@ -44,8 +44,16 @@ from pathlib import Path
 #   **Golden-pair eval: 94.1%** (3094/3288 target cells match the reference)
 # Whitespace-tolerant everywhere it can be, anchored at both ends so a
 # truncated or reworded line does not partially match.
+# Two shapes, one regex. Before the template architecture (2026-08-22) 04
+# wrote `**Golden-pair eval: 95.5%** (…)`; since then it names the reference
+# workbook: `**Golden-pair eval vs <reference>: 95.5%** (…)`. This parser
+# only knew the first, so the App's eval panel was blank on every templated
+# run for five days — found 2026-08-27 on the first real-pair workspace run
+# (phase5 said 95.5%, the results payload said `available: False`). The
+# reference name is matched lazily up to the LAST `: <pct>%` so names with
+# spaces, hyphens, underscores or dots all pass; it is captured, not used.
 _EVAL_LINE = re.compile(
-    r"^\*\*Golden-pair\s+eval:\s*(?P<pct>\d+(?:\.\d+)?)\s*%\*\*\s*"
+    r"^\*\*Golden-pair\s+eval(?:\s+vs\s+(?P<ref>.+?))?:\s*(?P<pct>\d+(?:\.\d+)?)\s*%\*\*\s*"
     r"\(\s*(?P<match>\d+)\s*/\s*(?P<cells>\d+)\s+target\s+cells\s+match\s+the\s+reference\s*\)\s*$",
     re.MULTILINE,
 )
@@ -65,16 +73,16 @@ def parse_eval_totals(text: str) -> tuple[int, int] | None:
     that disagrees with the one implied by the two counts. Callers render
     nothing on None; there is deliberately no partial or best-effort return.
     """
-    matches = _EVAL_LINE.findall(text)
+    matches = list(_EVAL_LINE.finditer(text))
     if len(matches) != 1:
         # 0 = absent or reworded; >1 = ambiguous, refuse to pick.
         return None
 
-    pct_str, match_str, cells_str = matches[0]
+    m = matches[0]
     try:
-        printed_pct = float(pct_str)
-        matched_cells = int(match_str)
-        total_cells = int(cells_str)
+        printed_pct = float(m.group("pct"))
+        matched_cells = int(m.group("match"))
+        total_cells = int(m.group("cells"))
     except ValueError:
         return None
 

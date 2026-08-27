@@ -56,24 +56,35 @@ def _reset_run_state():
 @pytest.fixture()
 def live_dirs(tmp_path, monkeypatch):
     preloaded = tmp_path / "frd_raw"
-    uploads = tmp_path / "demo_uploads"
     preloaded.mkdir()
     (preloaded / "demo_frd.docx").write_bytes(b"fake docx bytes")
     monkeypatch.setattr(demo, "LOCAL_ROOT", tmp_path)
     monkeypatch.setattr(demo, "PRELOADED_DIR", preloaded)
-    monkeypatch.setattr(demo, "UPLOADS_DIR", uploads)
     monkeypatch.setattr(demo, "LOGS_DIR", tmp_path / "logs")
-    monkeypatch.setattr(demo, "api_key_present", lambda: True)
     return tmp_path
 
 
-class _FakeProc:
-    def __init__(self, cmd, **kwargs):
-        self.captured_env = kwargs.get("env", {})
-        self.stdout = iter([f"fake stage output for {Path(cmd[-1]).name}\n"])
+def _fake_jobs(monkeypatch):
+    """Databricks mode with the Jobs API faked — the only way a run starts
+    since the local subprocess runner was removed (2026-08-27). Returns the
+    keyword arguments start_job_run received, so a test can check the
+    provenance the job was handed."""
+    monkeypatch.setattr(demo, "IS_DATABRICKS_APP", True)
+    started = []
+    monkeypatch.setattr(jr, "_workspace_client", lambda: SimpleNamespace(
+        jobs=SimpleNamespace(get_run=lambda rid: SimpleNamespace(run_page_url=None))))
+    monkeypatch.setattr(jr, "resolve_job_id", lambda w: 7)
+    monkeypatch.setattr(jr, "stage_frd", lambda w, s, p: None)
+    monkeypatch.setattr(jr, "start_job_run", lambda w, jid, s, **kw: (started.append(kw), 42)[1])
+    monkeypatch.setattr(jr, "poll_job_run", lambda w, run, rid: None)
 
-    def wait(self, timeout=None):
-        return 0
+    def download(w, suffix, dest):
+        (dest / "rendered").mkdir(parents=True, exist_ok=True)
+        return 1
+
+    monkeypatch.setattr(jr, "download_run_artifacts", download)
+    monkeypatch.setattr(jr, "upload_run_manifest", lambda w, s, payload: None)
+    return started
 
 
 def _wait_terminal(run, timeout=5.0):
@@ -212,14 +223,7 @@ def test_sha256_of_matches_hashlib(tmp_path):
 # --------------------------------------------------------------------------- #
 
 def test_run_records_actor_hash_manifest_and_finish(client, live_dirs, monkeypatch):
-    procs = []
-
-    class _Capture(_FakeProc):
-        def __init__(self, cmd, **kwargs):
-            super().__init__(cmd, **kwargs)
-            procs.append(self)
-
-    monkeypatch.setattr(demo.subprocess, "Popen", _Capture)
+    job_calls = _fake_jobs(monkeypatch)
     res = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")},
                       headers=FORWARDED)
     assert res.status_code == 201, res.text
@@ -246,13 +250,16 @@ def test_run_records_actor_hash_manifest_and_finish(client, live_dirs, monkeypat
     assert manifest["frd_sha256"] == snap["frd_sha256"]
     assert manifest["status"] == "done" and manifest["app_mode"] == demo.APP_MODE
 
-    # the notebooks received the same provenance through the env
-    assert procs and procs[0].captured_env["TRIGGERED_BY"] == "reviewer@example.com"
-    assert procs[0].captured_env["RUN_LABEL"] == snap["id"]
+    # the job was handed the same provenance (run_label = the suffix is set
+    # by jobs_runner.start_job_run itself; see test_demo_jobs_runner)
+    assert job_calls == [{"triggered_by": "reviewer@example.com"}]
 
 
-def test_run_without_forwarded_identity_is_the_local_user_in_local_mode(client, live_dirs, monkeypatch):
-    monkeypatch.setattr(demo.subprocess, "Popen", _FakeProc)
+def test_run_without_forwarded_identity_is_the_local_user_when_identity_is_local(client, live_dirs, monkeypatch):
+    """identity.py's mode and demo.py's mode are separate flags: a databricks-
+    mode run started from a backend whose identity layer is local records the
+    OS user, and says so."""
+    _fake_jobs(monkeypatch)
     monkeypatch.setenv("STTM_LOCAL_USER", "dev-box")
     res = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")})
     assert res.status_code == 201
@@ -268,6 +275,8 @@ def test_databricks_mode_run_is_refused_without_identity(client, live_dirs, monk
 
 
 def test_a_failed_audit_write_blocks_the_run(client, live_dirs, monkeypatch):
+    monkeypatch.setattr(demo, "IS_DATABRICKS_APP", True)
+
     def boom(*a, **k):
         raise audit.AuditWriteError("volume refused")
     monkeypatch.setattr(audit, "record", boom)
@@ -385,14 +394,15 @@ def test_workbook_download_is_the_recorded_hand_off(client, live_dirs):
 
 def test_rerender_is_recorded_start_and_finish_with_actor(client, live_dirs, monkeypatch):
     _gated_set(live_dirs)
-    envs = []
-
-    class _Capture(_FakeProc):
-        def __init__(self, cmd, **kwargs):
-            super().__init__(cmd, **kwargs)
-            envs.append(self.captured_env)
-
-    monkeypatch.setattr(demo.subprocess, "Popen", _Capture)
+    started = []
+    monkeypatch.setattr(demo, "IS_DATABRICKS_APP", True)
+    monkeypatch.setattr(jr, "_workspace_client", lambda: SimpleNamespace(
+        jobs=SimpleNamespace(get_run=lambda rid: SimpleNamespace(run_page_url=None))))
+    monkeypatch.setattr(jr, "upload_contract", lambda w, s, d, payload: None)
+    monkeypatch.setattr(jr, "resolve_render_job_id", lambda w: 8)
+    monkeypatch.setattr(jr, "start_render_job", lambda w, jid, s, **kw: (started.append(kw), 99)[1])
+    monkeypatch.setattr(jr, "wait_for_run", lambda w, rid: None)
+    monkeypatch.setattr(jr, "download_run_artifacts", lambda w, s, dest: 1)
     r = client.post("/api/demo/artifacts/sttm_out_demo_20260822_180000/rerender?doc=syn_doc",
                     headers=FORWARDED)
     assert r.status_code == 202, r.text
@@ -407,19 +417,7 @@ def test_rerender_is_recorded_start_and_finish_with_actor(client, live_dirs, mon
     assert _events("rerender.started")[0]["actor"] == "reviewer@example.com"
     fin = _events("rerender.finished")[0]
     assert fin["status"] == "done" and fin["actor"] == "reviewer@example.com"
-    assert envs[0]["TRIGGERED_BY"] == "reviewer@example.com"
-    assert envs[0]["RUN_LABEL"].endswith(":rerender")
-
-
-def test_upload_is_recorded_with_its_hash(client, live_dirs):
-    r = client.post("/api/demo/uploads",
-                    files={"file": ("My FRD.docx", b"docx-bytes", "application/octet-stream")},
-                    headers=FORWARDED)
-    assert r.status_code == 200, r.text
-    ev = _events("upload.received")
-    assert ev[0]["actor"] == "reviewer@example.com" and ev[0]["file"] == "My_FRD.docx"
-    import hashlib
-    assert ev[0]["sha256"] == hashlib.sha256(b"docx-bytes").hexdigest()
+    assert started == [{"triggered_by": "reviewer@example.com"}]
 
 
 def test_audit_endpoint_lists_newest_first_and_is_identity_gated(client, live_dirs, monkeypatch):
@@ -576,7 +574,7 @@ def test_an_absent_corpus_index_does_not_block_a_run(client, live_dirs, monkeypa
     index. Refusing there would break a path the rule has nothing to do with —
     a CORRUPT index still raises, as everywhere else."""
     monkeypatch.setattr(demo, "REFERENCE_DIR", tmp_path / "nothing_here")
-    monkeypatch.setattr(demo.subprocess, "Popen", _FakeProc)
+    _fake_jobs(monkeypatch)
     r = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")},
                     headers=FORWARDED)
     assert r.status_code == 201
@@ -594,7 +592,7 @@ def test_a_doc_the_corpus_never_paired_is_out_of_scope_not_refused(
     _corpus(tmp_path, monkeypatch, eligibility={"some_other_frd": {
         "status": "ready", "generatable": True, "reason": "",
         "dictionary": "VDD_x.xlsx", "reference": None}})
-    monkeypatch.setattr(demo.subprocess, "Popen", _FakeProc)
+    _fake_jobs(monkeypatch)
     r = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")},
                     headers=FORWARDED)
     assert r.status_code == 201
@@ -604,7 +602,7 @@ def test_a_ready_corpus_frd_starts_normally(client, live_dirs, monkeypatch, tmp_
     _corpus(tmp_path, monkeypatch, eligibility={"demo_frd": {
         "status": "ready", "generatable": True, "reason": "ready to map",
         "dictionary": "VDD_demo.xlsx", "reference": None}})
-    monkeypatch.setattr(demo.subprocess, "Popen", _FakeProc)
+    _fake_jobs(monkeypatch)
     r = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")},
                     headers=FORWARDED)
     assert r.status_code == 201

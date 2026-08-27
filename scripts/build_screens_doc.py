@@ -119,13 +119,11 @@ SCREENS = [
      "GET /api/demo/corpus/references/{name} · /dictionaries/{name}"),
 
     (1, "results-top", "4 · Results",
-     "Results — extraction and template decision",
+     "Results — extraction",
      "Where a finished run lands, and — since 2026-08-27 — reachable again later at "
      "?set=&doc=, so a completed run can be bookmarked, shared or reopened tomorrow.",
      ["EXTRACTION: what the model found — feeds, target tables, rules — and each feed's "
-      "stage and standard targets with the requirement ids it came from.",
-      "TEMPLATE DECISION: which approved workbook was used as the layout template, every "
-      "candidate's score, and how that score breaks down. The choice is shown, not hidden."],
+      "stage and standard targets with the requirement ids it came from."],
      "GET /api/demo/artifacts/{set}/results"),
     (3, "results-gate", "4 · Results",
      "Results — the gate, the verdict and the eval",

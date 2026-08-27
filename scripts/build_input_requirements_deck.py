@@ -303,7 +303,7 @@ def s03_vdd(prs):
              [("They exist only in the vendor's specification. Where the dictionary is missing "
                "them the agent leaves the cell blank and raises a named question — it will not "
                "write a description, a null rule or a key it inferred.", {})]])
-    foot(s, 3, "templates/DICT_TEMPLATE_v1.3.xlsx — issue it to the vendor as-is; src/frdsttm/dictionary.py parses what comes back")
+    foot(s, 3, "templates/DICT_TEMPLATE.xlsx — issue it to the vendor as-is; src/frdsttm/dictionary.py parses what comes back")
     notes(s, """
 "CAN'T THE AGENT JUST READ A SAMPLE FILE?" It can, and it does - as a CHECK, never
 as the source of the mapping. Given the FRD's ADLS Location, code (not the model -

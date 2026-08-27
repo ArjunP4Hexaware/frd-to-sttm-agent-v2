@@ -39,7 +39,6 @@ import data_access as da
 from corpus_routes import router as corpus_router
 from corpus_routes import start_sync_on_startup
 from demo import router as demo_router
-from orchestration import router as orchestration_router
 from sharepoint_routes import router as sharepoint_router
 
 
@@ -54,7 +53,6 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="FRD->STTM Gated Ambiguity Review", lifespan=_lifespan)
-app.include_router(orchestration_router)
 app.include_router(demo_router)
 app.include_router(sharepoint_router)
 app.include_router(corpus_router)

@@ -1,53 +1,44 @@
-"""Client-facing demo endpoints: live runs + replay, mirroring the sibling
-brd-to-frd repo's demo_app_react backend (runner.py + artifacts.py) in this
-repo's idiom.
+"""Client-facing demo endpoints: live runs + replay.
 
 Two jobs:
 
-- LIVE runs, two mode-switched implementations behind ONE Run lifecycle
-  (`STTM_APP_MODE`, the same knob data_access.py switches on):
-  - local (dev laptops, offline tests): spawn the pipeline notebooks
-    (01→04) as subprocesses with provider `anthropic`, streaming their
-    console (SSE + polling fallback). No pipeline code is imported or
-    modified — the notebooks' env knobs and on-disk outputs are the only
-    interfaces used.
-  - databricks (the deployed App; decided 2026-08-21): trigger the REAL
-    bundle-deployed `frd_sttm_pipeline` job via the Jobs API and poll its
-    task states. The notebooks run as genuine workspace tasks
-    (IS_DATABRICKS True), artifacts land natively in Unity Catalog and
-    survive an App restart; the finished run's out-directory is mirrored
-    back to the container disk so the results machinery below works
-    unchanged. See jobs_runner.py for the whole implementation and the
-    workspace prerequisites.
+- LIVE runs (databricks mode ONLY since 2026-08-27 — Arjun: "we can just run
+  it from the Hexaware environment"): trigger the REAL bundle-deployed
+  `frd_sttm_pipeline` job via the Jobs API and poll its task states. The
+  notebooks run as genuine workspace tasks (IS_DATABRICKS True), artifacts
+  land natively in Unity Catalog and survive an App restart; the finished
+  run's out-directory is mirrored back to the container disk so the results
+  machinery below works unchanged. See jobs_runner.py for the whole
+  implementation and the workspace prerequisites. The former local mode
+  (spawning 01→04 as subprocesses on a laptop, gated on ANTHROPIC_API_KEY)
+  and the mock upload flow (orchestration.py, /api/demo/uploads) were
+  REMOVED the same day: they were the path that kept getting used by
+  accident when the intent was a workspace run. A local-mode backend still
+  serves the corpus, replay and review routes; POST /api/demo/runs and the
+  re-render there are a 400 that says where runs execute.
 - REPLAY: discover saved demo/e2e artifact sets under local_dev_fixtures/
   and serve a parsed results payload (extraction summary, the stage-03 gate
   moment, the stage-04 verdict, eval-vs-golden, per-mapping rows) that the
   frontend renders identically for a finished live run and a replayed set —
-  replay makes zero API calls. In databricks mode the artifact listing
-  first rehydrates sets from the UC volume, so finished runs reappear
-  after a restart.
+  replay makes zero API calls. In databricks mode a set missing from the
+  container is fetched from the UC volume on first request, so finished
+  runs — and bookmarked ?set=&doc= links — survive a restart.
 
-Guardrails (same posture as the sibling app):
+Guardrails:
 
 - The run suffix is generated HERE, never user-supplied and never empty:
   `demo_<YYYYmmdd_HHMMSS>`, uniquified on collision. Every output location
-  the run writes (SCHEMA / OUT_VOLUME / PREVIEW_VOLUME / RAW_VOLUME) embeds
-  that suffix, so a demo run can never land on `sttm_out` or any curated
-  baseline path.
+  the run writes (SCHEMA / OUT_VOLUME / RAW_VOLUME) embeds that suffix, so a
+  demo run can never land on `sttm_out` or any curated baseline path.
 - One live run at a time (caller's 409). Run state is in-memory; the
-  console log (data/live_run_logs/, gitignored) and the artifact set on
-  disk survive a restart — the finished run is then reachable via replay.
-- ANTHROPIC_API_KEY: presence is reported as a boolean only; the value is
-  read from the process env or the repo .env solely to inject into the
-  subprocess env, and is never logged or returned.
-- The mock upload flow (orchestration.py) is untouched: this module is
-  additive, mounted under /api/demo/*.
+  artifact set in the UC volume survives a restart — the finished run is
+  then reachable via replay.
+- No model credential is handled here at all: the job's extract task reads
+  the workspace credential (Foundation Model APIs) or the secret scope.
 
 Config doctrine: this repo's knob surface is env vars with in-file
-defaults (the notebooks' own `_param` pattern), not a YAML file like the
-sibling's config.yaml — deliberate, to stay consistent with the rest of
-this repo. No literals in logic: every tunable lives in the constants
-block below.
+defaults (the notebooks' own `_param` pattern), not a YAML file. No
+literals in logic: every tunable lives in the constants block below.
 """
 
 from __future__ import annotations
@@ -55,14 +46,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
 import ambiguity_parsing as ap
@@ -71,16 +60,26 @@ import eval_report as er
 import identity as ident
 import jobs_runner
 
-# data_access (imported above) has already put src/ on sys.path for the
-# deployed App, which does not pip-install the package. Same ordering rule as
-# corpus_routes: do not let a formatter sort this above the local imports.
+# The deployed App does not pip-install the frdsttm package, so src/ has to
+# be put on sys.path by whichever backend module imports it FIRST — and the
+# import chain in the container is app -> corpus_routes -> demo, which
+# reaches this line before sharepoint_routes' bootstrap has run. An earlier
+# comment here claimed data_access did this; it never did, and the App
+# crashed at start-up on 2026-08-27 (ModuleNotFoundError: frdsttm) while the
+# editable install hid it locally. tests/test_app_imports_without_install.py
+# reproduces the container's import path. Same idiom as sharepoint_routes.
+_SRC = Path(__file__).resolve().parents[2] / "src"
+if (_SRC / "frdsttm").is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
 from frdsttm.corpus import load_corpus_index  # noqa: E402
 
 router = APIRouter()
 
-# The same mode knob data_access.py reads. "databricks" = the deployed App:
-# live runs go through the Jobs API (jobs_runner.py); "local" = subprocess
-# runs. Read once at import, like data_access.APP_MODE.
+# The same mode knob data_access.py reads. "databricks" = the deployed App,
+# the ONLY mode that can start a run (Jobs API, jobs_runner.py); "local" =
+# a laptop backend serving corpus/replay/review only. Read once at import,
+# like data_access.APP_MODE.
 APP_MODE = os.environ.get("STTM_APP_MODE", "local")
 IS_DATABRICKS_APP = APP_MODE == "databricks"
 
@@ -92,8 +91,6 @@ LOCAL_ROOT = ROOT / "local_dev_fixtures"
 
 GOLDEN_DOC_ID = os.environ.get("STTM_DEMO_GOLDEN_DOC_ID", "demo_frd")
 PRELOADED_DIR = LOCAL_ROOT / os.environ.get("STTM_DEMO_PRELOADED_VOLUME", "frd_raw")
-UPLOADS_DIR = LOCAL_ROOT / os.environ.get("STTM_DEMO_UPLOADS_VOLUME", "demo_uploads")
-RAW_STAGING_VOLUME = os.environ.get("STTM_DEMO_RAW_STAGING_VOLUME", "demo_raw")
 # Where the corpus index lives — read by the eligibility gate below. Same
 # default as corpus_routes.REFERENCE_DIR; kept as its own constant here rather
 # than imported, because corpus_routes imports demo and not the other way.
@@ -103,35 +100,22 @@ LOGS_DIR = ROOT / "data" / "live_run_logs"
 SUFFIX_PREFIX = "demo"  # never configurable: the insulation guarantee hangs off it
 SUFFIX_TS_FORMAT = "%Y%m%d_%H%M%S"
 CATALOG = os.environ.get("CATALOG", "arjun_workspace")
-STAGE_TIMEOUT_SECONDS = int(os.environ.get("STTM_DEMO_STAGE_TIMEOUT_SECONDS", "900"))
-UPLOAD_MAX_BYTES = int(os.environ.get("STTM_DEMO_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))
-UPLOAD_ALLOWED_EXTENSIONS = (".docx",)
 # What a RUN accepts from the corpus (frd_raw): every type 01_frd_ingest can
 # parse — mirrors frdsttm.frd_parsing.SUPPORTED_SUFFIXES (this module imports
 # no frdsttm code; 00_sharepoint_fetch mirrors the same set for the same
-# reason). The upload route stays .docx-only on purpose: uploads were a demo
-# convenience; the corpus is the real source and carries whatever SharePoint
-# holds.
+# reason).
 RUN_ALLOWED_EXTENSIONS = (".docx", ".pdf", ".md", ".markdown", ".txt")
 
 # Shown in the confirmation dialog before a billed run — calls/cost measured
-# on the two live E2E runs of 2026-08-07 (docs/LIVE_E2E_2026-08-07.md). The
-# wall-clock default differs by mode: ~35s as subprocesses, but a Jobs-API
-# run adds serverless task startup per stage, so the databricks default is
-# minutes, not seconds. Both remain env-overridable; re-measure on the first
-# deployed run and pin STTM_DEMO_EST_SECONDS in app.yaml.
+# on the two live E2E runs of 2026-08-07 (docs/LIVE_E2E_2026-08-07.md); the
+# wall clock is a Jobs-API run (task startup per stage): 213–259 s on the
+# two real-pair runs of 2026-08-27. Env-overridable.
 CALL_ESTIMATE = {
     "calls": int(os.environ.get("STTM_DEMO_EST_CALLS", "1")),
     "usd": float(os.environ.get("STTM_DEMO_EST_USD", "0.15")),
     "seconds": int(os.environ.get(
-        "STTM_DEMO_EST_SECONDS", "300" if IS_DATABRICKS_APP else "35")),
+        "STTM_DEMO_EST_SECONDS", "300")),
 }
-
-API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
-
-#: Providers that make a real, billed model call. "mock" is deliberately absent.
-_LIVE_PROVIDERS = ("anthropic", "databricks")
-
 
 def llm_provider() -> str:
     """The configured extraction provider, read at CALL time.
@@ -141,16 +125,6 @@ def llm_provider() -> str:
     """
     return os.environ.get("STTM_LLM_PROVIDER", "").strip().lower()
 
-
-def needs_anthropic_key() -> bool:
-    """Whether a LOCAL live run requires ANTHROPIC_API_KEY.
-
-    False under STTM_LLM_PROVIDER=databricks (2026-08-24): that path reads no
-    Anthropic key at all — the workspace credential authenticates against the
-    Foundation Model APIs. Without this, a perfectly runnable local
-    Databricks-provider run was refused in preflight for a key it never uses.
-    """
-    return llm_provider() != "databricks"
 
 # Replay discovery: exactly these artifact-set families, nothing else. The
 # same rule family as the sibling app's suffix-based scan — a set is a
@@ -163,20 +137,12 @@ STATUS_RUNNING = "running"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 
-_STAGES = (
-    ("01_frd_ingest.py", "Ingest the FRD"),
-    ("02_extract.py", "Extract mappings (AI model call)"),
-    ("03_contract_build.py", "Validate, ground & gate"),
-    ("04_sttm_render.py", "Render the STTM workbook"),
-)
-
-
 class RunConflictError(RuntimeError):
     """A live run is already active — caller's 409."""
 
 
 class RunPreflightError(ValueError):
-    """Bad start-run request (missing key, bad FRD path) — caller's 400."""
+    """Bad start-run request (local mode, bad FRD path) — caller's 400."""
 
 
 def _now() -> str:
@@ -194,40 +160,17 @@ def _rel(path: Path) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# API-key handling — presence boolean out, value only into the subprocess env
-# --------------------------------------------------------------------------- #
-def _api_key_from_dotenv() -> str | None:
-    """Minimal .env read for exactly one variable. The value is returned to
-    the (in-process) caller for subprocess-env injection only — never logged,
-    never serialized into any response."""
-    env_path = ROOT / ".env"
-    if not env_path.is_file():
-        return None
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line.startswith(f"{API_KEY_ENV_VAR}="):
-            value = line.split("=", 1)[1].strip().strip('"').strip("'")
-            return value or None
-    return None
-
-
-def api_key_present() -> bool:
-    return bool(os.environ.get(API_KEY_ENV_VAR, "").strip() or _api_key_from_dotenv())
-
-
-# --------------------------------------------------------------------------- #
 # Run state (in-memory, one active at a time — sibling's Run pattern)
 # --------------------------------------------------------------------------- #
 class Run:
     """State + console buffer for one live run. Thread-safe via _lock; every
     mutation bumps `seq` so SSE/pollers resume from a cursor.
 
-    Stage tracking is by subprocess boundary, not console-marker parsing:
-    unlike the sibling's single-CLI pipeline, each stage here IS its own
-    subprocess, so the boundaries are exact rather than inferred."""
+    Stages are the bundle job's tasks (jobs_runner.JOB_STAGES), mapped from
+    the Jobs API task states, so the boundaries are exact."""
 
     def __init__(self, doc_id: str, frd_path: Path, suffix: str, log_path: Path,
-                 stages=_STAGES, identity: dict | None = None):
+                 stages=None, identity: dict | None = None):
         self.id = suffix
         self.suffix = suffix
         self.doc_id = doc_id
@@ -250,6 +193,7 @@ class Run:
         # run starts — the honest "this is really running in Databricks"
         # pointer the progress view renders. Always None in local mode.
         self.run_page_url: str | None = None
+        stages = stages or jobs_runner.JOB_STAGES
         self.stages = [
             {"id": stage_id, "label": label, "status": "pending"}
             for stage_id, label in stages
@@ -333,15 +277,13 @@ def _new_suffix() -> str:
 
 
 def _validate_frd(frd_rel: str) -> Path:
-    """The FRD must be an existing parseable document inside the preloaded
-    (corpus) dir or the demo uploads dir — resolved and containment-checked so a crafted path
-    can never reach outside them (and never into fixtures/ or curated
-    locations)."""
+    """The FRD must be an existing parseable document inside the corpus dir
+    (frd_raw) — resolved and containment-checked so a crafted path can never
+    reach outside it (and never into fixtures/ or curated locations)."""
     candidate = (ROOT / frd_rel).resolve()
-    allowed = [PRELOADED_DIR.resolve(), UPLOADS_DIR.resolve()]
-    if not any(candidate.is_relative_to(root) for root in allowed):
+    if not candidate.is_relative_to(PRELOADED_DIR.resolve()):
         raise RunPreflightError(
-            "FRD path must be inside the preloaded documents or demo uploads directory"
+            "FRD path must be inside the corpus documents directory"
         )
     if candidate.suffix.lower() not in RUN_ALLOWED_EXTENSIONS:
         raise RunPreflightError(
@@ -349,40 +291,6 @@ def _validate_frd(frd_rel: str) -> Path:
     if not candidate.is_file():
         raise RunPreflightError(f"FRD file not found: {frd_rel}")
     return candidate
-
-
-def _subprocess_env(suffix: str, raw_volume: str, identity: dict | None = None,
-                    run_label: str | None = None) -> dict:
-    """The full insulation contract in one place: every output knob embeds
-    the demo suffix; mock is stripped; the provider is pinned to anthropic;
-    the API key is injected (from env or .env) without ever being logged.
-    `identity` / `run_label` become TRIGGERED_BY / RUN_LABEL — the env-var
-    twins of the `triggered_by` / `run_label` job parameters — so 04 stamps
-    the same provenance on the runs table in both modes."""
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
-    env["SCHEMA"] = f"sttm_agent_{suffix}"
-    env["OUT_VOLUME"] = f"sttm_out_{suffix}"
-    env["PREVIEW_VOLUME"] = f"sttm_out_{suffix}"
-    env["RAW_VOLUME"] = raw_volume
-    # The provider is pinned to a LIVE one so that a stray STTM_MOCK_EXTRACTION
-    # (or STTM_LLM_PROVIDER=mock) can never make a billed-looking run quietly
-    # return hand-authored specs — the worst failure to have in front of a
-    # client. Pinning it to "anthropic" OUTRIGHT, though, also discarded a
-    # deliberate databricks configuration, and the run then died in 02 asking
-    # for an ANTHROPIC_API_KEY it does not need: the Foundation Model APIs
-    # authenticate with the workspace credential. Honour a configured live
-    # provider; fall back to anthropic only when none is set.
-    _configured = llm_provider()
-    env["STTM_LLM_PROVIDER"] = _configured if _configured in _LIVE_PROVIDERS else "anthropic"
-    env.pop("STTM_MOCK_EXTRACTION", None)
-    env["TRIGGERED_BY"] = (identity or {}).get("actor") or ident.ACTOR_UNKNOWN
-    env["RUN_LABEL"] = run_label or suffix
-    if env["STTM_LLM_PROVIDER"] == "anthropic" and not env.get(API_KEY_ENV_VAR, "").strip():
-        key = _api_key_from_dotenv()
-        if key:
-            env[API_KEY_ENV_VAR] = key
-    return env
 
 
 def run_manifest(run: Run) -> dict:
@@ -439,55 +347,12 @@ def _record_run_finished(run: Run) -> None:
         run._emit("console", f"WARNING: audit event run.finished not written — {exc}")
 
 
-def _run_worker(run: Run, raw_volume: str) -> None:
-    global _active_run_id
-    try:
-        run.log_path.parent.mkdir(parents=True, exist_ok=True)
-        env = _subprocess_env(run.suffix, raw_volume, identity=run.identity, run_label=run.id)
-        with run.log_path.open("w", encoding="utf-8") as log:
-            for fname, _label in _STAGES:
-                cmd = [sys.executable, str(ROOT / "notebooks" / fname)]
-                run._set_stage(fname, "running")
-                run._emit("console", f"$ python notebooks/{fname}")
-                log.write(f"$ python notebooks/{fname}\n")
-                proc = subprocess.Popen(
-                    cmd, cwd=str(ROOT), env=env,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                )
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    line = line.rstrip("\n")
-                    log.write(line + "\n")
-                    log.flush()
-                    run._emit("console", line)
-                returncode = proc.wait(timeout=STAGE_TIMEOUT_SECONDS)
-                if returncode != 0:
-                    run._set_stage(fname, "failed")
-                    run._finish(
-                        STATUS_FAILED,
-                        f"{fname} exited with code {returncode} — see console log "
-                        f"({_rel(run.log_path)})",
-                    )
-                    return
-                run._set_stage(fname, "done")
-        run._finish(STATUS_DONE)
-    except Exception as exc:  # noqa: BLE001 — a stuck "running" spinner is the one outcome to prevent
-        run._finish(STATUS_FAILED, f"{type(exc).__name__}: {exc}")
-    finally:
-        # Release the single-run slot FIRST (terminal status == slot free is
-        # the contract pollers rely on), then persist the outcome.
-        with _active_lock:
-            _active_run_id = None
-        _write_run_manifest(run)
-        _record_run_finished(run)
-
-
 def _run_worker_databricks(run: Run) -> None:
     """Databricks-mode worker: stage the FRD to the run's UC raw dir,
     trigger the bundle job, poll it to a terminal state, then mirror the
     run's UC out-directory back so the results machinery works unchanged.
     Every step is jobs_runner's; this function only owns the Run lifecycle
-    (same try/finally shape as the subprocess worker above)."""
+    """
     global _active_run_id
     w = None
     try:
@@ -571,15 +436,13 @@ def start_run(frd_rel: str, identity: dict | None = None) -> Run:
 
     frd_path = _validate_frd(frd_rel)
     _check_eligible(frd_path.stem)
-    # In databricks mode the Anthropic key lives in the workspace secret
-    # scope and is checked by the job's own extract task (which fails loudly
-    # without it); the app process neither has nor needs the key.
-    if not IS_DATABRICKS_APP and needs_anthropic_key() and not api_key_present():
+    if not IS_DATABRICKS_APP:
         raise RunPreflightError(
-            f"{API_KEY_ENV_VAR} is not set (environment or repo .env). A live run "
-            "makes billed Anthropic API calls and cannot start without it. "
-            "(Set STTM_LLM_PROVIDER=databricks to use this workspace's "
-            "Databricks-served Claude instead, which needs no Anthropic key.)"
+            "Runs execute in the Databricks workspace (the bundle job "
+            "frd_sttm_pipeline, triggered by the deployed App). This backend is "
+            "in local mode (STTM_APP_MODE=local), which serves the corpus, "
+            "replay and review routes only — the local subprocess runner was "
+            "removed on 2026-08-27."
         )
 
     with _active_lock:
@@ -590,35 +453,16 @@ def start_run(frd_rel: str, identity: dict | None = None) -> Run:
             )
         suffix = _new_suffix()
         log_path = LOGS_DIR / f"{suffix}.log"
-        if IS_DATABRICKS_APP:
-            run = Run(frd_path.stem, frd_path, suffix, log_path,
-                      stages=jobs_runner.JOB_STAGES, identity=identity)
-        else:
-            # Stage the chosen document into a per-run raw dir: 01_frd_ingest
-            # ingests its whole RAW_VOLUME, so the run must see exactly one
-            # file — and the preloaded/frd_raw dir is never handed to a run
-            # directly. (The databricks worker does the volume-side twin of
-            # this staging itself.)
-            raw_volume = f"{RAW_STAGING_VOLUME}/{suffix}"
-            raw_dir = LOCAL_ROOT / raw_volume
-            raw_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(frd_path, raw_dir / frd_path.name)
-            run = Run(frd_path.stem, frd_path, suffix, log_path, identity=identity)
-        # Recorded BEFORE the worker starts: if the audit write fails in
-        # databricks mode the run does not start (fail-closed — see audit.py).
-        try:
-            audit.record("run.started", run.identity, run_id=run.id, doc_id=run.doc_id,
-                         artifact_set=run.artifact_set, frd_file=frd_path.name,
-                         frd_sha256=run.frd_sha256, frd_path=_rel(frd_path))
-        except audit.AuditWriteError:
-            raise
+        run = Run(frd_path.stem, frd_path, suffix, log_path, identity=identity)
+        # Recorded BEFORE the worker starts: if the audit write fails the run
+        # does not start (fail-closed — see audit.py).
+        audit.record("run.started", run.identity, run_id=run.id, doc_id=run.doc_id,
+                     artifact_set=run.artifact_set, frd_file=frd_path.name,
+                     frd_sha256=run.frd_sha256, frd_path=_rel(frd_path))
         _runs[run.id] = run
         _active_run_id = run.id
 
-    if IS_DATABRICKS_APP:
-        threading.Thread(target=_run_worker_databricks, args=(run,), daemon=True).start()
-    else:
-        threading.Thread(target=_run_worker, args=(run, raw_volume), daemon=True).start()
+    threading.Thread(target=_run_worker_databricks, args=(run,), daemon=True).start()
     return run
 
 
@@ -635,7 +479,21 @@ def _check_set_id(set_id: str) -> Path:
             f"not a demo artifact set: {set_id!r} (expected sttm_out_demo_* "
             f"or sttm_out_live_e2e_*)"
         )
-    return LOCAL_ROOT / set_id
+    path = LOCAL_ROOT / set_id
+    if IS_DATABRICKS_APP and not path.is_dir():
+        # A bookmarked ?set=&doc= after an App restart (found 2026-08-27):
+        # the durable copy is in the UC volume but the container is empty
+        # until the LIST route rehydrates every set (~1 min for 36), so a
+        # direct results/workbook/review request was a 404 and the screen
+        # blank. Fetch just this one set. An unknown set has no artifacts
+        # and the downloader raises JobRunnerError; fall through so the
+        # caller's FileNotFoundError still becomes the honest 404.
+        try:
+            jobs_runner.download_run_artifacts(
+                jobs_runner._workspace_client(), _suffix_of(set_id), path)
+        except jobs_runner.JobRunnerError:
+            pass
+    return path
 
 
 _SAFE_DOC = re.compile(r"^[A-Za-z0-9._ -]+$")
@@ -844,10 +702,6 @@ def load_results(set_id: str, doc_id: str) -> dict:
             "status": v2.get("status") or v1.get("status"),
             "n_feeds": len(v2.get("feeds", []) or feeds),
         },
-        # Template decision (2026-08-22, docs/TEMPLATE_ARCHITECTURE.md):
-        # written by 04 into the v2 contract's provenance. None for artifact
-        # sets rendered before the template architecture existed.
-        "template": (v2.get("_provenance") or {}).get("template_decision"),
         "eval": {
             "available": totals is not None,
             "matched_cells": totals[0] if totals else None,
@@ -883,10 +737,10 @@ def workbook_path(set_id: str, doc_id: str) -> Path:
 # ambiguity id) and a RE-RENDER re-runs stage 04 only, which applies them
 # (`apply_human_resolutions`) ahead of every automatic path and rewrites the
 # v2 contract + workbook + report. No re-extraction, hence no second billed
-# call. Local mode: 04 as a subprocess with the run's own insulation env.
-# Databricks mode: the edited contract is uploaded to the run's UC out dir
-# and the render-only bundle job `frd_sttm_render` runs against the same
-# suffix (resources/frd_sttm_render_job.yml); artifacts are mirrored back.
+# call. The edited contract is uploaded to the run's UC out dir and the
+# render-only bundle job `frd_sttm_render` runs against the same suffix
+# (resources/frd_sttm_render_job.yml); artifacts are mirrored back. Local
+# mode refuses (400) — the subprocess re-render was removed 2026-08-27.
 
 def _contract_v1_path(set_id: str, doc_id: str) -> Path:
     return _check_set_id(set_id) / "contracts" / f"{_check_doc_id(doc_id)}.contract.json"
@@ -927,39 +781,20 @@ def _rerender_worker(set_id: str, doc_id: str, identity: dict | None = None) -> 
     identity = identity or {"actor": ident.ACTOR_UNKNOWN, "source": ident.SOURCE_UNKNOWN}
     job_run_id = None
     try:
-        if IS_DATABRICKS_APP:
-            w = jobs_runner._workspace_client()
-            jobs_runner.upload_contract(w, suffix, doc_id,
-                                        _contract_v1_path(set_id, doc_id).read_bytes())
-            job_id = jobs_runner.resolve_render_job_id(w)
-            run_id = jobs_runner.start_render_job(w, job_id, suffix,
-                                                  triggered_by=identity.get("actor"))
-            job_run_id = run_id
-            try:
-                url = w.jobs.get_run(run_id).run_page_url
-            except Exception:  # noqa: BLE001 — the link is a convenience
-                url = None
-            _set_rerender(set_id, run_page_url=url)
-            jobs_runner.wait_for_run(w, run_id)
-            jobs_runner.download_run_artifacts(w, suffix, LOCAL_ROOT / set_id)
-        else:
-            env = _subprocess_env(suffix, f"{RAW_STAGING_VOLUME}/{suffix}",
-                                  identity=identity, run_label=f"{suffix}:rerender")
-            log_path = LOGS_DIR / f"{suffix}.rerender.log"
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            with log_path.open("a", encoding="utf-8") as log:
-                proc = subprocess.Popen(
-                    [sys.executable, str(ROOT / "notebooks" / "04_sttm_render.py")],
-                    cwd=str(ROOT), env=env,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                )
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    log.write(line)
-                returncode = proc.wait(timeout=STAGE_TIMEOUT_SECONDS)
-            if returncode != 0:
-                raise RuntimeError(
-                    f"04_sttm_render.py exited with code {returncode} — see {_rel(log_path)}")
+        w = jobs_runner._workspace_client()
+        jobs_runner.upload_contract(w, suffix, doc_id,
+                                    _contract_v1_path(set_id, doc_id).read_bytes())
+        job_id = jobs_runner.resolve_render_job_id(w)
+        run_id = jobs_runner.start_render_job(w, job_id, suffix,
+                                              triggered_by=identity.get("actor"))
+        job_run_id = run_id
+        try:
+            url = w.jobs.get_run(run_id).run_page_url
+        except Exception:  # noqa: BLE001 — the link is a convenience
+            url = None
+        _set_rerender(set_id, run_page_url=url)
+        jobs_runner.wait_for_run(w, run_id)
+        jobs_runner.download_run_artifacts(w, suffix, LOCAL_ROOT / set_id)
         _set_rerender(set_id, state="done", finished_at=_now())
     except Exception as exc:  # noqa: BLE001 — a stuck 'running' is the one outcome to prevent
         _set_rerender(set_id, state="failed", finished_at=_now(),
@@ -984,74 +819,10 @@ def demo_config() -> dict:
         # STTM_LLM_PROVIDER=databricks this is "databricks", and reporting
         # "anthropic" there would be simply untrue.
         "provider": llm_provider() or "anthropic",
-        # "local" = subprocess runs gated on a local API key; "databricks" =
-        # Jobs-API runs, where the key lives in the workspace secret scope so
-        # api_key_present is not a readiness signal (the frontend gates on
-        # mode, and a missing secret fails loudly inside the extract task).
+        # Only "databricks" can start a run; the frontend gates on this.
         "mode": APP_MODE,
         "call_estimate": CALL_ESTIMATE,
-        "api_key_present": api_key_present(),
         "golden_doc_id": GOLDEN_DOC_ID,
-        "upload_max_bytes": UPLOAD_MAX_BYTES,
-    }
-
-
-@router.get("/api/demo/documents")
-def demo_documents() -> dict:
-    """Selectable FRDs: the preloaded demo pair member plus demo uploads.
-    Paths are repo-root-relative — the same form POST /api/demo/runs takes."""
-    docs = []
-    for source, directory in (("preloaded", PRELOADED_DIR), ("upload", UPLOADS_DIR)):
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.glob("*.docx")):
-            docs.append({
-                "path": _rel(path),
-                "name": path.name,
-                "doc_id": path.stem,
-                "source": source,
-                "is_golden": path.stem == GOLDEN_DOC_ID,
-                "size_bytes": path.stat().st_size,
-            })
-    return {"documents": docs}
-
-
-_UPLOAD_NAME = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-@router.post("/api/demo/uploads")
-async def demo_upload(request: Request, file: UploadFile) -> dict:
-    """Accept a .docx FRD into the gitignored demo uploads dir. Prototype-
-    scoped: synthetic or anonymized documents only (the UI states this next
-    to the control; enforced shape-wise here, policy-wise by the operator)."""
-    name = Path(file.filename or "").name
-    if not name:
-        raise HTTPException(status_code=400, detail="upload has no filename")
-    if Path(name).suffix.lower() not in UPLOAD_ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail="only .docx FRDs are accepted — 01_frd_ingest parses docx only",
-        )
-    content = await file.read()
-    if len(content) > UPLOAD_MAX_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"upload exceeds the {UPLOAD_MAX_BYTES} byte limit",
-        )
-    safe = _UPLOAD_NAME.sub("_", name)
-    who = ident.resolve_identity(request)
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    dest = UPLOADS_DIR / safe
-    dest.write_bytes(content)
-    _audit_or_502("upload.received", who, file=safe, doc_id=dest.stem,
-                  size_bytes=len(content), sha256=audit.sha256_of(dest))
-    return {
-        "path": _rel(dest),
-        "name": safe,
-        "doc_id": dest.stem,
-        "source": "upload",
-        "is_golden": dest.stem == GOLDEN_DOC_ID,
-        "size_bytes": len(content),
     }
 
 
@@ -1311,6 +1082,12 @@ def demo_rerender(set_id: str, doc: str, request: Request) -> dict:
     """Fold the recorded resolutions into the STTM: re-run stage 04 only
     (no model call, nothing billed) and return 202; poll GET .../review."""
     who = ident.resolve_identity(request)
+    if not IS_DATABRICKS_APP:
+        raise HTTPException(
+            status_code=400,
+            detail="Re-render runs the frd_sttm_render job in the Databricks "
+                   "workspace; this backend is in local mode (the local "
+                   "subprocess re-render was removed on 2026-08-27).")
     try:
         _contract, _items = _review_items(set_id, doc)
     except ArtifactRequestError as exc:
