@@ -31,7 +31,9 @@ __pycache__/
 # review_app_react/frontend build artifacts -- rebuilt via `npm run build`
 # before any Databricks App deploy (see review_app_react/app.yaml)
 review_app_react/frontend/node_modules/
-review_app_react/frontend/dist/
+# review_app_react/frontend/dist/ is TRACKED as of 2026-08-27 — see the note
+# in review_app_react/frontend/.gitignore. The Databricks workspace folder is a
+# Git folder with no build step, and the backend serves this directory.
 
 # ---------------------------------------------------------------------------
 # 2026-08-22: the anonymized demo pair (demo_frd.docx / demo_sttm.xlsx), the
