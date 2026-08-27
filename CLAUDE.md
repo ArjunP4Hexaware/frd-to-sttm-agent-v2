@@ -1231,6 +1231,45 @@ amalgam / freeform and still writes `_provenance.template_decision` onto
 the v2 contract; only the ranked-score dump a reviewer never acted on is
 gone. The one-line mode summary in the phase5 status line stays.
 
+## CORRECT, NOT SIMILAR — the functional check (Arjun, 2026-08-27 evening)
+
+"Don't just test whether the output resembles the approved STTM; test
+whether it is CORRECT. If it is correct, different wording is fine; if
+it is functionally wrong, that is the problem." 04's golden-pair eval is
+a positional string match on target cells (`evaluate_against_reference`),
+so a synonym and a wrong table cost the same. `scripts/functional_eval.py`
+joins output to reference by **(table, source column)** and classifies
+every difference: STRUCTURAL (missing/extra column, wrong table/schema,
+different type FAMILY, nullability, rule on the wrong row), NAMING (right
+column, different name), COSMETIC (wording, spelling, case). Run on the
+2026-08-27 workspace outputs:
+
+- **SD (411 rows):** every column present in the right table/schema/
+  catalog, 12/12 rules landed, 0 PHI differences. Two real findings:
+  (1) **3 columns carry CAQH's vocabulary** — `zip_code →
+  TPL_RECIP_ZIP_CODE` (two tables), `member_id → TPL_MEME_ID`. The term
+  catalog applied a `prefixed_upper_snake` rename to an `as_is` source;
+  these ARE the "388/391" misses measured earlier. FIX TO MAKE: skip the
+  catalog lookup when `infer_column_convention` says `as_is`. (2) **147
+  `_pct` columns typed `String` in standard where the approved workbook
+  has `Decimal(10,2)`** — the approved workbook promoted from the SAMPLE
+  (documented 2026-08-25), the client's own coding standard says promote
+  from the SOURCE type, and the stand-in VDD says String. Not an agent
+  error; a real vendor type, or a `_pct` NAME rule, resolves it.
+- **CAQH (115 + 10 audit rows):** structurally right everywhere; 35/35
+  rules placed (by column where one is named, feed-level cell otherwise —
+  the script's first text check called 5 "missing" until
+  `_provenance.rule_placement` showed them on the Payer Area / Member ID
+  rows); the 10 audit rows are exactly the documented convention (the
+  reference parser does not mark them in the single-sheet dialect, so
+  they show as "extra"); **20 int-coded columns promoted to `Int`** per
+  the client's STATED standard where the approved workbook kept `String`
+  — the agent follows the written standard, the workbook does not,
+  reviewer's call; and the known 91 target-name divergences (the
+  warehouse vocabulary gap).
+- Neither output has a wrong table, a lost column, a lost rule or a
+  wrong PHI flag.
+
 ## SAY "SOURCE", NOT "FEED" — everywhere a person reads (Venu via Arjun, 2026-08-27)
 
 The unit the code calls `Feed` (one source file pattern with its own
