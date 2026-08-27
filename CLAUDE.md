@@ -518,8 +518,10 @@ templates/DICT_TEMPLATE.xlsx   the blank vendor data dictionary issued to a
                         vendor, built by scripts/build_dict_template.py. FILES
                         sheet + one field sheet per file; the first 9 columns of
                         each are frozen so ONE parser reads both this and the
-                        worked example. Gitignored by `.gitignore` line 2
-                        (`*.xlsx`) — regenerate it, never hunt for it in git.
+                        worked example. TRACKED since 2026-08-27 (a `.gitignore`
+                        negation — it is ours, synthetic example rows only, and
+                        the Hexaware laptop needs it without a rebuild); after
+                        `scripts/build_dict_template.py`, commit the result.
                         **NOT VERSIONED (Arjun, 2026-08-27):** one file name,
                         no `_vN.N` suffix, no version in the README title, no
                         template change log inside the workbook — git history

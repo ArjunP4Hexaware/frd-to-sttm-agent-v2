@@ -60,3 +60,9 @@ src/*.egg-info/
 # Databricks CLI state dropped wherever it is run from (2026-08-27: appeared in
 # review_app_react/frontend/ after running the CLI there). Never repo content.
 .databricks/
+
+# The BLANK vendor data dictionary template is ours, not a client document
+# (synthetic example rows only), and the Hexaware laptop needs it without a
+# rebuild (Arjun, 2026-08-27). The *.xlsx rule above still covers everything
+# else. Regenerate with scripts/build_dict_template.py; commit the result.
+!templates/DICT_TEMPLATE.xlsx
