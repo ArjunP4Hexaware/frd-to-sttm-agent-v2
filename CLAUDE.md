@@ -1688,7 +1688,10 @@ and PUSHED.** Commit `5f43813` ("Add sample_documents folder") on
 `staging` — and only `staging`, as of 2026-08-25; `main` / `deploy-demo`
 do not contain it — added the two real FRD/STTM pairs under
 `sample_documents/`, and `origin/staging` has them. That is the exact
-material the 2026-08-23 history purge removed. **Purge DEFERRED to Friday
+material the 2026-08-23 history purge removed. **The SD vendor dictionary joined the folder 2026-08-27 (Arjun: track it
+and push) — `sample_documents/VDD_Medicare Expansion-MIDS - Socially
+Determined.xlsx`, derived from the approved STTM, purged with the rest.**
+**Purge DEFERRED to Friday
 2026-08-28 (Arjun, 2026-08-25): Arjun was told these two pairs contain no
 sensitive material, so they stay tracked this week as the working
 fixtures.** Still do it Friday — the no-client-documents rule is about
