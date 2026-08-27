@@ -16,12 +16,16 @@
 # This script removes that failure mode by making build-commit-push-pull one
 # command. Run it instead of `git push` whenever the UI changed.
 #
-# ON THE HASH CHURN, so nobody "fixes" it: Vite renames its bundles on every
-# build even when the output is byte-identical (verified 2026-08-27 — the
-# sha256 of the JS matched across two builds while the filename changed). So
-# this script commits the build ONLY when the bundle CONTENT actually differs,
-# and otherwise restores the committed one. Without that, every deploy would
-# add a meaningless commit.
+# ON THE CHURN, so nobody "fixes" it the wrong way. Two separate effects,
+# measured 2026-08-27:
+#   * Vite RENAMES its bundles on every build even when the bytes are
+#     identical — the JS sha256 matched across two builds under two names.
+#   * The Tailwind CSS output is NOT byte-deterministic between builds, so its
+#     content really does differ each time.
+# This script therefore compares bundle CONTENT rather than filenames, and
+# commits only when content moved. In practice the CSS makes that true most
+# runs, so expect a rebuild commit per deploy — that is honest (something did
+# change) rather than a filename-only no-op, which is what the guard prevents.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

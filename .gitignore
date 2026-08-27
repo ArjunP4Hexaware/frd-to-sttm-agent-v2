@@ -51,3 +51,8 @@ review_app_react/frontend/node_modules/
 src/*.egg-info/
 .pytest_cache/
 
+# LibreOffice/Excel lock files. `open`ing a tracked-directory .xlsx leaves one
+# behind and it makes an otherwise-clean tree look dirty, which the workspace
+# deploy script (scripts/deploy_to_workspace.sh) then refuses to push on.
+.~lock.*#
+~$*
