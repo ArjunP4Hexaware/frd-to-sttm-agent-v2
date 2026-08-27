@@ -119,6 +119,13 @@ env:
   # prerequisites comment above.
   - name: "STTM_AUDIT_VOLUME"
     value: "sttm_audit"
+  # No SharePoint tenant is wired in this workspace (2026-08-27): the
+  # start-up sync would trigger the sync JOB, which fails on the missing
+  # tenant config and paints a red "Sync failed" box on the picker's first
+  # screen. The corpus is already in the volumes; "Rebuild index" re-pairs
+  # from them. Set to "1" once a tenant is configured.
+  - name: "STTM_SYNC_ON_STARTUP"
+    value: "0"
   # - name: "STTM_REQUIRE_IDENTITY"
   #   value: "0"                          # operator override ONLY
   # --- SharePoint (uncomment and fill once the Entra ID app registration
