@@ -74,7 +74,7 @@ def s01_why(prs):
              "other not at all — by design, not by neglect. Everything else the agent brings itself.")
     w, gap = 5.75, 0.33
     specs = [
-        (BLUE, TINT_BLUE, "document 1 · authored by ACFC", "The FRD", "the feed-level frame",
+        (BLUE, TINT_BLUE, "document 1 · authored by ACFC", "The FRD", "the source-level frame",
          ["File name pattern and format", "Delimiter, header row, encoding",
           "Landing folder in ADLS", "Target schema + table, per layer",
           "Load strategy, per layer", "DQ, reject and recycle rules"],
@@ -113,7 +113,7 @@ def s01_why(prs):
            ("  are versioned contracts the agent ships with, hashed into every run. So is the ", {}),
            ("term catalog", {"bold": True, "color": NAVY}),
            (" — the warehouse's own column vocabulary, harvested from approved STTMs when they "
-            "sync. Nobody attaches either to a feed, and ", {}),
+            "sync. Nobody attaches either to a source, and ", {}),
            ("a run never opens an STTM", {"bold": True, "color": RED}),
            (".", {})]],
          size=10, color=SLATE, font=SANS, line_spacing=1.18)
@@ -125,9 +125,9 @@ def s01_why(prs):
          size=15, color=NAVY, font=SANS, bold=True, spacing=-0.2)
     text(s, L + 0.32, yy + 0.54, CW - 0.7, 0.58,
          [[("Ask the vendor for ", {"color": SLATE}),
-           ("VDD_<feed>.xlsx", {"font": MONO, "bold": True, "color": BLUE}),
+           ("VDD_<source>.xlsx", {"font": MONO, "bold": True, "color": BLUE}),
            (", put it beside ", {"color": SLATE}),
-           ("FRD_<feed>.docx", {"font": MONO, "bold": True, "color": BLUE}),
+           ("FRD_<source>.docx", {"font": MONO, "bold": True, "color": BLUE}),
            (" in the library, and name it in the FRD row that already exists for it: ", {"color": SLATE}),
            ("Structural Metadata › Source Data Dictionary", {"font": MONO, "bold": True, "color": NAVY}),
            (". No new section, no new field, no re-approval of the template.", {"color": SLATE})]],
@@ -144,7 +144,7 @@ reference; no prompt closes it, and no model should be asked to invent 410 colum
 names and descriptions.
 
 IF A VENDOR CANNOT SUPPLY ONE, that is a real answer too. The agent renders the
-feed-level frame and raises one gated question naming the file whose columns it
+source-level frame and raises one gated question naming the file whose columns it
 could not ground - a workbook with a visible gap, never one with invented names.
 
 THE STANDARDS ARE NOT A PER-RUN INPUT. They are versioned config in the agent
@@ -179,13 +179,13 @@ def s02_frd(prs):
          [("3 / 3", {"color": BLUE})], "One of the four sanctioned strategies"],
         ["Load Strategy STD", "How the standard table is loaded",
          [("3 / 3", {"color": BLUE})], "“Upsert” = Update Else Insert; both accepted"],
-        ["Load Strategy Consumption", "Out of scope for an ingest feed",
+        ["Load Strategy Consumption", "Out of scope for an ingest source",
          [("1 / 3", {"color": MUTED})], "“Not Applicable” beats a blank"],
         ["Archive Schedule", "Retention note carried onto the workbook",
          [("1 / 3", {"color": MUTED})], "State files and data separately"],
         ["Source Data Dictionary",
          [("The vendor dictionary the source side is built from", {"bold": True, "color": NAVY})],
-         [("0 / 3", {"color": RED})], [("Name the VDD_<feed>.xlsx here", {"font": MONO, **G})]],
+         [("0 / 3", {"color": RED})], [("Name the VDD_<source>.xlsx here", {"font": MONO, **G})]],
         ["ADLS Location", "Where the landing-zone check looks for the file",
          [("2 / 3", {"color": BLUE})],
          [("mftlanding/inbound/<domain>/<sub>/<vendor>", {"font": MONO, "size": 8.8})]],
@@ -230,7 +230,7 @@ rows. Vendor Metadata > Vendor Name and Abbreviation.
 def s03_vdd(prs):
     s = new_slide(prs)
     y = head(s, "the VDD half", "What the Vendor Data Dictionary must contain",
-             "One Excel workbook per feed, two kinds of sheet. Nothing in it is an ACFC decision — "
+             "One Excel workbook per source, two kinds of sheet. Nothing in it is an ACFC decision — "
              "every cell is something the vendor already knows about its own file.")
     w, gap = 5.75, 0.33
 
@@ -239,7 +239,7 @@ def s03_vdd(prs):
     panel_title(s, L, y, w, "FILES — one row per delivered file",
                 kicker="sheet 1 · usually 1–5 rows")
     files = [
-        ("File Name Pattern", "matches a delivered file to this feed"),
+        ("File Name Pattern", "matches a delivered file to this source"),
         ("File Title", "the human name; names the sheet it maps into"),
         ("Format", "delimited · fixed-width · csv · json"),
         ("Delimiter", "the literal character"),
@@ -310,7 +310,7 @@ as the source of the mapping. Given the FRD's ADLS Location, code (not the model
 the rows are PHI) confirms the field count, the delimiter and the encoding, flags a
 column the dictionary missed and one the file does not have. It fills NO names for
 a headerless file and no meaning for any file.
-The worked case: one real feed is a headerless, pipe-delimited file carrying three
+The worked case: one real source is a headerless, pipe-delimited file carrying three
 record types in one stream. Reading it yields "101 fields in the detail record" and
 not one field name.
 
@@ -322,16 +322,16 @@ frame (stage catalog/schema/table, stage column+datatype, standard schema/table,
 standard datatype) - and exactly one that is neither: the TARGET COLUMN NAME.
 
 THE TARGET COLUMN NAME, MEASURED - and this is the one cell neither document
-supplies. The agent decides from the FRD ALONE whether a feed renames: if the
+supplies. The agent decides from the FRD ALONE whether a source renames: if the
 sub-domain appears in the target table names, the columns carry it too. That holds
-on both real feeds (CAQH renames 115/115, SD 4/411).
+on both real sources (CAQH renames 115/115, SD 4/411).
 
-What the reviewer then receives, on the renaming feed: 22 of 115 exact, 63 more
+What the reviewer then receives, on the renaming source: 22 of 115 exact, 63 more
 recognisable renames - so 85 of 115 (74%) are a NAME EDIT, not a rebuild. Mean
 similarity 0.79. TPL_FILE_SEQUENCE_NUMBER -> TPL_FILE_SEQ_NO is the shape of it;
 the row, table, position and source field are already correct. One "miss",
 TPL_DATA_SET_ID vs the approved TPL_DATE_SET_ID, is a typo in the client's own
-workbook. On a feed that does not rename, the agent is at 388/391.
+workbook. On a source that does not rename, the agent is at 388/391.
 
 Asking a model to GENERATE the name scored 0 of 115 - and marked 71 of those wrong
 answers high confidence. Given a real catalog to match against it scored 95/101

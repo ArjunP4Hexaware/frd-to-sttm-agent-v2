@@ -112,7 +112,7 @@ export const ITEM_RULE_LABEL = "The FRD says";
 export const ITEM_KIND_EXPLANATION: Record<string, string> = {
   attribution:
     "This rule was found in the document, but the document doesn't clearly say which " +
-    "incoming feed it applies to. Choose the feed it belongs to, or 'None of these'.",
+    "incoming source it applies to. Choose the source it belongs to, or 'None of these'.",
   disagreement:
     "Two readings of the document produced conflicting values for this field. " +
     "Choose the one that is correct, or 'None of these'.",
@@ -263,7 +263,7 @@ export const AGENT_NAME = "FRD to STTM Agent";
  * and a fabricated tile in front of a client is worse than a missing one.
  */
 export const METRIC_LABEL_DOCUMENTS = "Documents";
-export const METRIC_LABEL_FEEDS = "Feeds mapped";
+export const METRIC_LABEL_FEEDS = "Sources mapped";
 export const METRIC_LABEL_ITEMS = "Items needing review";
 export const METRIC_LABEL_REVIEWED = "Reviewed";
 

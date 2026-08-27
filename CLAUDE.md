@@ -1231,6 +1231,23 @@ amalgam / freeform and still writes `_provenance.template_decision` onto
 the v2 contract; only the ranked-score dump a reviewer never acted on is
 gone. The one-line mode summary in the phase5 status line stays.
 
+## SAY "SOURCE", NOT "FEED" — everywhere a person reads (Venu via Arjun, 2026-08-27)
+
+The unit the code calls `Feed` (one source file pattern with its own
+target tables) is a **source** in every word a person reads: the app's UI
+strings, the three decks (regenerated from their scripts), the screens
+catalogue script, the stage-03 report header (`sources: N`), 04's
+provenance notes, the artifacts. NOT renamed, deliberately: `Feed`,
+`feed_name`, `feeds`, `n_feeds`, the contract JSON and its
+`contract_name` value (CodeGen consumes `feeds` across the boundary), and
+the gated AMBIGUITY texts ("rule applied to 3 feeds…") — ambiguity ids
+are hashes of kind+text+context and the join key for saved resolutions,
+so rewording them would orphan every stored decision. Collision to watch:
+`source_system` means the VENDOR; say "vendor" for that, never "source
+system", so the two do not blur. `context/FRD_to_STTM_Agent_Screens.html`
+still carries the old word — it embeds real captures and needs a
+`build_screens_doc.py <shots dir>` run to regenerate.
+
 ## LOCAL RUN PATH REMOVED (Arjun, 2026-08-27)
 
 **"We can just run it from the Hexaware environment instead."** The review

@@ -171,7 +171,7 @@ function MappingSetup({
 
       <div>
         <p className="eyebrow-blue mb-1">Select FRD</p>
-        <h2 className="acfc-section-title text-xl mb-1.5">Pick the feed to map</h2>
+        <h2 className="acfc-section-title text-xl mb-1.5">Pick the source to map</h2>
         <p className="text-sm text-muted-foreground max-w-3xl">
           The list below is what the last sync landed in the corpus. An FRD can be drafted only when it
           has a matching vendor data dictionary and does not already have an approved STTM — everything
@@ -238,9 +238,9 @@ function ExistingSttmView({ frd, onBack }: { frd: CorpusFrd; onBack: () => void 
                 </>
               ) : (
                 <>
-                  Nothing grounds the source columns for this feed. A regenerated draft would render the
+                  Nothing grounds the source columns for this source. A regenerated draft would render the
                   frame and gate every source column rather than invent one. Ask the vendor for{" "}
-                  <span className="mono-id">DICT_&lt;feed&gt;.xlsx</span> and name it in the FRD’s
+                  <span className="mono-id">DICT_&lt;source&gt;.xlsx</span> and name it in the FRD’s
                   Structural Metadata › Source Data Dictionary row.
                 </>
               )}

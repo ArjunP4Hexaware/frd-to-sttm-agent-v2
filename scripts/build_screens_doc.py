@@ -60,7 +60,7 @@ SCREENS = [
      "GET /api/demo/corpus → built:false"),
     (15, "picker", "1 · Select FRD",
      "The picker — grouped by what each FRD is waiting on",
-     "The normal state, shown here against the two real client feeds. THE RULE "
+     "The normal state, shown here against the two real client sources. THE RULE "
      "(2026-08-27): an FRD may be generated only when it has a matching vendor data "
      "dictionary AND does not already have an approved STTM. Everything else is still "
      "LISTED, with what it is waiting on — hiding a document would leave a reviewer "
@@ -80,7 +80,7 @@ SCREENS = [
      "The picker — full list and the sync controls",
      "The same screen scrolled. Both groups, and the controls that refresh the corpus.",
      ["The mapped row shows its pairing (exact name match here) AND a red “no vendor "
-      "dictionary” — both facts are true of that feed and both are shown.",
+      "dictionary” — both facts are true of that source and both are shown.",
       "“Sync from SharePoint now” is disabled when no document source is configured on the "
       "backend — the button says why on hover rather than failing on click.",
       "The index timestamp is always visible, so nobody wonders how fresh the list is."],
@@ -107,7 +107,7 @@ SCREENS = [
     (10, "mapped", "3 · An FRD that already has an STTM",
      "The approved mapping, presented as-is",
      "Reached by “View STTM”. Nothing is regenerated on selection — the approved workbook "
-     "is presented first, because for a mapped feed that is usually all anyone wants.",
+     "is presented first, because for a mapped source that is usually all anyone wants.",
      ["Shows how the pair was matched (exact name / similarity + score) and the workbook's "
       "size and modified date. There is no regenerate control: a mapped FRD is not "
       "generatable, and the run endpoint would refuse it.",
@@ -122,7 +122,7 @@ SCREENS = [
      "Results — extraction",
      "Where a finished run lands, and — since 2026-08-27 — reachable again later at "
      "?set=&doc=, so a completed run can be bookmarked, shared or reopened tomorrow.",
-     ["EXTRACTION: what the model found — feeds, target tables, rules — and each feed's "
+     ["EXTRACTION: what the model found — sources, target tables, rules — and each source's "
       "stage and standard targets with the requirement ids it came from."],
      "GET /api/demo/artifacts/{set}/results"),
     (3, "results-gate", "4 · Results",
@@ -157,8 +157,8 @@ NOT_CAPTURED = [
     ("Waiting on a vendor data dictionary",
      "The middle group of the picker: an FRD with no STTM and no VDD, listed with a red "
      "left edge, a “no vendor dictionary” chip, “Cannot be generated” in place of a button, "
-     "and a line telling the reviewer to ask the vendor for VDD_<feed>.xlsx.",
-     "Both real feeds on hand fall in the other two groups — one is ready, one is already "
+     "and a line telling the reviewer to ask the vendor for VDD_<source>.xlsx.",
+     "Both real sources on hand fall in the other two groups — one is ready, one is already "
      "mapped — so the group is empty in this capture. Covered by tests rather than faked."),
     ("Run in progress",
      "Between the billed-run gate and the results. A live stage-by-stage progress view — "

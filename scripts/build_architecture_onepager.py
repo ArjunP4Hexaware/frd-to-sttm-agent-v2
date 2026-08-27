@@ -15,7 +15,7 @@ REDESIGNED 2026-08-27 (Arjun), on two axes at once:
 
 2. ARCHITECTURE — two real changes since the previous version:
 
-   a. TWO DOCUMENT INPUTS. The vendor data dictionary (VDD_<feed>.xlsx) is a
+   a. TWO DOCUMENT INPUTS. The vendor data dictionary (VDD_<source>.xlsx) is a
       first-class input beside the FRD, and the client's naming + engineering
       standards are versioned contracts hashed into every run's provenance.
       Honesty rule kept from the old deck: the standards contracts ARE wired
@@ -120,7 +120,7 @@ def build(out: Path) -> Path:
 
     # ---- band A: EXACTLY TWO inputs -----------------------------------------
     # Two, not four (Arjun, 2026-08-27). ACFC hands over exactly two documents
-    # per feed. The naming/engineering standards and the approved-STTM corpus
+    # per source. The naming/engineering standards and the approved-STTM corpus
     # are the AGENT'S OWN — versioned config it ships with, and a corpus it
     # maintains — so they belong inside the platform band, not on the input
     # row. On the input row they read as "four things you must supply", which
@@ -129,12 +129,12 @@ def build(out: Path) -> Path:
     band(s, AY, AH, "Inputs · the only two documents the agent is given")
     tw = (CW - 0.48 - 0.24) / 2
     tiles = [
-        dict(mark="word", name="FRD_<feed>.docx", accent=BLUE,
-             sub="The feed-level frame — file pattern and format, target schema and table per "
+        dict(mark="word", name="FRD_<source>.docx", accent=BLUE,
+             sub="The source-level frame — file pattern and format, target schema and table per "
                  "layer, load strategy, landing folder, DQ and recycle rules. Authored and "
                  "approved by ACFC's BSAs.",
              status="live", status_color=BLUE),
-        dict(mark="excel", name="VDD_<feed>.xlsx", accent=SKY,
+        dict(mark="excel", name="VDD_<source>.xlsx", accent=SKY,
              sub="The vendor data dictionary — every source column: name, position, type, "
                  "length, required, description, allowed values, PHI. Supplied by the vendor.",
              status="ingested · not yet read by stages 02–04", status_color=RED),
@@ -235,7 +235,7 @@ def build(out: Path) -> Path:
 
     # ---- what the agent BRINGS, inside the platform band --------------------
     # The point Arjun made explicit 2026-08-27: the client's standards are not
-    # a document anyone hands over with a feed — they are transcribed into the
+    # a document anyone hands over with a source — they are transcribed into the
     # agent as versioned contracts. Same for the approved-STTM corpus. Drawing
     # them here rather than on the input row is the difference between "three
     # things you must supply" and "two documents; the agent brings the rest".
@@ -260,7 +260,7 @@ def build(out: Path) -> Path:
          size=8.0, color=SLATE, font=SANS)
 
     # ---- band D: human review + outputs -------------------------------------
-    step_down(s, CY + CH, 6.68, "draft STTM .xlsx  +  feed contract .json   →   to a named person",
+    step_down(s, CY + CH, 6.68, "draft STTM .xlsx  +  source contract .json   →   to a named person",
               x=L + 1.4)
     hy, hw = 6.68, 5.90
     rect(s, L, hy, hw, 0.54, fill=WHITE, line=BLUE)
@@ -279,7 +279,7 @@ def build(out: Path) -> Path:
          size=8.2, color=SLATE, font=SANS, line_spacing=1.05)
     logo(s, "json", ox + 1.98, hy + 0.15, 0.24, 0.24)
     text(s, ox + 2.30, hy + 0.10, 1.40, 0.40,
-         [[("Feed contract", {"bold": True, "color": NAVY})], [("contract.json", {})]],
+         [[("Source contract", {"bold": True, "color": NAVY})], [("contract.json", {})]],
          size=8.2, color=SLATE, font=SANS, line_spacing=1.05)
     arrow(s, ox + 3.74, hy + 0.29, ox + 4.00, hy + 0.29, color=NAVY, width=1.5)
     text(s, ox + 4.12, hy + 0.10, ow - 4.26, 0.40,

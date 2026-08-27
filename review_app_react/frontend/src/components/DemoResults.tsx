@@ -59,7 +59,7 @@ function ExtractionSummary({ r }: { r: R }) {
     <div>
       <h2 className="eyebrow-blue mb-2">Extraction</h2>
       <div className="grid grid-cols-3 gap-3 mb-3">
-        <Stat label="Feeds" value={es.n_feeds} />
+        <Stat label="Sources" value={es.n_feeds} />
         <Stat label="Target tables" value={es.n_tables} />
         <Stat label="Rules captured" value={es.n_rules} />
       </div>
@@ -261,7 +261,7 @@ function VerdictTile({ r }: { r: R }) {
         <CardContent className="py-4 text-center">
           <div className={`text-3xl font-semibold ${tone}`}>{status}</div>
           <div className="text-sm text-muted-foreground mt-1">
-            {r.verdict.n_feeds} feed{r.verdict.n_feeds === 1 ? "" : "s"} in the mapping contract
+            {r.verdict.n_feeds} source{r.verdict.n_feeds === 1 ? "" : "s"} in the mapping contract
           </div>
         </CardContent>
       </Card>

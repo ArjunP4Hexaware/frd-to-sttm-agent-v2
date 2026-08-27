@@ -417,7 +417,7 @@ def apply_human_resolutions(contract):
             elif resolution_type == "none_of_these":
                 entry["reason_not_applied"] = (
                     "reviewer explicitly rejected every listed candidate -- left gated for "
-                    + ("the automatic dictionary cross-check to decide feed membership"
+                    + ("the automatic dictionary cross-check to decide source membership"
                        if kind == "attribution" else "manual resolution; no automatic fallback for this kind"))
             else:
                 bad_pick = f"chosen_candidate {chosen!r} not among {current_candidates}" if chosen is not None else "free text instead of a pick"
@@ -425,7 +425,7 @@ def apply_human_resolutions(contract):
                     f"structural pick required and not provided ({bad_pick}) -- this ambiguity "
                     f"has known candidates, so a free-text rationale alone has no confident "
                     f"structural mapping; rationale recorded, "
-                    + ("automatic dictionary cross-check still decides feed membership"
+                    + ("automatic dictionary cross-check still decides source membership"
                        if kind == "attribution" else "still gated"))
         else:
             if resolution_type == "free_text" and rationale:

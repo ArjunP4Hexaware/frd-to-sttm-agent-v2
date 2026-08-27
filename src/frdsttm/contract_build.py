@@ -328,7 +328,7 @@ def build_contract(doc_id: str, source_file: str, raw_extraction: dict, content:
     }
 
     lines = [f"# Contract build — {doc_id}", "",
-             f"**Status: {status}** | feeds: {len(spec.feeds)} | "
+             f"**Status: {status}** | sources: {len(spec.feeds)} | "
              f"strict grounding: {audit['strict_checked'] - len(audit['strict_failed'])}/{audit['strict_checked']} | "
              f"advisory: {audit['advisory_checked'] - len(audit['advisory_flagged'])}/{audit['advisory_checked']}", ""]
     if enrichments:

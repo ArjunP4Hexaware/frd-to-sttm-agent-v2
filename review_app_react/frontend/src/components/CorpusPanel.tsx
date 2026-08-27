@@ -107,7 +107,7 @@ export function CorpusPanel({
           />
           {/* The third input (2026-08-27). Shown as "paired / total FRDs"
               rather than a bare count, because the number that matters is
-              how many feeds have a grounded SOURCE side — not how many
+              how many sources have a grounded SOURCE side — not how many
               workbooks happen to sit in the volume. */}
           <Stat
             label="With a dictionary"
@@ -115,7 +115,7 @@ export function CorpusPanel({
             of={summary.data.n_frds}
             tone={(summary.data.n_dictionary_pairs ?? 0) < summary.data.n_frds ? "alert" : undefined}
           />
-          {/* The number that actually matters on this screen: how many feeds
+          {/* The number that actually matters on this screen: how many sources
               can be started right now. */}
           <Stat
             label="Ready to map"
@@ -132,9 +132,9 @@ export function CorpusPanel({
           </p>
           <p className="text-muted-foreground mt-1">
             <span className="mono-id">{summary.data!.unpaired_dictionaries.join(", ")}</span> — pairing is
-            by exact name (<span className="mono-id">DICT_&lt;feed&gt;.xlsx</span> ↔{" "}
-            <span className="mono-id">FRD_&lt;feed&gt;.docx</span>) and is never guessed by similarity:
-            attaching the wrong vendor’s spec would put real column names and PHI flags on a feed they do
+            by exact name (<span className="mono-id">DICT_&lt;source&gt;.xlsx</span> ↔{" "}
+            <span className="mono-id">FRD_&lt;source&gt;.docx</span>) and is never guessed by similarity:
+            attaching the wrong vendor’s spec would put real column names and PHI flags on a source they do
             not describe. Rename the file, or add the FRD.
           </p>
         </div>
@@ -189,7 +189,7 @@ export function CorpusPanel({
           <h3 className="acfc-section-title">Waiting on a vendor data dictionary</h3>
           <p className="text-sm text-muted-foreground -mt-1">
             No STTM yet, and nothing to ground the source columns. Ask the vendor for{" "}
-            <span className="mono-id">VDD_&lt;feed&gt;.xlsx</span> and name it in the FRD's
+            <span className="mono-id">VDD_&lt;source&gt;.xlsx</span> and name it in the FRD's
             Structural Metadata › Source Data Dictionary row.
           </p>
           {blocked.map((f) => (
@@ -227,7 +227,7 @@ export function CorpusPanel({
                   View STTM
                 </Button>
                 {/* Regeneration returned 2026-08-27 with the two-input rule:
-                    the run never opens this feed's own workbook, so the draft
+                    the run never opens this source's own workbook, so the draft
                     is independent and the comparison is a real measurement. */}
                 {f.generatable && (
                   <Button onClick={() => onGenerate(f)} disabled={!canRun || !f.runnable}>
