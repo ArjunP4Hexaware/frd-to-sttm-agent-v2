@@ -208,8 +208,9 @@ export function CorpusPanel({
         <section className="flex flex-col gap-2">
           <h3 className="acfc-section-title">Already mapped</h3>
           <p className="text-sm text-muted-foreground -mt-1">
-            The approved STTM is the system of record. These are presented as-is and are not
-            regenerated.
+            The approved STTM is the system of record and is never touched. A regenerated draft is
+            independent of it — the run reads only the FRD and the vendor dictionary — so the two
+            can be compared honestly.
           </p>
           {mapped.map((f) => (
             <div key={f.doc_id} className="acfc-row">
@@ -221,9 +222,19 @@ export function CorpusPanel({
                 </Badge>
                 <DictionaryChip frd={f} />
               </div>
-              <Button variant="outline" onClick={() => onExisting(f)}>
-                View STTM
-              </Button>
+              <div className="flex gap-2 flex-none">
+                <Button variant="outline" onClick={() => onExisting(f)}>
+                  View STTM
+                </Button>
+                {/* Regeneration returned 2026-08-27 with the two-input rule:
+                    the run never opens this feed's own workbook, so the draft
+                    is independent and the comparison is a real measurement. */}
+                {f.generatable && (
+                  <Button onClick={() => onGenerate(f)} disabled={!canRun || !f.runnable}>
+                    Regenerate
+                  </Button>
+                )}
+              </div>
             </div>
           ))}
         </section>

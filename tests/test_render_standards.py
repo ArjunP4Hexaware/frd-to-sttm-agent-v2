@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from frdsttm import standards as S
+from frdsttm import term_catalog
 from frdsttm.reference_workbooks import _nl
 
 RENDER_SRC = Path(__file__).resolve().parent.parent / "notebooks" / "04_sttm_render.py"
@@ -33,6 +34,7 @@ _NEEDED = {
     "_ATTR_UNICODE_MAP", "_attr_norm", "_ambiguity_id",
     "_standards_fill_target", "apply_standards_targets",
     "_SEGMENT_SUFFIX", "_table_for_segment", "derive_field_mappings",
+    "target_column",   # 2026-08-27: target names come from the term catalog
 }
 
 
@@ -48,7 +50,7 @@ def _load():
                 picked.append(node); found |= names
     assert found == _NEEDED, f"loader drifted: missing {_NEEDED - found}"
     ns = {"re": re, "json": json, "hashlib": hashlib, "unicodedata": unicodedata,
-          "_std": S, "_nl": _nl}
+          "_std": S, "_nl": _nl, "_tc": term_catalog}
     exec(compile(ast.fix_missing_locations(ast.Module(body=picked, type_ignores=[])),
                  str(RENDER_SRC), "exec"), ns)
     return ns

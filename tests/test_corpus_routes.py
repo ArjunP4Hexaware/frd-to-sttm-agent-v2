@@ -473,10 +473,12 @@ def test_picker_marks_only_ready_frds_generatable(client, dirs, monkeypatch, tmp
                              dict_name="VDD_member_risk.xlsx")
     body = client.get("/api/demo/corpus/frds").json()
     entry = next(f for f in body["frds"] if f["doc_id"] == "member_risk")
-    # this fixture gives member_risk BOTH an STTM and a dictionary -> mapped
+    # this fixture gives member_risk BOTH an STTM and a dictionary. Mapped —
+    # and since 2026-08-27 regeneratable, because a run reads the FRD and the
+    # VDD only and never this feed's own approved workbook.
     assert entry["eligibility_status"] == "mapped"
-    assert entry["generatable"] is False
-    assert client.get("/api/demo/corpus").json()["n_generatable"] == 0
+    assert entry["generatable"] is True
+    assert client.get("/api/demo/corpus").json()["n_generatable"] == 1
 
 
 def test_an_frd_with_a_dictionary_and_no_sttm_is_generatable(client, dirs, monkeypatch, tmp_path):

@@ -15,8 +15,11 @@ import ast
 import re
 from copy import copy
 from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 
+from frdsttm import term_catalog
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -30,6 +33,11 @@ _NEEDED = {
     "_PER_TABLE_SRC_HEADERS", "_PER_TABLE_TGT_HEADERS", "_RECYCLE_HEADER",
     "render_sheet_per_table", "render_single_sheet", "render_contract",
     "_SEGMENT_SUFFIX", "_table_for_segment", "derive_field_mappings",
+    # 2026-08-27: target column names now come from the harvested term
+    # catalog, so derive_field_mappings calls target_column, which calls
+    # _ambiguity_id. The `found == _NEEDED` assert below is what turned a
+    # silent NameError into a loader-drift message.
+    "target_column", "_ambiguity_id",
     "_copy_row_style", "_field_value", "_fill_sheet", "render_into_template",
     "render_into_single_sheet_template",
 }
@@ -48,7 +56,8 @@ def _load():
     assert found == _NEEDED, f"loader drifted: missing {_NEEDED - found}"
     ns = {"re": re, "copy": copy, "datetime": datetime, "timezone": timezone, "Path": Path,
           "Workbook": Workbook, "PatternFill": PatternFill, "Font": Font, "Alignment": Alignment,
-          "get_column_letter": get_column_letter, "_n": _n, "_nl": _nl}
+          "get_column_letter": get_column_letter, "_n": _n, "_nl": _nl,
+          "hashlib": hashlib, "json": json, "_tc": term_catalog}
     exec(compile(ast.fix_missing_locations(ast.Module(body=picked, type_ignores=[])),
                  str(RENDER_SRC), "exec"), ns)
     return ns

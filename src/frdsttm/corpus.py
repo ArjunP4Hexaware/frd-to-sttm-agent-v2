@@ -27,6 +27,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from frdsttm import term_catalog as _tc
 from frdsttm.dictionary import parse_dictionary_dir
 from frdsttm.reference_workbooks import parse_reference_workbook
 from frdsttm.similarity import (
@@ -40,6 +41,9 @@ from frdsttm.similarity import (
 
 CORPUS_INDEX_NAME = "corpus_index.json"
 # 2 (2026-08-22): entries carry content_sha256; pairs carry matched_by.
+# 5 (2026-08-27, later still): `term_catalog` — the source→target column
+#   vocabulary harvested from the approved STTMs at SYNC time, so a RUN reads
+#   a vocabulary instead of opening a workbook. See frdsttm.term_catalog.
 # 4 (2026-08-27, later): per-FRD `eligibility` — the ONE place that decides
 #   which FRDs may be generated. See `eligibility_for`.
 # 3 (2026-08-27): vendor data dictionaries — `dictionaries`,
@@ -48,7 +52,7 @@ CORPUS_INDEX_NAME = "corpus_index.json"
 #   index would see no dictionaries and render a source side from the
 #   template alone, which is exactly the implicit borrow the third input
 #   exists to remove. Better to raise and be rebuilt.
-CORPUS_INDEX_VERSION = 4
+CORPUS_INDEX_VERSION = 5
 
 
 class CorpusIndexError(RuntimeError):
@@ -115,6 +119,12 @@ def build_corpus_index(frd_entries, reference_dir: str | Path,
 
     pairing = pair_corpus(frd_feats, wb_feats, thresholds)
 
+    # -- the TERM CATALOG. Harvested here, at sync time, from the approved
+    # workbooks the corpus already parsed — so a RUN never opens an STTM and
+    # the "two inputs" rule (FRD + VDD) holds literally. Measured worth:
+    # target-column accuracy went 0% (generate) -> 94% (match against this).
+    catalog = _tc.build_catalog(dictionaries)
+
     # -- the third input. Summary only: the index stays small enough to load
     # on every request, so it records WHICH dictionary describes a feed and
     # how complete it is, never the 399 column rows themselves. A consumer
@@ -161,6 +171,8 @@ def build_corpus_index(frd_entries, reference_dir: str | Path,
         "dictionary_errors": vdd_errors,
         "eligibility": eligibility,
         "generatable": sorted(d for d, e in eligibility.items() if e["generatable"]),
+        "term_catalog": _tc.serialize(catalog),
+        "term_catalog_stats": _tc.catalog_stats(catalog),
     }
 
 
@@ -227,10 +239,17 @@ def eligibility_for(doc_id: str, sttm_pairs: dict, dictionary_pairs: dict) -> di
       workbook has no grounded input, so the run would render a frame and gate
       every column. That is the correct BEHAVIOUR when a run happens, but it
       is not worth a billed model call — better to ask the vendor first.
-    * **already mapped → not generatable.** The approved STTM is the system of
-      record. Re-running against it produced a self-referential accuracy
-      figure (the approved workbook is also the template), and the earlier
-      "regenerate anyway" control existed only for the 2026-08-24 demo.
+    * **already mapped → generatable AGAIN as of 2026-08-27**, and the reason
+      it was ever blocked is worth keeping written down. The block existed
+      because a run READ the feed's own approved STTM — as its layout
+      template and as its eval reference — so regenerating a mapped feed
+      scored itself against its own answers. That is gone: a run now ingests
+      the FRD and the VDD only, and the column vocabulary reaches it as a
+      harvested catalog with the feed's own workbook excluded
+      (`frdsttm.term_catalog`). Regenerating a mapped feed therefore produces
+      an INDEPENDENT draft, and comparing it to the approved workbook
+      afterwards is a real measurement rather than a tautology. The approved
+      workbook is still never touched and the app still publishes nothing.
 
     Returns ``{"status", "generatable", "reason", "dictionary", "reference"}``.
     ``reason`` is written for a person to read in the picker, not for a log.
@@ -238,11 +257,24 @@ def eligibility_for(doc_id: str, sttm_pairs: dict, dictionary_pairs: dict) -> di
     reference = (sttm_pairs.get(doc_id) or {}).get("reference") \
         if isinstance(sttm_pairs.get(doc_id), dict) else sttm_pairs.get(doc_id)
     dictionary = dictionary_pairs.get(doc_id)
-    if reference:
+    if reference and not dictionary:
+        # Mapped but with nothing to ground the source side. Generating would
+        # gate every source column, which is not worth a billed call when the
+        # approved workbook already answers the question.
         return {
             "status": ELIGIBILITY_MAPPED, "generatable": False,
-            "reason": "This FRD already has an approved STTM. The approved workbook is the "
-                      "system of record — it is presented as-is, not regenerated.",
+            "reason": "This FRD already has an approved STTM and no vendor data dictionary. "
+                      "There is nothing to ground a fresh draft's source columns, so the "
+                      "approved workbook is presented as-is.",
+            "dictionary": None, "reference": reference,
+        }
+    if reference:
+        return {
+            "status": ELIGIBILITY_MAPPED, "generatable": True,
+            "reason": "Already mapped, and regeneratable: the run reads only the FRD and the "
+                      "vendor dictionary, never this feed's approved STTM, so the draft is "
+                      "independent of it and can be compared against it honestly. The "
+                      "approved workbook is not touched.",
             "dictionary": dictionary, "reference": reference,
         }
     if not dictionary:
@@ -275,6 +307,16 @@ def eligibility_of(index: dict, doc_id: str) -> dict:
         "reason": f"{doc_id!r} is not in the corpus index — run a sync, or rebuild the index.",
         "dictionary": None, "reference": None,
     }
+
+
+def term_catalog_of(index: dict) -> dict:
+    """The harvested vocabulary, ready for `frdsttm.term_catalog.lookup`.
+
+    Absent on an older index is an ordinary empty state — the caller then has
+    no vocabulary and falls back to the source column, which is the `as_is`
+    convention and the honest default.
+    """
+    return _tc.deserialize(index.get("term_catalog") or {})
 
 
 def dictionary_for(index: dict, doc_id: str) -> str | None:

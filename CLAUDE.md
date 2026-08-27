@@ -902,6 +902,66 @@ corpus the agent already syncs) — see the column-rules section above.
 
 So: stop iterating on the template. Issue it.
 
+## TWO INPUTS AT RUN TIME — a run never opens an STTM (Arjun, 2026-08-27)
+
+**A live run ingests exactly two documents: the FRD and the VDD.** No STTM.
+Allowing one in is the self-circling loop that made every accuracy figure
+meaningless. What the approved workbooks still give, they give INDIRECTLY:
+
+- **Vocabulary** → harvested at SYNC time into `frdsttm.term_catalog` and
+  carried in the corpus index (v5). A run reads the CATALOG, which has the
+  same standing as `contracts/naming_standards.json`: config the agent
+  carries. A vocabulary is `source term → target term`; it structurally
+  cannot contain the mapping for a feed it has never seen.
+- **Layout / dialect only** → another feed's workbook still supplies sheet and
+  band structure at render time (Arjun's call). Structure, never content.
+
+**The measurement that forced this design** (`databricks-claude-opus-5`, CAQH's
+115 columns, 2026-08-27, ~$1 through the workspace credential):
+
+| condition | accuracy | high-confidence band |
+|---|---|---|
+| name alone | **0 / 115** | **0 of 71 correct** |
+| + told the warehouse is Facets | 0 / 115 | 0 of 6 |
+| + few-shot from the 8 header rows | 16 / 101 | 1 of 1 |
+| + a real catalog to match against | **95 / 101** | **92 of 92** |
+
+Generating a target column name is not weak, it is ZERO — and 71 of 115 wrong
+answers came back marked HIGH confidence. Matching against a catalog is 94%
+with a perfectly calibrated high band. **The model cannot invent the
+vocabulary; it is excellent at matching to one.** Do not reopen this by
+"improving the prompt". Reproduce with
+`scripts/measure_column_inference.py --provider databricks`.
+
+**Two rules `term_catalog` enforces, neither optional:**
+
+1. **The feed's own workbook is always excluded** — `lookup(..., exclude=)`,
+   passed by 04 from `_own_reference(doc_id)`. `EXCLUDE_OWN_REFERENCE` was a
+   flag and it got set to 0 for a demo; that is exactly how the
+   self-referential figure happened.
+2. **A conflicted term is never resolved silently.** Two workbooks disagreeing
+   returns BOTH and 04 gates (`kind: "term_catalog_conflict"`). Picking the
+   more frequent would invent a convention the client never stated.
+
+**And a third, learned by measuring rather than reasoning:** an IDENTITY pair
+(source == target) is evidence of the `as_is` convention, NOT of a vocabulary.
+Reported as a hit, it filled `member_id` — from SD — for a CAQH feed whose real
+answer is `TPL_MEME_ID`: two fills, both wrong, both claiming the catalog said
+so. `identity_only` now falls through to the same as_is fallback a miss takes.
+Same output, honest provenance.
+
+**What this is worth today, measured on both real feeds regenerated blind:**
+
+| feed | convention | target columns correct |
+|---|---|---|
+| SD | `as_is` | **388 / 391 = 99%** |
+| CAQH | renames (`TPL_`) | **0 / 111** |
+
+Read that honestly before promising anything: **with a two-workbook corpus the
+catalog is inert for CAQH.** It becomes useful when the corpus holds a SIBLING
+feed sharing vocabulary, or when `information_schema` read arrives. An as_is
+feed is already at 99% from FRD + VDD alone.
+
 ## THE ELIGIBILITY RULE — what may be generated (Arjun, 2026-08-27)
 
 **An FRD may be run only when it has a matching vendor data dictionary AND
@@ -913,7 +973,8 @@ exactly one generatable:
 | verdict | VDD | STTM | generatable |
 |---|---|---|---|
 | `ready` | yes | no | **yes** |
-| `mapped` | either | yes | no |
+| `mapped` + VDD | yes | yes | **yes** (2026-08-27 — the run is STTM-free, so the draft is independent) |
+| `mapped`, no VDD | no | yes | no |
 | `no_dictionary` | no | no | no |
 
 `mapped` beats `no_dictionary` deliberately: an FRD that already has an STTM

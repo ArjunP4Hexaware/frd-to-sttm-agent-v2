@@ -137,10 +137,12 @@ if not IS_DATABRICKS:
 # Importable in both modes: the %run shim above (Databricks) and the local
 # import (script mode) both put src/ on sys.path first.
 from frdsttm import standards as _std  # noqa: E402
+from frdsttm import term_catalog as _tc  # noqa: E402
 from frdsttm.corpus import (  # noqa: E402
     frd_features_from_index,
     load_corpus_index,
     own_reference_for,
+    term_catalog_of,
     reference_features_from_index,
 )
 from frdsttm.similarity import (  # noqa: E402
@@ -688,7 +690,59 @@ def apply_standards_targets(contract, feed_match):
     return contract
 
 
-def derive_field_mappings(contract, dictionary, feed_match):
+def target_column(source, layer, catalog, exclude, gated, seen):
+    """The TARGET column name for one source field, and where it came from.
+
+    The vocabulary decides, not a string rule. Measured 2026-08-27 on the CAQH
+    feed: generating a name from the source scored 0/115 (and marked 71 of
+    those wrong answers HIGH confidence); matching against a real catalog
+    scored 95/101 with a high band right 92 times out of 92.
+
+    Three verdicts, three behaviours, and the last two are the point of the
+    whole design:
+
+      hit       every workbook that knows this term agrees  -> FILL
+      conflict  they disagree                               -> fall back, GATE
+      miss      the vocabulary has never seen it            -> fall back (as_is)
+
+    The fallback is the source column itself, which IS the `as_is` convention
+    and reproduced one approved workbook 399 times out of 399. So a miss is
+    not a hole — it is the other measured convention, recorded as such.
+
+    `exclude` is the feed's own paired workbook and is never empty in a real
+    run: a workbook that contains this feed's mapping would hand it its own
+    answers back.
+    """
+    r = _tc.lookup(source, catalog, layer, exclude=exclude)
+    if r["verdict"] == "hit":
+        seen["hit"] += 1
+        return r["target"], "term_catalog"
+    if r["verdict"] == "conflict":
+        seen["conflict"] += 1
+        options = [c["target"] for c in r["candidates"]]
+        text = (f"the approved workbooks disagree on the {layer} column for source "
+                f"field {source!r}: " + " / ".join(
+                    f"{c['target']} ({', '.join(c['workbooks'])})" for c in r["candidates"]))
+        key = ("term_catalog_conflict", source, layer)
+        if key not in seen["gated_keys"]:
+            seen["gated_keys"].add(key)
+            gated.append({
+                "id": _ambiguity_id("term_catalog_conflict", text,
+                                    {"source": source, "layer": layer}),
+                "kind": "term_catalog_conflict", "text": text,
+                "context": {"source": source, "layer": layer,
+                            "candidates": r["candidates"]},
+                "options": options,
+            })
+        return source, "as_is_after_conflict"
+    if r["verdict"] == "identity_only":
+        seen["identity_only"] += 1
+        return source, "as_is_identity"
+    seen["miss"] += 1
+    return source, "as_is"
+
+
+def derive_field_mappings(contract, dictionary, feed_match, catalog=None, exclude=()):
     """Attach derived stage/standard mappings to each matched feed's fields.
     Rules (the pipeline's explicit, contestable defaults):
       - stage: 1:1 column name, datatype from the template's stage target for
@@ -713,6 +767,8 @@ def derive_field_mappings(contract, dictionary, feed_match):
         (CodeGen's `extract-sttm` rejects them). Tables still come from the
         contract's own targets.
     """
+    gated, seen = [], {"hit": 0, "miss": 0, "conflict": 0,
+                       "identity_only": 0, "gated_keys": set()}
     for i, key in feed_match.items():
         feed = contract["feeds"][i]
         stg = feed.get("stage_target") or {}
@@ -730,7 +786,11 @@ def derive_field_mappings(contract, dictionary, feed_match):
                 stage_dt = rt["stage"].get("datatype") or rt["standard"].get("datatype") or "String"
                 std_dt = rt["standard"].get("datatype") or stage_dt
             else:
-                stage_col = std_col = f["source_column"]
+                stage_col, stage_prov = target_column(
+                    f["source_column"], "stage", catalog or {}, exclude, gated, seen)
+                std_col, std_prov = target_column(
+                    f["source_column"], "standard", catalog or {}, exclude, gated, seen)
+                f = {**f, "_target_source": {"stage": stage_prov, "standard": std_prov}}
                 # Datatypes come from the template's own targets for this row
                 # (2026-08-25). Until then every derived row said "String",
                 # which put "String" where the analyst had Decimal(10,2)/Int
@@ -748,6 +808,16 @@ def derive_field_mappings(contract, dictionary, feed_match):
                              "table": std_tbl, "column": std_col, "datatype": std_dt},
             })
         feed["fields"] = derived
+    p = contract.setdefault("_provenance", {})
+    p["term_catalog"] = {
+        "filled_from_catalog": seen["hit"],
+        "fell_back_to_source_name": seen["miss"],
+        "fell_back_identity_pair_only": seen["identity_only"],
+        "conflicts_gated": seen["conflict"],
+        "excluded_workbooks": sorted(exclude),
+    }
+    if gated:
+        p.setdefault("ambiguities", []).extend(gated)
     return contract
 
 
@@ -1479,7 +1549,14 @@ for doc_id, contract in contracts.items():
     # catalog/schema, not the nulls the FRD left. Anything the client's
     # vocabulary cannot resolve stays null and is gated, never invented.
     apply_standards_targets(contract, fm)
-    derive_field_mappings(contract, dictionary, fm)
+    # The vocabulary, never the workbook (2026-08-27). A run ingests the FRD
+    # and the VDD; the term catalog was harvested at SYNC time and travels in
+    # the corpus index, so nothing here opens an STTM to learn a column name.
+    # The feed's OWN paired workbook is always excluded -- not a flag.
+    _catalog = term_catalog_of(corpus_index) if corpus_index else {}
+    _own_wb = _own_reference(doc_id)
+    derive_field_mappings(contract, dictionary, fm, catalog=_catalog,
+                          exclude=(_own_wb,) if _own_wb else ())
     out_xlsx = str(Path(RENDERED_DIR) / f"{doc_id}.sttm.xlsx")
     # Render INTO the lead template's own layout (2026-08-22): its sheets,
     # headers and styles are the dialect. Freeform keeps the built-in fallback.

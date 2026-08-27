@@ -406,13 +406,14 @@ def test_index_without_a_dictionary_dir_is_the_ordinary_state(tmp_path):
 
 
 def test_index_version_bumped_for_the_third_input():
-    """v3 added the dictionaries; v4 (same day) added per-FRD eligibility.
+    """v3 added the dictionaries; v4 added per-FRD eligibility; v5 the term
+    catalog (all 2026-08-27).
 
     The bump is deliberate each time rather than additive-and-silent: a stage
     reading an older index would see no dictionaries, or no eligibility, and
     would happily generate an FRD the rule now forbids.
     """
-    assert CORPUS_INDEX_VERSION == 4
+    assert CORPUS_INDEX_VERSION == 5
 
 
 def test_unreadable_dictionary_is_named_in_the_index(tmp_path):
@@ -435,24 +436,33 @@ def test_ready_needs_a_dictionary_and_no_sttm():
     assert v["dictionary"] == "VDD_a.xlsx" and v["reference"] is None
 
 
-def test_an_already_mapped_frd_is_not_generatable():
-    """The approved STTM is the system of record; regenerating over it also
-    produced a self-referential accuracy figure, because the approved workbook
-    is the template the render borrows from."""
+def test_a_mapped_frd_with_a_dictionary_is_regeneratable():
+    """Regeneration stopped being circular on 2026-08-27.
+
+    It was blocked because a run READ the feed's own approved STTM, as layout
+    template and as eval reference, so the score was a tautology. Runs now
+    ingest the FRD and the VDD only, and the vocabulary arrives as a catalog
+    with this feed's own workbook excluded — so the draft is independent and
+    the comparison against the approved workbook is a real measurement.
+    """
     v = eligibility_for("FRD_a", {"FRD_a": {"reference": "STTM_a.xlsx"}},
                         {"FRD_a": "VDD_a.xlsx"})
+    assert v["status"] == "mapped" and v["generatable"] is True
+    assert v["dictionary"] == "VDD_a.xlsx" and v["reference"] == "STTM_a.xlsx"
+
+
+def test_a_mapped_frd_without_a_dictionary_is_not_generatable():
+    """Nothing to ground the source side, and the approved workbook already
+    answers the question — not worth a billed call."""
+    v = eligibility_for("FRD_a", {"FRD_a": {"reference": "STTM_a.xlsx"}}, {})
     assert v["status"] == "mapped" and v["generatable"] is False
-    assert "system of record" in v["reason"]
-    # the dictionary is still reported — the screen shows both documents
-    assert v["dictionary"] == "VDD_a.xlsx"
 
 
 def test_mapped_beats_no_dictionary():
     """An FRD with an STTM but no dictionary is MAPPED, not blocked: it has
     nothing to wait for, and telling a reviewer to chase a vendor for a feed
     that is already mapped would be noise."""
-    v = eligibility_for("FRD_a", {"FRD_a": {"reference": "STTM_a.xlsx"}}, {})
-    assert v["status"] == "mapped" and v["generatable"] is False
+    assert eligibility_for("FRD_a", {"FRD_a": {"reference": "STTM_a.xlsx"}}, {})["status"] == "mapped"
 
 
 def test_no_dictionary_is_not_generatable_and_says_what_to_ask_for():

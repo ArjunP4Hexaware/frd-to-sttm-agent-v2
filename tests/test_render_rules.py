@@ -17,7 +17,11 @@ committed source by name via the AST and exec'd.
 import ast
 import re
 from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
+
+from frdsttm import term_catalog
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -32,7 +36,11 @@ _NEEDED = {
     "_column_mentions", "place_feed_rules", "_feed_level_rule_text",
     "_PER_TABLE_SRC_HEADERS", "_PER_TABLE_TGT_HEADERS", "_RECYCLE_HEADER",
     "render_sheet_per_table", "render_single_sheet", "render_contract",
-    "_SEGMENT_SUFFIX", "_table_for_segment", "derive_field_mappings", "evaluate_cross_reference",
+    "_SEGMENT_SUFFIX", "_table_for_segment", "derive_field_mappings",
+    "evaluate_cross_reference",
+    # 2026-08-27: target names come from the harvested term catalog, so
+    # derive_field_mappings calls target_column, which calls _ambiguity_id.
+    "target_column", "_ambiguity_id",
 }
 
 
@@ -51,7 +59,8 @@ def _load():
     assert found == _NEEDED, f"loader drifted from source: missing {_NEEDED - found}"
     ns = {"re": re, "datetime": datetime, "timezone": timezone, "Workbook": Workbook,
           "PatternFill": PatternFill, "Font": Font, "Alignment": Alignment,
-          "get_column_letter": get_column_letter, "_n": _n, "_nl": _nl}
+          "get_column_letter": get_column_letter, "_n": _n, "_nl": _nl,
+          "_tc": term_catalog, "hashlib": hashlib, "json": json}
     exec(compile(ast.fix_missing_locations(ast.Module(body=picked, type_ignores=[])),
                  str(RENDER_SRC), "exec"), ns)
     return ns
