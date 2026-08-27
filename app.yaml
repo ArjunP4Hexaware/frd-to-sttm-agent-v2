@@ -24,8 +24,10 @@ command: ["python", "review_app_react/backend/app.py"]
 # STARTS (and on "Sync now") by triggering the bundle-deployed
 # frd_sttm_sharepoint_sync job the same way -- the job has no schedule of
 # its own (decided 2026-08-22 late evening). STTM_SYNC_ON_STARTUP=0 turns
-# the start-up sync off; STTM_FRD_NAME_PREFIX / STTM_STTM_NAME_PREFIX
-# (default FRD_ / STTM_) are the library's naming convention. Workspace
+# the start-up sync off; STTM_FRD_NAME_PREFIX / STTM_STTM_NAME_PREFIX /
+# STTM_VDD_NAME_PREFIX (default FRD_ / STTM_ / VDD_,DICT_) are the library's
+# naming convention. STTM_SHAREPOINT_VDD_FOLDER is BLANK by default, which
+# leaves the third input off; setting it turns dictionary sync on. Workspace
 # prerequisites the deploy must verify:
 #   - the three bundle jobs are deployed, and STTM_DEMO_JOB_NAME /
 #     STTM_SYNC_JOB_NAME / STTM_RENDER_JOB_NAME below match their names AS
@@ -34,7 +36,12 @@ command: ["python", "review_app_react/backend/app.py"]
 #     frd_sttm_render is the human-in-the-loop re-render (stage 04 only).
 #   - volumes exist in CATALOG.SCHEMA: frd_raw + sttm_reference (the sync
 #     maintains them; the app mirrors them down), demo_raw (per-run FRD
-#     staging), sttm_out_app (per-run artifact sets)
+#     staging), sttm_out_app (per-run artifact sets), and -- since 2026-08-27
+#     -- vdd_raw, the VENDOR DATA DICTIONARY volume (the third input),
+#     named to sit beside frd_raw. vdd_raw is the one volume whose ABSENCE is tolerated: the mirror
+#     degrades to "no vendor dictionaries yet", which is the state every FRD
+#     is in today, rather than breaking the picker. Create it before anyone
+#     relies on has_dictionary, or a real dictionary will look missing.
 #   - secret scope sttm_agent/sharepoint_client_secret is populated.
 #     sttm_agent/anthropic_api_key is NO LONGER REQUIRED (2026-08-24) while
 #     sttm_llm_provider is "databricks" in resources/frd_sttm_job.yml -- that

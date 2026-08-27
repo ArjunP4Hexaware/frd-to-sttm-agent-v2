@@ -282,6 +282,11 @@ r += 1
 ws.cell(row=r, column=1, value="TEMPLATE CHANGE LOG").font = Font(name=FONT, size=11, bold=True, color=CORE_BG)
 r += 1
 for v, note in [
+    ("v1.3", "Added Null Representation (FILES) and Key / Uniqueness (field sheets). "
+              "Both are needed to generate an STTM from the FRD and this workbook ALONE: "
+              "the FRD's reject rules say 'when X is NULL' without saying what null looks "
+              "like in a delimited file, and an Upsert load strategy needs a match key that "
+              "the FRD's own Business Key / Primary Key rows leave as 'NA'."),
     ("v1.0", "Initial issue. Core 9 columns aligned to the existing DICT_ workbooks."),
     ("v1.1", "Verified against a headerless, pipe-delimited, multi-record-type source: Position "
              "redefined as per-record-type; 'Record Type' renamed 'Segment'; Start/End Position "
@@ -306,6 +311,7 @@ FILES_HEADERS = [
     "File Name Pattern", "File Title", "Format", "Delimiter", "Header Row",
     "Encoding", "Delivery Cadence", "Content Description", "Field Sheet",
     # --- optional ---
+    "Null Representation",
     "File Generator", "Text Qualifier", "Line Ending", "Multi-Record-Type",
     "Record Type Field", "Record Type Values", "Expected Field Count",
     "Approx Rows per Delivery", "Trailer / Control Record", "Notes",
@@ -316,6 +322,12 @@ h(ws, 1, FILES_HEADERS, n_core=9, comments={
         "This is NOT about a header RECORD. A file can have a 'Header' record type "
         "(a control record) and still have no column-name row -- in that case answer N "
         "here and Y under 'Multi-Record-Type'.",
+    "Null Representation":
+        "How a MISSING value appears in the file: an empty field, the literal text NULL, "
+        "\\N, spaces, 0000-00-00 ...\n\n"
+        "Needed because the FRD's data-quality rules reject on NULL ('reject the record "
+        "when MEMBER_ID is NULL'). In a delimited file 'null' is a convention, not a fact, "
+        "and guessing it wrong either rejects good records or loads bad ones.",
     "Record Type Field":
         "Multi-record-type files: which field distinguishes the record types "
         "(e.g. 'position 1').",
@@ -325,20 +337,20 @@ h(ws, 1, FILES_HEADERS, n_core=9, comments={
         "Per record type where the file has several, e.g. Header=8, Detail=101, Trailer=6.",
 })
 widths(ws, {"A": 34, "B": 24, "C": 16, "D": 11, "E": 11, "F": 11, "G": 20,
-            "H": 38, "I": 20, "J": 16, "K": 13, "L": 12, "M": 17, "N": 18,
-            "O": 30, "P": 26, "Q": 20, "R": 20, "S": 30})
+            "H": 38, "I": 20, "J": 22, "K": 16, "L": 13, "M": 12, "N": 17,
+            "O": 18, "P": 30, "Q": 26, "R": 20, "S": 20, "T": 30})
 body(ws, 2, [
     "demographics_package_CCYY_MM.csv", "Community Demographics", "Delimited text", ",", "Y",
     "UTF-8", "Twice yearly", "One row per ZIP code: population and community characteristics.",
     "demographics_package",
-    "Example Vendor Inc.", '"', "LF", "N", None, None, 86, "41000", "N",
+    "empty field", "Example Vendor Inc.", '"', "LF", "N", None, None, 86, "41000", "N",
     "Example: single record type, has column headers — delete once replaced.",
 ], italic=True, color=EX_GREY)
 body(ws, 3, [
     "CCYYMMDD_<payer>_COBReport.txt", "Coordination of Benefits", "Delimited text", "|", "N",
     "UTF-8", "Weekly", "Header record, one detail record per COB result, trailer with counts.",
     "cob_weekly",
-    "Example Vendor Inc.", "none", "CRLF", "Y", "Position 1",
+    "spaces", "Example Vendor Inc.", "none", "CRLF", "Y", "Position 1",
     "Header = 'FILEHD', Detail = 'COBDTL', Trailer = 'TRAILR'",
     "Header=8, Detail=101, Trailer=6", "120000", "Y",
     "Example: NO column-header row; field names come from this dictionary only.",
@@ -346,8 +358,8 @@ body(ws, 3, [
 blanks(ws, 4, 40, len(FILES_HEADERS))
 dv_list(ws, "C2:C40", FORMATS)
 dv_list(ws, "E2:E40", YN)
-dv_list(ws, "M2:M40", YN)
-dv_list(ws, "R2:R40", YN)
+dv_list(ws, "N2:N40", YN)   # Multi-Record-Type (shifted by Null Representation)
+dv_list(ws, "S2:S40", YN)   # Trailer / Control Record
 ws.freeze_panes = "A2"
 ws.auto_filter.ref = f"A1:{get_column_letter(len(FILES_HEADERS))}40"
 
@@ -357,12 +369,20 @@ FIELD_HEADERS = [
     "Position", "Field Name", "Data Type", "Length", "Required (Y/N)",
     "Description", "Allowed Values / Range", "Example Value", "PHI/PII (Y/N)",
     # --- optional ---
+    "Key / Uniqueness",
     "Segment", "Business Name", "Precision", "Scale", "Format / Pattern",
     "Default Value", "Start Position", "End Position", "Notes",
 ]
 FIELD_COMMENTS = {
     "Position": "Ordinal WITHIN ITS RECORD TYPE. Restart at 1 for each record type "
                 "on a multi-record-type file.",
+    "Key / Uniqueness":
+        "Does this field identify a record? PK for the primary key, PK2/PK3 for the "
+        "second and third parts of a composite key, U for merely unique, blank otherwise."
+        "\n\nNeeded whenever the feed loads with Update Else Insert / Upsert: the match "
+        "key decides which existing row a delivery updates. The FRD's own Business Key / "
+        "Primary Key rows read 'NA' on the real documents, so the vendor is the only one "
+        "who knows.",
     "Segment":  "REQUIRED for multi-record-type files (Header / Detail / Trailer). "
                 "Leave blank for a single-record file.",
     "Data Type": "Your own vocabulary is fine — varchar, datetime2, Alpha Numeric, int. "
@@ -372,8 +392,8 @@ FIELD_COMMENTS = {
     "End Position": "Fixed-width files only: 1-based, inclusive.",
 }
 FIELD_WIDTHS = {"A": 9, "B": 30, "C": 13, "D": 13, "E": 13, "F": 50, "G": 30,
-                "H": 16, "I": 12, "J": 11, "K": 22, "L": 10, "M": 8, "N": 16,
-                "O": 14, "P": 13, "Q": 12, "R": 28}
+                "H": 16, "I": 12, "J": 15, "K": 11, "L": 22, "M": 10, "N": 8,
+                "O": 16, "P": 14, "Q": 13, "R": 12, "S": 28}
 
 
 def field_sheet(title, rows):
@@ -396,24 +416,24 @@ field_sheet("FIELDS_TEMPLATE", [
     [1, "member_id", "String", 20, "Y",
      "Unique identifier for the member, as supplied by the health plan.",
      "Free text", "M000123456", "Y",
-     None, "Member ID", None, None, None, None, None, None,
+     "PK", None, "Member ID", None, None, None, None, None, None,
      "Example row — delete once replaced."],
     [2, "svc_from_dt", "Date", None, "Y",
      "First date of service on the claim line.",
      "1900-01-01 to current date", "20240115", "Y",
-     None, "Service From Date", None, None, "CCYYMMDD", None, None, None, None],
+     "PK2", None, "Service From Date", None, None, "CCYYMMDD", None, None, None, None],
     [3, "financial_strain_score", "Int", None, "N",
      "Individual financial strain risk score. Higher means greater strain.",
      "1-5 (1 = little or none, 5 = severe)", "3", "N",
-     None, "Financial Strain Score", None, None, None, "empty string", None, None, None],
+     None, None, "Financial Strain Score", None, None, None, "empty string", None, None, None],
     [4, "paid_amt", "Decimal", None, "N",
      "Amount paid by the plan for this claim line, in US dollars.",
      "0.00 to 9999999.99", "142.50", "N",
-     None, "Paid Amount", 10, 2, None, "0.00", None, None, None],
+     None, None, "Paid Amount", 10, 2, None, "0.00", None, None, None],
     [5, "gender_cd", "String", 1, "N",
      "Member gender as reported at enrolment.",
      "@GENDER", "F", "Y",
-     None, "Gender Code", None, None, None, "U", None, None, None],
+     None, None, "Gender Code", None, None, None, "U", None, None, None],
 ])
 
 # ------ FIELDS_EXAMPLE_MULTI: headerless, pipe-delimited, Header/Detail/Trailer
@@ -421,37 +441,37 @@ field_sheet("FIELDS_EXAMPLE_MULTI", [
     [1, "File Format Version", "varchar", 4, "Y",
      "Version of the file specification this delivery conforms to.",
      "Free text", "0210", "N",
-     "Header", None, None, None, None, None, None, None,
+     None, "Header", None, None, None, None, None, None, None,
      "Whole sheet is an example — delete once replaced."],
     [2, "Payer ID", "varchar", 4, "Y",
      "Identifier assigned to the payer by the reporting entity.",
      "Free text", "1234", "N",
-     "Header", None, None, None, None, None, None, None, None],
+     None, "Header", None, None, None, None, None, None, None, None],
     [3, "Date of Extract", "datetime2", None, "Y",
      "Date on which the file was produced.",
      "Valid calendar date", "20240115", "N",
-     "Header", None, None, None, "CCYYMMDD", None, None, None,
+     None, "Header", None, None, None, "CCYYMMDD", None, None, None,
      "Position restarts at 1 below, because Detail is a different record type."],
     [1, "Member ID", "varchar", 80, "Y",
      "Plan-assigned member identifier.",
      "Free text", "M000123456", "Y",
-     "Detail", None, None, None, None, None, None, None, None],
+     "PK", "Detail", None, None, None, None, None, None, None, None],
     [2, "Relationship", "varchar", 2, "N",
      "Relationship of the member to the subscriber.",
      "@RELATIONSHIP", "01", "N",
-     "Detail", None, None, None, None, None, None, None, None],
+     None, "Detail", None, None, None, None, None, None, None, None],
     [3, "Termination Date", "datetime2", None, "N",
      "Date the other coverage terminated. Empty where coverage is active.",
      "Valid calendar date", "20241231", "N",
-     "Detail", None, None, None, "CCYYMMDD", "empty string", None, None, None],
+     None, "Detail", None, None, None, "CCYYMMDD", "empty string", None, None, None],
     [1, "Record Type", "Alpha Numeric", 6, "Y",
      "Static text identifying the trailer record.",
      "Always 'TRAILR'", "TRAILR", "N",
-     "Trailer", None, None, None, None, None, None, None, None],
+     None, "Trailer", None, None, None, None, None, None, None, None],
     [2, "Record Count", "numeric", "no max length", "Y",
      "Number of Detail records in this file. Used to validate completeness.",
      "0 or greater", "118432", "N",
-     "Trailer", None, None, None, None, None, None, None,
+     None, "Trailer", None, None, None, None, None, None, None,
      "Control total — we reconcile against this on load."],
 ])
 
@@ -483,6 +503,6 @@ body(ws, 2, ["1.0", "2026-01-15", "A. Vendor", "(all)", "Initial issue.",
 blanks(ws, 3, 120, 6)
 ws.freeze_panes = "A2"
 
-OUT = "templates/DICT_TEMPLATE_v1.2.xlsx"
+OUT = "templates/DICT_TEMPLATE_v1.3.xlsx"
 wb.save(OUT)
 print("wrote", OUT)

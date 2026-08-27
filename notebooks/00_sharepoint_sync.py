@@ -78,10 +78,23 @@ CATALOG = _param("catalog", "arjun_workspace")
 SCHEMA = _param("schema", "sttm_agent")
 RAW_VOLUME = _param("raw_volume", "frd_raw")
 REFERENCE_VOLUME = _param("reference_volume", "sttm_reference")
+# The vendor data dictionaries (2026-08-27) — their own volume, because
+# frdsttm.corpus.parse_reference_dir globs every .xlsx in the reference
+# directory and a DICT_ workbook is not a template workbook.
+DICT_VOLUME = _param("vdd_volume", "vdd_raw")
 
 SYNC_MODE = _param("sync_mode", "sync").strip().lower()
 FRD_NAME_PREFIX = _param("frd_name_prefix", "FRD_").strip()
 STTM_NAME_PREFIX = _param("sttm_name_prefix", "STTM_").strip()
+DICT_NAME_PREFIX = tuple(
+    p.strip() for p in _param("vdd_name_prefix", "VDD_,DICT_").split(",") if p.strip()
+)
+# BLANK means the third input is not in play: the sync lists two folders
+# exactly as it did before. That is the correct default until vendors return
+# DICT_ workbooks — probing an empty folder on every tick is a Graph call
+# that buys nothing. (A blank STRING knob is meaningful here; see the
+# blank-env-var note in CLAUDE.md before "fixing" it with a numeric default.)
+DICT_FOLDER = _param("sharepoint_vdd_folder", "").strip() or None
 if SYNC_MODE not in ("sync", "reindex"):
     raise ValueError(
         f"sync_mode must be 'sync' or 'reindex', got {SYNC_MODE!r}. "
@@ -94,9 +107,11 @@ SECRET_KEY = _param("sharepoint_secret_key", "sharepoint_client_secret")
 if IS_DATABRICKS:
     RAW_DIR = f"/Volumes/{CATALOG}/{SCHEMA}/{RAW_VOLUME}"
     REFERENCE_DIR = f"/Volumes/{CATALOG}/{SCHEMA}/{REFERENCE_VOLUME}"
+    DICT_DIR = f"/Volumes/{CATALOG}/{SCHEMA}/{DICT_VOLUME}"
 else:
     RAW_DIR = str(LOCAL_ROOT / RAW_VOLUME)
     REFERENCE_DIR = str(LOCAL_ROOT / REFERENCE_VOLUME)
+    DICT_DIR = str(LOCAL_ROOT / DICT_VOLUME)
 
 NOW = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -136,7 +151,9 @@ def _print_summary(summary: dict) -> None:
     print(json.dumps({k: v for k, v in summary.items() if k != "index"}, indent=2))
     print(
         f"\ncorpus: {len(index['frds'])} FRD(s), {len(index['references'])} reference "
-        f"STTM(s), {len(index['pairs'])} pair(s), {len(index['unmapped'])} unmapped "
+        f"STTM(s), {len(index['pairs'])} pair(s), {len(index['unmapped'])} unmapped, "
+        f"{len(index.get('dictionaries', {}))} vendor dictionary(ies), "
+        f"{len(index.get('dictionary_pairs', {}))} of them paired "
         f"-> {REFERENCE_DIR}/corpus_index.json"
     )
     for doc_id, pair in sorted(index["pairs"].items()):
@@ -144,6 +161,17 @@ def _print_summary(summary: dict) -> None:
               f"({pair['matched_by']}, {pair['confidence']}, {pair['score']:.2f})")
     for doc_id in index["unmapped"]:
         print(f"  unmapped {doc_id}")
+    for doc_id, name in sorted(index.get("dictionary_pairs", {}).items()):
+        d = index["dictionaries"].get(name, {})
+        flag = f"  [{d['n_problems']} problem(s): {', '.join(d['problem_kinds'])}]" \
+            if d.get("n_problems") else ""
+        print(f"  dict     {doc_id}  ->  {name}  "
+              f"({d.get('n_files', 0)} file(s), {d.get('n_fields', 0)} column(s)){flag}")
+    for name in index.get("unpaired_dictionaries", []):
+        print(f"  DICT UNPAIRED  {name} — no FRD shares its name key, so nothing "
+              f"will consume it")
+    for name, err in sorted(index.get("dictionary_errors", {}).items()):
+        print(f"  DICT UNREADABLE {name}: {err}")
     for s in summary.get("skipped", []):
         print(f"  SKIPPED  {s.get('kind', '?')} {s['name']}: {s['error']}")
 
@@ -153,7 +181,8 @@ def _print_summary(summary: dict) -> None:
 if SYNC_MODE == "reindex":
     print(f"sync_mode=reindex — rebuilding the corpus index from {RAW_DIR} and "
           f"{REFERENCE_DIR} without touching SharePoint.")
-    index, skipped = reindex(RAW_DIR, REFERENCE_DIR, THRESHOLDS, NOW)
+    index, skipped = reindex(RAW_DIR, REFERENCE_DIR, THRESHOLDS, NOW,
+                             dictionary_dir=DICT_DIR)
     _print_summary({"mode": "reindex", "skipped": skipped, "index": index})
 else:
     cfg = load_config(_param, _client_secret)
@@ -161,11 +190,15 @@ else:
     print(f"library:   {cfg.library}")
     print(f"FRDs:      {cfg.frd_folder or '<root>'}  ->  {RAW_DIR}")
     print(f"STTMs:     {cfg.sttm_folder or '<root>'}  ->  {REFERENCE_DIR}")
+    print(f"DICTs:     {DICT_FOLDER or '<not configured — third input off>'}"
+          f"{'  ->  ' + DICT_DIR if DICT_FOLDER else ''}")
     client = build_client(cfg)
     summary = sync_from_sharepoint(
         client, frd_dir=RAW_DIR, reference_dir=REFERENCE_DIR,
         reference_folder=cfg.sttm_folder, thresholds=THRESHOLDS, now_iso=NOW,
         frd_prefix=FRD_NAME_PREFIX, reference_prefix=STTM_NAME_PREFIX,
+        dictionary_dir=DICT_DIR if DICT_FOLDER else None,
+        dictionary_folder=DICT_FOLDER, dictionary_prefix=DICT_NAME_PREFIX,
     )
     _print_summary(summary)
     if summary["frd_listed"] == 0:

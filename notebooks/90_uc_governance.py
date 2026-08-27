@@ -82,7 +82,7 @@ FQ = f"{CATALOG}.{SCHEMA}"
 # Volumes the reviewer group may READ: inputs, past runs, the audit trail.
 # demo_raw is deliberately absent (per-run staging the app's SP writes), as
 # is any WRITE VOLUME / MANAGE — those stay with owner/steward.
-READ_VOLUMES = ("frd_raw", "sttm_reference", "sttm_out_app")   # + AUDIT_VOLUME, added in access_statements
+READ_VOLUMES = ("frd_raw", "sttm_reference", "vdd_raw", "sttm_out_app")   # + AUDIT_VOLUME, added in access_statements
 
 # --------------------------------------------------------------------------- #
 # The asset inventory — what the agent reads and writes, and what each IS.
@@ -113,6 +113,16 @@ VOLUMES = {
         "id/eTag/modified per synced file). Templates + eval references for 04_sttm_render.",
         {"source_system": "sharepoint", "content_kind": "client_document",
          "data_class": "source_to_target_mapping", "phi_possible": "true", "direction": "input"}),
+    "vdd_raw": (
+        "Vendor DATA DICTIONARIES (DICT_<name>.xlsx) synced READ-ONLY from SharePoint — the "
+        "third input (2026-08-27). Named to sit beside frd_raw: two raw source documents, two "
+        "raw volumes. One workbook per feed: a FILES sheet naming each delivered "
+        "file, and one field sheet per file carrying every source column's name, position, "
+        "type, length, null rule, description, allowed values and PHI flag. Held in its OWN "
+        "volume because frdsttm.corpus globs sttm_reference for TEMPLATE workbooks and a "
+        "dictionary is not one. Vendor-authored; describes PHI columns explicitly.",
+        {"source_system": "sharepoint", "content_kind": "vendor_document",
+         "data_class": "source_data_dictionary", "phi_possible": "true", "direction": "input"}),
     "sttm_out": (
         "Curated pipeline outputs of a hand-run frd_sttm_pipeline: extractions/ (LLM structured "
         "output + extraction_meta sidecars), contracts/ (validated feed contracts incl. "

@@ -71,6 +71,11 @@ import eval_report as er
 import identity as ident
 import jobs_runner
 
+# data_access (imported above) has already put src/ on sys.path for the
+# deployed App, which does not pip-install the package. Same ordering rule as
+# corpus_routes: do not let a formatter sort this above the local imports.
+from frdsttm.corpus import load_corpus_index  # noqa: E402
+
 router = APIRouter()
 
 # The same mode knob data_access.py reads. "databricks" = the deployed App:
@@ -89,6 +94,10 @@ GOLDEN_DOC_ID = os.environ.get("STTM_DEMO_GOLDEN_DOC_ID", "demo_frd")
 PRELOADED_DIR = LOCAL_ROOT / os.environ.get("STTM_DEMO_PRELOADED_VOLUME", "frd_raw")
 UPLOADS_DIR = LOCAL_ROOT / os.environ.get("STTM_DEMO_UPLOADS_VOLUME", "demo_uploads")
 RAW_STAGING_VOLUME = os.environ.get("STTM_DEMO_RAW_STAGING_VOLUME", "demo_raw")
+# Where the corpus index lives — read by the eligibility gate below. Same
+# default as corpus_routes.REFERENCE_DIR; kept as its own constant here rather
+# than imported, because corpus_routes imports demo and not the other way.
+REFERENCE_DIR = LOCAL_ROOT / os.environ.get("STTM_REFERENCE_VOLUME", "sttm_reference")
 LOGS_DIR = ROOT / "data" / "live_run_logs"
 
 SUFFIX_PREFIX = "demo"  # never configurable: the insulation guarantee hangs off it
@@ -501,10 +510,55 @@ def _run_worker_databricks(run: Run) -> None:
         _record_run_finished(run)
 
 
+def _check_eligible(doc_id: str) -> None:
+    """Refuse a run on an FRD the corpus says is not generatable.
+
+    THE RULE (Arjun, 2026-08-27): only an FRD that has a matching vendor data
+    dictionary AND does not already have an approved STTM may be run.
+
+    Enforced HERE, on the server, and not only in the picker — hiding a button
+    is a presentation choice, and this is a rule about spending money and about
+    not regenerating over an approved system of record. The picker is the
+    convenience; this is the gate. The verdict itself comes from
+    frdsttm.corpus.eligibility_of so there is exactly one implementation.
+
+    SCOPE, and it is narrow on purpose. The rule is about FRDs THE CORPUS
+    KNOWS. Two cases are deliberately let through:
+
+    * **no corpus index at all** — local development and the offline smoke run
+      against volumes with no index, and refusing there would break a path the
+      rule has nothing to do with;
+    * **a doc_id the index does not list** — an uploaded document, or a file
+      staged by hand. "Has a dictionary and no STTM" is not a question that
+      can be asked about a document the corpus has never paired, and answering
+      it "no" would block the upload path over a rule that does not apply.
+
+    That is why the lookup is `index["eligibility"].get(doc_id)` rather than
+    `eligibility_of`, which is conservative BY DESIGN for the picker: there,
+    an unknown doc must not render a live button. Here, an unknown doc is
+    simply out of scope. Two different questions, two different defaults —
+    kept apart deliberately.
+
+    A CORRUPT index still raises through load_corpus_index, as everywhere else.
+    """
+    try:
+        index = load_corpus_index(REFERENCE_DIR)
+    except Exception:  # noqa: BLE001 — a corpus problem is not this run's error
+        return
+    if index is None:
+        return
+    verdict = index.get("eligibility", {}).get(doc_id)
+    if verdict is None:
+        return                      # not a corpus FRD — the rule does not apply
+    if not verdict["generatable"]:
+        raise RunPreflightError(f"{doc_id} cannot be generated. {verdict['reason']}")
+
+
 def start_run(frd_rel: str, identity: dict | None = None) -> Run:
     global _active_run_id
 
     frd_path = _validate_frd(frd_rel)
+    _check_eligible(frd_path.stem)
     # In databricks mode the Anthropic key lives in the workspace secret
     # scope and is checked by the job's own extract task (which fails loudly
     # without it); the app process neither has nor needs the key.

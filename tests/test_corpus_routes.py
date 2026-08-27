@@ -67,8 +67,10 @@ def _reset_sync_state():
 def dirs(monkeypatch, tmp_path):
     preloaded = tmp_path / "frd_raw"
     reference = tmp_path / "sttm_reference"
+    dictionaries = tmp_path / "vdd_raw"
     monkeypatch.setattr(cr, "PRELOADED_DIR", preloaded)
     monkeypatch.setattr(cr, "REFERENCE_DIR", reference)
+    monkeypatch.setattr(cr, "DICTIONARY_DIR", dictionaries)
     return preloaded, reference
 
 
@@ -381,3 +383,126 @@ def test_corpus_config_unavailable_with_no_source(client, monkeypatch):
     for k in ENV:
         monkeypatch.delenv(k, raising=False)
     assert client.get("/api/demo/corpus/config").json()["available"] is False
+
+
+# --------------------------------------------------------------------------- #
+# the third input — vendor data dictionaries (2026-08-27)
+# --------------------------------------------------------------------------- #
+from test_dictionary import _field_row, _file_row, write_dictionary  # noqa: E402
+
+
+def _reindex_with_dictionary(client, dirs, monkeypatch, tmp_path, *, dict_name):
+    """One FRD in the corpus and one DICT_ workbook beside it, indexed offline."""
+    preloaded, reference = dirs
+    preloaded.mkdir(parents=True, exist_ok=True)
+    reference.mkdir(parents=True, exist_ok=True)
+    (preloaded / "member_risk.txt").write_bytes(frd_text("member_risk", MEMBER_COLS))
+    (reference / "member_risk.sttm.xlsx").write_bytes(wb_bytes("member_risk", MEMBER_COLS))
+    dict_dir = tmp_path / "vdd_raw"
+    dict_dir.mkdir(parents=True, exist_ok=True)
+    write_dictionary(dict_dir / dict_name,
+                     [_file_row("MEMBER_RISK_CCYYMMDD.txt", "member_risk_fields")],
+                     {"member_risk_fields": [_field_row(1, "member_id"),
+                                             _field_row(2, "zip_code")]})
+    r = client.post("/api/demo/corpus/sync", json={"confirm": True, "mode": "reindex"})
+    assert r.status_code == 202
+    _wait_sync(client)
+    return dict_dir
+
+
+def test_picker_reports_the_paired_dictionary(client, dirs, monkeypatch, tmp_path):
+    _reindex_with_dictionary(client, dirs, monkeypatch, tmp_path,
+                             dict_name="DICT_member_risk.xlsx")
+    entry = next(f for f in client.get("/api/demo/corpus/frds").json()["frds"]
+                 if f["doc_id"] == "member_risk")
+    assert entry["has_dictionary"] is True
+    assert entry["dictionary"] == "DICT_member_risk.xlsx"
+    assert entry["dictionary_files"] == 1
+    assert entry["dictionary_fields"] == 2
+    assert entry["dictionary_problems"] == 0
+
+
+def test_picker_reports_no_dictionary_as_a_state_not_an_omission(client, dirs):
+    """Every FRD carries the block; `has_dictionary` false is the gate."""
+    preloaded, reference = dirs
+    preloaded.mkdir(parents=True, exist_ok=True)
+    reference.mkdir(parents=True, exist_ok=True)
+    (preloaded / "member_risk.txt").write_bytes(frd_text("member_risk", MEMBER_COLS))
+    client.post("/api/demo/corpus/sync", json={"confirm": True, "mode": "reindex"})
+    _wait_sync(client)
+    entry = client.get("/api/demo/corpus/frds").json()["frds"][0]
+    assert entry["has_dictionary"] is False
+    assert entry["dictionary"] is None
+    assert entry["dictionary_fields"] == 0
+
+
+def test_an_unpaired_dictionary_is_surfaced_not_attached(client, dirs, monkeypatch, tmp_path):
+    """A DICT_ workbook whose name matches no FRD must never be guessed onto one."""
+    _reindex_with_dictionary(client, dirs, monkeypatch, tmp_path,
+                             dict_name="DICT_some_other_vendor.xlsx")
+    body = client.get("/api/demo/corpus/frds").json()
+    assert body["unpaired_dictionaries"] == ["DICT_some_other_vendor.xlsx"]
+    assert all(f["has_dictionary"] is False for f in body["frds"])
+
+
+def test_dictionary_download_serves_only_indexed_names(client, dirs, monkeypatch, tmp_path):
+    _reindex_with_dictionary(client, dirs, monkeypatch, tmp_path,
+                             dict_name="DICT_member_risk.xlsx")
+    ok = client.get("/api/demo/corpus/dictionaries/DICT_member_risk.xlsx")
+    assert ok.status_code == 200
+    assert ok.content[:2] == b"PK"           # a real .xlsx
+    assert "DICT_member_risk.xlsx" in ok.headers["content-disposition"]
+    # the index is the allow-list: anything else is a 404, never a file read
+    assert client.get("/api/demo/corpus/dictionaries/secrets.xlsx").status_code == 404
+    assert client.get(
+        "/api/demo/corpus/dictionaries/..%2F..%2Fetc%2Fpasswd").status_code == 404
+
+
+def test_corpus_summary_counts_dictionaries(client, dirs, monkeypatch, tmp_path):
+    _reindex_with_dictionary(client, dirs, monkeypatch, tmp_path,
+                             dict_name="DICT_member_risk.xlsx")
+    body = client.get("/api/demo/corpus").json()
+    assert body["n_dictionaries"] == 1
+    assert body["n_dictionary_pairs"] == 1
+    assert body["unpaired_dictionaries"] == []
+
+
+def test_picker_marks_only_ready_frds_generatable(client, dirs, monkeypatch, tmp_path):
+    """The rule on the wire: a dictionary and no STTM, or it is not selectable."""
+    _reindex_with_dictionary(client, dirs, monkeypatch, tmp_path,
+                             dict_name="VDD_member_risk.xlsx")
+    body = client.get("/api/demo/corpus/frds").json()
+    entry = next(f for f in body["frds"] if f["doc_id"] == "member_risk")
+    # this fixture gives member_risk BOTH an STTM and a dictionary -> mapped
+    assert entry["eligibility_status"] == "mapped"
+    assert entry["generatable"] is False
+    assert client.get("/api/demo/corpus").json()["n_generatable"] == 0
+
+
+def test_an_frd_with_a_dictionary_and_no_sttm_is_generatable(client, dirs, monkeypatch, tmp_path):
+    preloaded, reference = dirs
+    preloaded.mkdir(parents=True, exist_ok=True)
+    reference.mkdir(parents=True, exist_ok=True)
+    (preloaded / "member_risk.txt").write_bytes(frd_text("member_risk", MEMBER_COLS))
+    dict_dir = tmp_path / "vdd_raw"
+    dict_dir.mkdir(parents=True, exist_ok=True)
+    write_dictionary(dict_dir / "VDD_member_risk.xlsx",
+                     [_file_row("M.txt", "f")], {"f": [_field_row(1, "MEMBER_ID")]})
+    client.post("/api/demo/corpus/sync", json={"confirm": True, "mode": "reindex"})
+    _wait_sync(client)
+    entry = client.get("/api/demo/corpus/frds").json()["frds"][0]
+    assert entry["eligibility_status"] == "ready" and entry["generatable"] is True
+    assert client.get("/api/demo/corpus").json()["n_generatable"] == 1
+
+
+def test_an_frd_with_no_dictionary_is_blocked_with_a_reason(client, dirs):
+    preloaded, reference = dirs
+    preloaded.mkdir(parents=True, exist_ok=True)
+    reference.mkdir(parents=True, exist_ok=True)
+    (preloaded / "member_risk.txt").write_bytes(frd_text("member_risk", MEMBER_COLS))
+    client.post("/api/demo/corpus/sync", json={"confirm": True, "mode": "reindex"})
+    _wait_sync(client)
+    entry = client.get("/api/demo/corpus/frds").json()["frds"][0]
+    assert entry["eligibility_status"] == "no_dictionary"
+    assert entry["generatable"] is False
+    assert "VDD_<feed>.xlsx" in entry["eligibility_reason"]

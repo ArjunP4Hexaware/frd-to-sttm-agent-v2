@@ -214,6 +214,14 @@ export interface CorpusSummary {
   n_pairs: number;
   n_unmapped: number;
   unpaired_references: string[];
+  n_dictionaries: number;
+  n_dictionary_pairs: number;
+  /** How many FRDs a reviewer may actually start a run on. */
+  n_generatable: number;
+  /** DICT_ workbooks whose name matches no FRD — surfaced, never attached to
+   *  a feed by similarity (see frdsttm.similarity.pair_dictionaries). */
+  unpaired_dictionaries: string[];
+  dictionary_errors: Record<string, string>;
   sync: CorpusSyncState;
 }
 
@@ -235,6 +243,28 @@ export interface CorpusFrd {
   reference_web_url: string | null;
   reference_modified: string | null;
   reference_size_bytes: number | null;
+  /* The vendor data dictionary (the third input, 2026-08-27). Every FRD
+   * carries this block; `has_dictionary: false` is the GATING state, not a
+   * missing field — without a dictionary the source side of the STTM has no
+   * grounded input and the run says so by name. `dictionary_problems` rides
+   * along because "a dictionary exists" and "a dictionary that describes
+   * every column exists" are different facts, and a reviewer deciding
+   * whether to spend a billed run needs the second one. */
+  has_dictionary: boolean;
+  dictionary: string | null;
+  dictionary_files: number;
+  dictionary_fields: number;
+  dictionary_problems: number;
+  dictionary_problem_kinds: string[];
+  dictionary_web_url: string | null;
+  dictionary_modified: string | null;
+  /* THE RULE (2026-08-27): only an FRD with a matching vendor dictionary AND
+   * no approved STTM may be generated. The verdict is computed once, in
+   * frdsttm.corpus, and enforced server-side in the run endpoint — this field
+   * is what the picker renders, not where the rule lives. */
+  generatable: boolean;
+  eligibility_status: "ready" | "mapped" | "no_dictionary";
+  eligibility_reason: string;
 }
 
 export interface CorpusConfig {
@@ -309,7 +339,13 @@ export function useCorpusSummary() {
 export function useCorpusFrds(enabled: boolean) {
   return useQuery({
     queryKey: ["demo", "corpus", "frds"],
-    queryFn: () => fetchJson<{ built: boolean; frds: CorpusFrd[] }>("/api/demo/corpus/frds"),
+    queryFn: () =>
+      fetchJson<{
+        built: boolean;
+        frds: CorpusFrd[];
+        unpaired_dictionaries?: string[];
+        dictionary_errors?: Record<string, string>;
+      }>("/api/demo/corpus/frds"),
     enabled,
     retry: false,
   });
@@ -344,6 +380,10 @@ export function useCorpusSync() {
 
 /** Download URL for an approved STTM in the reference volume (served only
  *  for names the corpus index lists). */
+export function corpusDictionaryUrl(name: string): string {
+  return `/api/demo/corpus/dictionaries/${encodeURIComponent(name)}`;
+}
+
 export function corpusReferenceUrl(name: string): string {
   return `/api/demo/corpus/references/${encodeURIComponent(name)}`;
 }

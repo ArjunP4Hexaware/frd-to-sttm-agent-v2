@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle, Button, Spinner } from "@databricks/appkit-ui/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "./ui/badge";
-import { Card, CardContent } from "./ui/card";
 import {
+  corpusDictionaryUrl,
   useCorpusConfig,
   useCorpusFrds,
   useCorpusSummary,
@@ -84,17 +84,59 @@ export function CorpusPanel({
   const sttmPath = isLocalFolder
     ? (spConfig.data?.site ?? "")
     : `${sourcePath}${spConfig.data?.sttm_folder ? `/${spConfig.data.sttm_folder}` : ""}`;
-  const unmapped = (frds.data?.frds ?? []).filter((f) => !f.paired);
-  const mapped = (frds.data?.frds ?? []).filter((f) => f.paired);
+  // Three groups, one rule (2026-08-27): only an FRD with a vendor dictionary
+  // and no approved STTM may be generated. The other two are still LISTED —
+  // hiding them would leave a reviewer wondering where their document went,
+  // and each row says exactly what is missing.
+  const all = frds.data?.frds ?? [];
+  const ready = all.filter((f) => f.eligibility_status === "ready");
+  const blocked = all.filter((f) => f.eligibility_status === "no_dictionary");
+  const mapped = all.filter((f) => f.eligibility_status === "mapped");
 
   return (
     <div className="flex flex-col gap-4">
       {built && summary.data && (
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
           <Stat label="FRDs" value={summary.data.n_frds} />
           <Stat label="Approved STTMs" value={summary.data.n_references} />
           <Stat label="Mapped pairs" value={summary.data.n_pairs} />
-          <Stat label="Awaiting an STTM" value={summary.data.n_unmapped} />
+          <Stat
+            label="Awaiting an STTM"
+            value={summary.data.n_unmapped}
+            tone={summary.data.n_unmapped > 0 ? "alert" : "muted"}
+          />
+          {/* The third input (2026-08-27). Shown as "paired / total FRDs"
+              rather than a bare count, because the number that matters is
+              how many feeds have a grounded SOURCE side — not how many
+              workbooks happen to sit in the volume. */}
+          <Stat
+            label="With a dictionary"
+            value={summary.data.n_dictionary_pairs ?? 0}
+            of={summary.data.n_frds}
+            tone={(summary.data.n_dictionary_pairs ?? 0) < summary.data.n_frds ? "alert" : undefined}
+          />
+          {/* The number that actually matters on this screen: how many feeds
+              can be started right now. */}
+          <Stat
+            label="Ready to map"
+            value={summary.data.n_generatable ?? 0}
+            tone={(summary.data.n_generatable ?? 0) === 0 ? "muted" : undefined}
+          />
+        </div>
+      )}
+
+      {built && (summary.data?.unpaired_dictionaries?.length ?? 0) > 0 && (
+        <div className="acfc-panel acfc-panel--warn text-sm">
+          <p className="font-semibold text-[var(--brand-red)]">
+            {summary.data!.unpaired_dictionaries.length} vendor dictionary(ies) match no FRD
+          </p>
+          <p className="text-muted-foreground mt-1">
+            <span className="mono-id">{summary.data!.unpaired_dictionaries.join(", ")}</span> — pairing is
+            by exact name (<span className="mono-id">DICT_&lt;feed&gt;.xlsx</span> ↔{" "}
+            <span className="mono-id">FRD_&lt;feed&gt;.docx</span>) and is never guessed by similarity:
+            attaching the wrong vendor’s spec would put real column names and PHI flags on a feed they do
+            not describe. Rename the file, or add the FRD.
+          </p>
         </div>
       )}
 
@@ -107,54 +149,82 @@ export function CorpusPanel({
 
       {built && (
         <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">FRDs without an STTM</h3>
-          {unmapped.length === 0 && (
-            <p className="text-sm text-muted-foreground">Every FRD in the corpus has an STTM.</p>
+          <h3 className="acfc-section-title">Ready to map</h3>
+          <p className="text-sm text-muted-foreground -mt-1">
+            An FRD with a vendor data dictionary and no STTM yet. These are the only ones that can
+            be generated.
+          </p>
+          {ready.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              Nothing is ready to map right now — see the two groups below for what each FRD is
+              waiting on.
+            </p>
           )}
-          {unmapped.map((f) => (
-            <Card key={f.doc_id}>
-              <CardContent className="py-2 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="mono-id text-sm truncate">{f.name}</span>
-                  <Badge variant="warning">no STTM yet</Badge>
-                  {f.web_url && !isLocalFolder && (
-                    <a
-                      href={f.web_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs underline text-muted-foreground"
-                    >
-                      SharePoint ↗
-                    </a>
-                  )}
-                </div>
-                <Button onClick={() => onGenerate(f)} disabled={!canRun || !f.runnable}>
-                  Generate STTM
-                </Button>
-              </CardContent>
-            </Card>
+          {ready.map((f) => (
+            <div key={f.doc_id} className="acfc-row acfc-row--ready">
+              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                <span className="mono-id text-sm truncate">{f.name}</span>
+                <DictionaryChip frd={f} />
+                {f.web_url && !isLocalFolder && (
+                  <a
+                    href={f.web_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs underline text-muted-foreground"
+                  >
+                    SharePoint ↗
+                  </a>
+                )}
+              </div>
+              <Button onClick={() => onGenerate(f)} disabled={!canRun || !f.runnable}>
+                Generate STTM
+              </Button>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {built && blocked.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h3 className="acfc-section-title">Waiting on a vendor data dictionary</h3>
+          <p className="text-sm text-muted-foreground -mt-1">
+            No STTM yet, and nothing to ground the source columns. Ask the vendor for{" "}
+            <span className="mono-id">VDD_&lt;feed&gt;.xlsx</span> and name it in the FRD's
+            Structural Metadata › Source Data Dictionary row.
+          </p>
+          {blocked.map((f) => (
+            <div key={f.doc_id} className="acfc-row" style={{ borderLeftColor: "var(--brand-red)" }}>
+              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                <span className="mono-id text-sm truncate">{f.name}</span>
+                <DictionaryChip frd={f} />
+              </div>
+              <span className="text-xs text-muted-foreground">Cannot be generated</span>
+            </div>
           ))}
         </section>
       )}
 
       {built && mapped.length > 0 && (
         <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">FRDs already mapped</h3>
+          <h3 className="acfc-section-title">Already mapped</h3>
+          <p className="text-sm text-muted-foreground -mt-1">
+            The approved STTM is the system of record. These are presented as-is and are not
+            regenerated.
+          </p>
           {mapped.map((f) => (
-            <Card key={f.doc_id}>
-              <CardContent className="py-2 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                  <span className="mono-id text-sm truncate">{f.name}</span>
-                  <Badge variant={f.confidence === "high" ? "success" : "secondary"}>
-                    {f.matched_by === "name" ? "name match" : `${Math.round((f.score ?? 0) * 100)}% match`} ·{" "}
-                    {f.reference}
-                  </Badge>
-                </div>
-                <Button variant="outline" onClick={() => onExisting(f)}>
-                  View STTM
-                </Button>
-              </CardContent>
-            </Card>
+            <div key={f.doc_id} className="acfc-row">
+              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                <span className="mono-id text-sm truncate">{f.name}</span>
+                <Badge variant={f.confidence === "high" ? "success" : "secondary"}>
+                  {f.matched_by === "name" ? "name match" : `${Math.round((f.score ?? 0) * 100)}% match`} ·{" "}
+                  {f.reference}
+                </Badge>
+                <DictionaryChip frd={f} />
+              </div>
+              <Button variant="outline" onClick={() => onExisting(f)}>
+                View STTM
+              </Button>
+            </div>
           ))}
         </section>
       )}
@@ -259,13 +329,66 @@ export function CorpusPanel({
   );
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
+function Stat({
+  label,
+  value,
+  of,
+  tone,
+}: {
+  label: string;
+  value: number;
+  /** Renders "3 / 7" — used where the count is only meaningful against a
+   *  denominator (feeds WITH a dictionary, out of all feeds). */
+  of?: number;
+  tone?: "muted" | "alert";
+}) {
   return (
-    <Card>
-      <CardContent className="py-2 text-center">
-        <div className="text-2xl font-semibold mono-id">{value}</div>
-        <div className="text-sm text-muted-foreground">{label}</div>
-      </CardContent>
-    </Card>
+    <div className={`acfc-stat${tone ? ` acfc-stat--${tone}` : ""}`}>
+      <b>
+        {value}
+        {of != null && <span className="opacity-45 font-normal"> / {of}</span>}
+      </b>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+/**
+ * The vendor data dictionary's state for one FRD — the third input made
+ * visible (2026-08-27).
+ *
+ * "No vendor dictionary" is rendered as a RED chip, not as an absent one, and
+ * that is the whole point of the component: without a dictionary the source
+ * side of the STTM has no grounded input, so the run will leave those columns
+ * blank and raise a named question. A reviewer about to spend a billed run
+ * has to be able to see that BEFORE they spend it, not after.
+ *
+ * When a dictionary IS present the chip carries its column count, and — if the
+ * parser found gaps in it — how many. "A dictionary exists" and "a dictionary
+ * that describes every column exists" are different facts.
+ */
+function DictionaryChip({ frd }: { frd: CorpusFrd }) {
+  if (!frd.has_dictionary) {
+    return (
+      <span className="acfc-chip acfc-chip--gap" title="The source side cannot be grounded without one">
+        no vendor dictionary
+      </span>
+    );
+  }
+  const gaps = frd.dictionary_problems;
+  return (
+    <a
+      href={corpusDictionaryUrl(frd.dictionary!)}
+      download
+      className={`acfc-chip ${gaps > 0 ? "acfc-chip--quiet" : "acfc-chip--ok"} no-underline`}
+      title={
+        gaps > 0
+          ? `${frd.dictionary} — ${gaps} gap(s): ${frd.dictionary_problem_kinds.join(", ")}`
+          : `${frd.dictionary} — download`
+      }
+    >
+      dictionary · {frd.dictionary_fields} columns
+      {gaps > 0 ? ` · ${gaps} gap${gaps === 1 ? "" : "s"}` : ""}
+    </a>
   );
 }

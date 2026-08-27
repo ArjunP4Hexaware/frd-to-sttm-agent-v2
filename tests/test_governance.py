@@ -506,8 +506,12 @@ def test_uc_governance_access_model_grants_read_only_to_one_group(monkeypatch):
     assert grants[0] == "GRANT USE CATALOG ON CATALOG cat TO `client-bsa group`"
     assert grants[1] == "GRANT USE SCHEMA ON SCHEMA cat.sch TO `client-bsa group`"
     read = [s for s in grants if "READ VOLUME" in s]
+    # vdd_raw joined 2026-08-27 with the third input. A BSA who may read
+    # the FRD may read the vendor dictionary that describes the same feed's
+    # columns: same feed, same sensitivity, and the picker shows the pairing.
+    # "May run == may read" would be broken by granting one and not the other.
     assert {s.split("VOLUME cat.sch.")[1].split(" ")[0] for s in read} == {
-        "frd_raw", "sttm_reference", "sttm_out_app", "sttm_audit"}
+        "frd_raw", "sttm_reference", "vdd_raw", "sttm_out_app", "sttm_audit"}
     text = "\n".join(grants)
     assert "WRITE VOLUME" not in text and "MANAGE" not in text and "demo_raw" not in text
     # grants come LAST (after the objects exist / are tagged) and only on present volumes
@@ -521,3 +525,87 @@ def test_uc_governance_access_model_grants_read_only_to_one_group(monkeypatch):
     cli = ns["app_permission_cli"]("client-bsa group", "frd-sttm-review")
     assert "update-permissions frd-sttm-review" in cli and '"CAN_USE"' in cli and "client-bsa group" in cli
     assert ns["grant_app_can_use"]("", "x").startswith("app permission: skipped")
+
+
+# --------------------------------------------------------------------------- #
+# the eligibility rule is a SERVER-SIDE gate, not a hidden button (2026-08-27)
+# --------------------------------------------------------------------------- #
+
+def _corpus(tmp_path, monkeypatch, *, eligibility):
+    """Write a minimal corpus index and point demo.py at it."""
+    ref = tmp_path / "sttm_reference"
+    ref.mkdir(parents=True, exist_ok=True)
+    from frdsttm.corpus import CORPUS_INDEX_VERSION
+    (ref / "corpus_index.json").write_text(json.dumps({
+        "version": CORPUS_INDEX_VERSION, "generated_at": "2026-08-27T00:00:00+00:00",
+        "thresholds": {}, "frds": {}, "references": {}, "pairs": {}, "unmapped": [],
+        "unpaired_references": [], "dictionaries": {}, "dictionary_pairs": {},
+        "unpaired_dictionaries": [], "ambiguous_dictionaries": [], "dictionary_errors": {},
+        "eligibility": eligibility,
+        "generatable": sorted(d for d, e in eligibility.items() if e["generatable"]),
+    }), encoding="utf-8")
+    monkeypatch.setattr(demo, "REFERENCE_DIR", ref)
+
+
+def test_run_is_refused_for_an_frd_with_no_dictionary(client, live_dirs, monkeypatch, tmp_path):
+    """Hiding the button is presentation; this is the rule. A caller with the
+    URL must not be able to spend a billed call on an ungrounded feed."""
+    _corpus(tmp_path, monkeypatch, eligibility={"demo_frd": {
+        "status": "no_dictionary", "generatable": False,
+        "reason": "No vendor data dictionary is paired with this FRD.",
+        "dictionary": None, "reference": None}})
+    r = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")},
+                    headers=FORWARDED)
+    assert r.status_code == 400
+    assert "No vendor data dictionary" in r.json()["detail"]
+    assert not any(e["kind"] == "run.started" for e in _events())
+
+
+def test_run_is_refused_for_an_already_mapped_frd(client, live_dirs, monkeypatch, tmp_path):
+    _corpus(tmp_path, monkeypatch, eligibility={"demo_frd": {
+        "status": "mapped", "generatable": False,
+        "reason": "This FRD already has an approved STTM.",
+        "dictionary": None, "reference": "STTM_demo.xlsx"}})
+    r = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")},
+                    headers=FORWARDED)
+    assert r.status_code == 400 and "already has an approved STTM" in r.json()["detail"]
+
+
+def test_an_absent_corpus_index_does_not_block_a_run(client, live_dirs, monkeypatch, tmp_path):
+    """Local development and the offline smoke run against volumes with no
+    index. Refusing there would break a path the rule has nothing to do with —
+    a CORRUPT index still raises, as everywhere else."""
+    monkeypatch.setattr(demo, "REFERENCE_DIR", tmp_path / "nothing_here")
+    monkeypatch.setattr(demo.subprocess, "Popen", _FakeProc)
+    r = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")},
+                    headers=FORWARDED)
+    assert r.status_code == 201
+
+
+def test_a_doc_the_corpus_never_paired_is_out_of_scope_not_refused(
+        client, live_dirs, monkeypatch, tmp_path):
+    """The rule is about FRDs the corpus KNOWS. An uploaded or hand-staged
+    document has no pairing to judge, and refusing it would block the upload
+    path over a rule that does not apply to it.
+
+    Note this is the OPPOSITE default from `eligibility_of`, which is
+    conservative so the picker never renders a live button for an unknown doc.
+    Two questions, two defaults, deliberately kept apart."""
+    _corpus(tmp_path, monkeypatch, eligibility={"some_other_frd": {
+        "status": "ready", "generatable": True, "reason": "",
+        "dictionary": "VDD_x.xlsx", "reference": None}})
+    monkeypatch.setattr(demo.subprocess, "Popen", _FakeProc)
+    r = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")},
+                    headers=FORWARDED)
+    assert r.status_code == 201
+
+
+def test_a_ready_corpus_frd_starts_normally(client, live_dirs, monkeypatch, tmp_path):
+    _corpus(tmp_path, monkeypatch, eligibility={"demo_frd": {
+        "status": "ready", "generatable": True, "reason": "ready to map",
+        "dictionary": "VDD_demo.xlsx", "reference": None}})
+    monkeypatch.setattr(demo.subprocess, "Popen", _FakeProc)
+    r = client.post("/api/demo/runs", json={"frd": str(live_dirs / "frd_raw" / "demo_frd.docx")},
+                    headers=FORWARDED)
+    assert r.status_code == 201
+    assert _events("run.started")

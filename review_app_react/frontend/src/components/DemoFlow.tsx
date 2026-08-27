@@ -3,6 +3,7 @@ import { Alert, AlertDescription, AlertTitle, Button, Spinner } from "@databrick
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import {
+  corpusDictionaryUrl,
   corpusReferenceUrl,
   subscribeDemoRunEvents,
   useDemoConfig,
@@ -26,11 +27,13 @@ import { DemoResults } from "./DemoResults";
  *    → results. The finished workbook is downloaded and, after any final
  *    edits, uploaded to the library's STTM folder BY THE REVIEWER; the next
  *    sync pulls it in and pairs it.
- *  - a MAPPED FRD → its approved STTM is presented first (download from the
- *    reference volume, link to SharePoint). A deliberate two-step
- *    "regenerate anyway" re-enters the billed-run gate — every such run is
- *    an automatic golden-pair eval against the existing workbook, which is
- *    left untouched.
+ *  - a MAPPED FRD → its approved STTM is presented, and that is all: since
+ *    the eligibility rule (2026-08-27) a mapped FRD is NOT generatable, the
+ *    run endpoint refuses it server-side, and the "regenerate anyway" control
+ *    is gone. The approved workbook is the system of record.
+ *  - an FRD with NO VENDOR DICTIONARY → listed, with what it is waiting on,
+ *    but not selectable: without one the source columns cannot be grounded,
+ *    and that is not worth a billed call.
  */
 type Phase =
   | { kind: "setup" }
@@ -39,8 +42,47 @@ type Phase =
   | { kind: "running"; runId: string }
   | { kind: "results"; setId: string; docId: string };
 
+/**
+ * A finished run's results are addressable: `?set=<artifact set>&doc=<doc id>`.
+ *
+ * Added 2026-08-27 while cataloguing the app's screens, because the catalogue
+ * turned up a real gap rather than a documentation one: the results view was
+ * reachable ONLY as the tail of a run in this browser tab. Navigate away, or
+ * come back after an App restart, and a completed — billed — run could not be
+ * looked at again, even though its artifact set is sitting in the volume. The
+ * URL is now the handle, so a reviewer can bookmark a result, send it to a
+ * colleague, or reopen it tomorrow.
+ *
+ * Deliberately NOT a router: one query pair, read once on mount and written
+ * when the results phase is entered. Nothing else in the app is addressable,
+ * and the picker stays the default view for a bare URL.
+ */
+function resultsFromUrl(): Phase | null {
+  if (typeof window === "undefined") return null;
+  const q = new URLSearchParams(window.location.search);
+  const setId = q.get("set");
+  const docId = q.get("doc");
+  return setId && docId ? { kind: "results", setId, docId } : null;
+}
+
 export function DemoFlow() {
-  const [phase, setPhase] = useState<Phase>({ kind: "setup" });
+  const [phase, setPhase] = useState<Phase>(() => resultsFromUrl() ?? { kind: "setup" });
+
+  // Keep the address bar in step with the phase, without a history entry per
+  // click: a deep-linked result is shareable, and stepping back to the picker
+  // clears it so a refresh does not bounce the reviewer into an old run.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (phase.kind === "results") {
+      url.searchParams.set("set", phase.setId);
+      url.searchParams.set("doc", phase.docId);
+    } else {
+      url.searchParams.delete("set");
+      url.searchParams.delete("doc");
+    }
+    window.history.replaceState(null, "", url.toString());
+  }, [phase]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -51,11 +93,7 @@ export function DemoFlow() {
         />
       )}
       {phase.kind === "existing" && (
-        <ExistingSttmView
-          frd={phase.frd}
-          onBack={() => setPhase({ kind: "setup" })}
-          onRegenerate={() => setPhase({ kind: "confirm", frd: phase.frd })}
-        />
+        <ExistingSttmView frd={phase.frd} onBack={() => setPhase({ kind: "setup" })} />
       )}
       {phase.kind === "confirm" && (
         <ConfirmDialog
@@ -104,31 +142,35 @@ function MappingSetup({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Backend configuration state — context, not the work. One tight line
+          each; they were two full alert boxes owning the first screen. */}
       {!configured && spConfig.isSuccess && (
-        <Alert>
-          <AlertTitle>No document source is connected</AlertTitle>
-          <AlertDescription>
-            Neither a documents folder (STTM_LOCAL_SOURCE_DIR) nor a SharePoint tenant is configured on this
-            backend, so nothing can be synced from here. FRDs already in the volumes can still be listed and
-            run; the index can be rebuilt from them with “Rebuild index”.
-          </AlertDescription>
-        </Alert>
+        <div className="acfc-notice">
+          <b>No document source</b>
+          <span>
+            Neither a documents folder (STTM_LOCAL_SOURCE_DIR) nor a SharePoint tenant is configured on
+            this backend, so nothing can be synced from here. FRDs already in the volumes can still be
+            listed and run; “Rebuild index” re-pairs from them.
+          </span>
+        </div>
       )}
       {!keyPresent && (
-        <Alert variant="destructive">
-          <AlertTitle>Pipeline runs unavailable</AlertTitle>
-          <AlertDescription>
-            ANTHROPIC_API_KEY is not configured on the backend (environment or repo .env), so an FRD cannot
-            be processed. Existing STTMs and past runs remain viewable.
-          </AlertDescription>
-        </Alert>
+        <div className="acfc-notice acfc-notice--warn">
+          <b>Runs unavailable</b>
+          <span>
+            No model credential is configured on this backend, so an FRD cannot be processed. Existing
+            STTMs and past runs remain viewable.
+          </span>
+        </div>
       )}
 
       <div>
-        <h2 className="eyebrow mb-2">Select FRD</h2>
-        <p className="text-sm text-muted-foreground">
-          The list below is what the last sync landed in the corpus. Pick an FRD that has no STTM yet to
-          draft one; an FRD that already has an STTM is presented as-is.
+        <p className="eyebrow-blue mb-1">Select FRD</p>
+        <h2 className="acfc-section-title text-xl mb-1.5">Pick the feed to map</h2>
+        <p className="text-sm text-muted-foreground max-w-3xl">
+          The list below is what the last sync landed in the corpus. An FRD can be drafted only when it
+          has a matching vendor data dictionary and does not already have an approved STTM — everything
+          else is listed with what it is waiting on, so nothing quietly disappears.
         </p>
       </div>
 
@@ -144,16 +186,7 @@ function MappingSetup({
  * eval against the existing workbook). Nothing here writes anywhere: the
  * existing STTM stays exactly where it is in SharePoint.
  */
-function ExistingSttmView({
-  frd,
-  onBack,
-  onRegenerate,
-}: {
-  frd: CorpusFrd;
-  onBack: () => void;
-  onRegenerate: () => void;
-}) {
-  const [confirming, setConfirming] = useState(false);
+function ExistingSttmView({ frd, onBack }: { frd: CorpusFrd; onBack: () => void }) {
   const reference = frd.reference ?? "";
   return (
     <div className="flex flex-col gap-4">
@@ -162,9 +195,10 @@ function ExistingSttmView({
           ← Select FRD
         </Button>
       </div>
-      <Card className="border-2">
+      <Card className="border-l-[3px] border-l-[var(--brand-blue)]">
         <CardHeader>
-          <CardTitle>This FRD already has an STTM</CardTitle>
+          <p className="eyebrow-blue">Already mapped</p>
+          <CardTitle className="acfc-section-title text-lg">This FRD already has an STTM</CardTitle>
           <CardDescription>
             <span className="mono-id">{frd.name}</span> is mapped by{" "}
             <span className="mono-id">{reference}</span>
@@ -180,12 +214,46 @@ function ExistingSttmView({
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          <div className="flex gap-2">
+          {/* The source side's grounding, on the screen where regeneration is
+              decided. Without a dictionary a regenerated draft would take its
+              source columns from the matched TEMPLATE — the implicit borrow
+              the third input exists to remove — so the reviewer has to see
+              this before spending a run, not after. */}
+          <div className={`acfc-notice${frd.has_dictionary ? "" : " acfc-notice--warn"}`}>
+            <b>{frd.has_dictionary ? "Vendor dictionary" : "No vendor dictionary"}</b>
+            <span>
+              {frd.has_dictionary ? (
+                <>
+                  <span className="mono-id">{frd.dictionary}</span> describes{" "}
+                  {frd.dictionary_fields} source column{frd.dictionary_fields === 1 ? "" : "s"} across{" "}
+                  {frd.dictionary_files} file{frd.dictionary_files === 1 ? "" : "s"}
+                  {frd.dictionary_problems > 0
+                    ? ` — with ${frd.dictionary_problems} gap(s): ${frd.dictionary_problem_kinds.join(", ")}. Those columns will be gated, not filled.`
+                    : ". The source side of a regenerated draft would be grounded in it."}
+                </>
+              ) : (
+                <>
+                  Nothing grounds the source columns for this feed. A regenerated draft would render the
+                  frame and gate every source column rather than invent one. Ask the vendor for{" "}
+                  <span className="mono-id">DICT_&lt;feed&gt;.xlsx</span> and name it in the FRD’s
+                  Structural Metadata › Source Data Dictionary row.
+                </>
+              )}
+            </span>
+          </div>
+          <div className="flex gap-2 flex-wrap">
             <Button asChild>
               <a href={corpusReferenceUrl(reference)} download>
                 Download the STTM (.xlsx)
               </a>
             </Button>
+            {frd.has_dictionary && (
+              <Button variant="outline" asChild>
+                <a href={corpusDictionaryUrl(frd.dictionary!)} download>
+                  Download the dictionary (.xlsx)
+                </a>
+              </Button>
+            )}
             {frd.reference_web_url && (
               <Button variant="outline" asChild>
                 <a href={frd.reference_web_url} target="_blank" rel="noreferrer">
@@ -194,28 +262,18 @@ function ExistingSttmView({
               </Button>
             )}
           </div>
-          <div className="flex items-center gap-2 pt-1 border-t">
-            {!confirming ? (
-              <Button variant="outline" onClick={() => setConfirming(true)} disabled={!frd.runnable}>
-                Regenerate this mapping anyway…
-              </Button>
-            ) : (
-              <>
-                <span className="text-sm text-muted-foreground">
-                  Runs the full pipeline on <span className="mono-id">{frd.name}</span> again. The existing
-                  STTM is untouched — nothing is written to SharePoint — and the new draft is scored against
-                  it.
-                </span>
-                <Button onClick={onRegenerate}>Continue</Button>
-                <Button variant="ghost" onClick={() => setConfirming(false)}>
-                  Cancel
-                </Button>
-              </>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            The approved workbook in SharePoint stays the system of record. If you want the new draft to
-            replace it, upload the draft there yourself after review; the next sync re-pairs it.
+          {/* "Regenerate this mapping anyway" was REMOVED 2026-08-27 with the
+              eligibility rule: an FRD that already has an approved STTM is no
+              longer generatable, and the run endpoint refuses it server-side,
+              so a button here would only produce a 400. It existed for the
+              2026-08-24 demo, where regenerating an already-mapped FRD was the
+              only way to show the pipeline end to end — and the accuracy figure
+              it produced was self-referential anyway, because the approved
+              workbook was also the template. */}
+          <p className="text-xs text-muted-foreground pt-1 border-t">
+            The approved workbook stays the system of record and is not regenerated. To change it,
+            edit it and upload it to the STTM folder yourself; the next sync re-pairs it with this
+            FRD.
           </p>
         </CardContent>
       </Card>

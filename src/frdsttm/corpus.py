@@ -27,18 +27,28 @@ import hashlib
 import json
 from pathlib import Path
 
+from frdsttm.dictionary import parse_dictionary_dir
 from frdsttm.reference_workbooks import parse_reference_workbook
 from frdsttm.similarity import (
     deserialize_features,
     frd_features,
     pair_corpus,
+    pair_dictionaries,
     serialize_features,
     workbook_features,
 )
 
 CORPUS_INDEX_NAME = "corpus_index.json"
 # 2 (2026-08-22): entries carry content_sha256; pairs carry matched_by.
-CORPUS_INDEX_VERSION = 2
+# 4 (2026-08-27, later): per-FRD `eligibility` — the ONE place that decides
+#   which FRDs may be generated. See `eligibility_for`.
+# 3 (2026-08-27): vendor data dictionaries — `dictionaries`,
+#   `dictionary_pairs`, `unpaired_dictionaries`, `dictionary_errors`. The
+#   bump is deliberate rather than additive-and-silent: a stage reading a v2
+#   index would see no dictionaries and render a source side from the
+#   template alone, which is exactly the implicit borrow the third input
+#   exists to remove. Better to raise and be rebuilt.
+CORPUS_INDEX_VERSION = 4
 
 
 class CorpusIndexError(RuntimeError):
@@ -57,7 +67,8 @@ def parse_reference_dir(reference_dir: str | Path) -> dict:
 
 
 def build_corpus_index(frd_entries, reference_dir: str | Path,
-                       thresholds: dict, generated_at: str) -> dict:
+                       thresholds: dict, generated_at: str,
+                       dictionary_dir: str | Path | None = None) -> dict:
     """Build the full index.
 
     ``frd_entries``: iterable of {"doc_id", "source_file", "content"} — the
@@ -68,6 +79,9 @@ def build_corpus_index(frd_entries, reference_dir: str | Path,
     the parsed text so every entry still has one.
     ``generated_at``: caller-supplied ISO timestamp (kept out of this module
     so index construction stays a pure function of its inputs).
+    ``dictionary_dir``: the vendor-dictionary volume, or None when the third
+    input is not in play — an absent directory is an ordinary state (no
+    vendor has returned a DICT_ workbook yet), never an error.
     """
     reference_dir = Path(reference_dir)
     dictionaries = parse_reference_dir(reference_dir)
@@ -101,6 +115,36 @@ def build_corpus_index(frd_entries, reference_dir: str | Path,
 
     pairing = pair_corpus(frd_feats, wb_feats, thresholds)
 
+    # -- the third input. Summary only: the index stays small enough to load
+    # on every request, so it records WHICH dictionary describes a feed and
+    # how complete it is, never the 399 column rows themselves. A consumer
+    # that needs the columns parses the workbook it names.
+    vdds, vdd_errors = {}, {}
+    if dictionary_dir is not None and Path(dictionary_dir).is_dir():
+        parsed = parse_dictionary_dir(dictionary_dir)
+        vdd_errors = parsed["errors"]
+        for name, d in parsed["dictionaries"].items():
+            vdds[name] = {
+                "n_files": d["n_files"],
+                "n_fields": d["n_fields"],
+                "files": [f["file_name_pattern"] for f in d["files"]],
+                "n_problems": len(d["problems"]),
+                "problem_kinds": sorted({p["kind"] for p in d["problems"]}),
+                "content_sha256": hashlib.sha256(
+                    (Path(dictionary_dir) / name).read_bytes()).hexdigest(),
+            }
+    vdd_pairing = pair_dictionaries(frds.keys(), vdds.keys())
+
+    # -- the THREE-WAY mapping. An FRD's row in the corpus is now a triple:
+    # the FRD, the vendor dictionary that describes its source files, and the
+    # approved STTM if one exists. `eligibility` is the verdict derived from
+    # it, computed HERE so the notebooks, the API and the picker cannot drift
+    # into three different answers to "may this be generated?".
+    eligibility = {
+        doc_id: eligibility_for(doc_id, pairing["pairs"], vdd_pairing["pairs"])
+        for doc_id in frds
+    }
+
     return {
         "version": CORPUS_INDEX_VERSION,
         "generated_at": generated_at,
@@ -110,6 +154,13 @@ def build_corpus_index(frd_entries, reference_dir: str | Path,
         "pairs": pairing["pairs"],
         "unmapped": pairing["unmapped"],
         "unpaired_references": pairing["unpaired_references"],
+        "dictionaries": vdds,
+        "dictionary_pairs": vdd_pairing["pairs"],
+        "unpaired_dictionaries": vdd_pairing["unpaired_dictionaries"],
+        "ambiguous_dictionaries": vdd_pairing["ambiguous"],
+        "dictionary_errors": vdd_errors,
+        "eligibility": eligibility,
+        "generatable": sorted(d for d, e in eligibility.items() if e["generatable"]),
     }
 
 
@@ -157,3 +208,80 @@ def own_reference_for(index: dict, doc_id: str) -> str | None:
     """The workbook name this doc is paired with (its ground truth), or None."""
     pair = index.get("pairs", {}).get(doc_id)
     return pair["reference"] if pair else None
+
+
+#: The three verdicts an FRD can have. Exactly one is generatable.
+ELIGIBILITY_READY = "ready"                  # has a VDD, has no STTM
+ELIGIBILITY_MAPPED = "mapped"                # already has an approved STTM
+ELIGIBILITY_NO_DICTIONARY = "no_dictionary"  # no STTM, but no VDD either
+
+
+def eligibility_for(doc_id: str, sttm_pairs: dict, dictionary_pairs: dict) -> dict:
+    """May this FRD be generated, and if not, why not?
+
+    The rule (Arjun, 2026-08-27): a reviewer may only start a run on an FRD
+    that has a matching vendor dictionary AND does not already have an
+    approved STTM. Both halves have a reason:
+
+    * **no dictionary → not generatable.** Without one the source side of the
+      workbook has no grounded input, so the run would render a frame and gate
+      every column. That is the correct BEHAVIOUR when a run happens, but it
+      is not worth a billed model call — better to ask the vendor first.
+    * **already mapped → not generatable.** The approved STTM is the system of
+      record. Re-running against it produced a self-referential accuracy
+      figure (the approved workbook is also the template), and the earlier
+      "regenerate anyway" control existed only for the 2026-08-24 demo.
+
+    Returns ``{"status", "generatable", "reason", "dictionary", "reference"}``.
+    ``reason`` is written for a person to read in the picker, not for a log.
+    """
+    reference = (sttm_pairs.get(doc_id) or {}).get("reference") \
+        if isinstance(sttm_pairs.get(doc_id), dict) else sttm_pairs.get(doc_id)
+    dictionary = dictionary_pairs.get(doc_id)
+    if reference:
+        return {
+            "status": ELIGIBILITY_MAPPED, "generatable": False,
+            "reason": "This FRD already has an approved STTM. The approved workbook is the "
+                      "system of record — it is presented as-is, not regenerated.",
+            "dictionary": dictionary, "reference": reference,
+        }
+    if not dictionary:
+        return {
+            "status": ELIGIBILITY_NO_DICTIONARY, "generatable": False,
+            "reason": "No vendor data dictionary is paired with this FRD, so the source "
+                      "columns cannot be grounded. Ask the vendor for VDD_<feed>.xlsx and "
+                      "name it in the FRD's Structural Metadata › Source Data Dictionary row.",
+            "dictionary": None, "reference": None,
+        }
+    return {
+        "status": ELIGIBILITY_READY, "generatable": True,
+        "reason": "Has a vendor data dictionary and no STTM yet — ready to map.",
+        "dictionary": dictionary, "reference": None,
+    }
+
+
+def eligibility_of(index: dict, doc_id: str) -> dict:
+    """This FRD's verdict from a built index, or a not-in-corpus refusal.
+
+    An unknown doc_id is NOT generatable: the caller is asking about a
+    document the corpus has never seen, and answering "sure" would let a run
+    start on something the index cannot vouch for.
+    """
+    entry = index.get("eligibility", {}).get(doc_id)
+    if entry:
+        return entry
+    return {
+        "status": ELIGIBILITY_NO_DICTIONARY, "generatable": False,
+        "reason": f"{doc_id!r} is not in the corpus index — run a sync, or rebuild the index.",
+        "dictionary": None, "reference": None,
+    }
+
+
+def dictionary_for(index: dict, doc_id: str) -> str | None:
+    """The vendor dictionary describing this FRD's source files, or None.
+
+    None is the gating state, not a fallback: with no dictionary the source
+    side of the STTM has no grounded input, and the run must say so by name
+    rather than fill the columns from a matched template.
+    """
+    return index.get("dictionary_pairs", {}).get(doc_id)

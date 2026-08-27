@@ -85,6 +85,11 @@ class FakeLibrary:
     def __init__(self):
         self.frds: list[Item] = []
         self.sttms: list[Item] = []
+        # The third kind (2026-08-27). Routed by an explicit folder name so
+        # the existing folder-is-None / folder-is-anything-else split, which
+        # every other test in this file relies on, is untouched.
+        self.dicts: list[Item] = []
+        self.dict_folder = "__dicts__"
         self.payloads: dict[str, bytes] = {}
         self.downloads: list[str] = []
 
@@ -96,9 +101,19 @@ class FakeLibrary:
         self.sttms.append(Item(item_id, name, len(payload), "2026-08-20T11:00:00Z", f"https://sp/{name}", etag))
         self.payloads[item_id] = payload
 
+    def add_dict(self, item_id, name, payload, etag="e1"):
+        self.dicts.append(Item(item_id, name, len(payload), "2026-08-20T12:00:00Z",
+                               f"https://sp/{name}", etag))
+        self.payloads[item_id] = payload
+
     # -- the client surface the sync uses
     def list_documents(self, suffixes=None, folder=None):
-        rows = self.frds if folder is None else self.sttms
+        if folder is None:
+            rows = self.frds
+        elif folder == self.dict_folder:
+            rows = self.dicts
+        else:
+            rows = self.sttms
         return [i for i in rows if suffixes is None or ("." + i.name.rsplit(".", 1)[-1]).lower() in suffixes]
 
     def download_item(self, item_id):
@@ -317,3 +332,126 @@ def test_no_prefix_means_no_filter(library, dirs):
 def test_name_key_keeps_distinct_documents_distinct():
     assert name_key("Member Risk FRD.docx") != name_key("Claim Intake FRD.docx")
     assert name_key("FRD.docx") == ""  # nothing identifying left: never matches
+
+
+# --------------------------------------------------------------------------- #
+# the third kind — vendor data dictionaries (2026-08-27)
+# --------------------------------------------------------------------------- #
+from test_dictionary import _field_row, _file_row, write_dictionary  # noqa: E402
+
+
+def dict_bytes(tmp_path, name, columns):
+    path = write_dictionary(
+        tmp_path / name,
+        [_file_row(f"{name}_CCYYMMDD.txt", "fields")],
+        {"fields": [_field_row(i + 1, c) for i, c in enumerate(columns)]},
+    )
+    return path.read_bytes()
+
+
+def _dirs(tmp_path):
+    return tmp_path / "frd_raw", tmp_path / "sttm_reference", tmp_path / "vdd_raw"
+
+
+def test_dictionaries_sync_into_their_own_volume(tmp_path):
+    """Their own volume on purpose: corpus.parse_reference_dir globs every
+    .xlsx in the reference directory and a DICT_ workbook is not a template."""
+    frd, ref, dic = _dirs(tmp_path)
+    lib = FakeLibrary()
+    lib.add_frd("f1", "FRD_member_risk.txt", frd_text("member_risk", MEMBER_COLS))
+    lib.add_sttm("r1", "STTM_member_risk.xlsx", wb_bytes("member_risk", MEMBER_COLS))
+    lib.add_dict("d1", "DICT_member_risk.xlsx",
+                 dict_bytes(tmp_path, "DICT_member_risk.xlsx", MEMBER_COLS))
+
+    out = sync_from_sharepoint(
+        lib, frd_dir=frd, reference_dir=ref, reference_folder="STTMs",
+        thresholds=thresholds_from(lambda n, d: d), now_iso="2026-08-27T00:00:00+00:00",
+        frd_prefix="FRD_", reference_prefix="STTM_",
+        dictionary_dir=dic, dictionary_folder=lib.dict_folder, dictionary_prefix="DICT_",
+    )
+    assert out["dictionary_listed"] == 1
+    assert out["dictionary_downloaded"] == 1
+    assert (dic / "DICT_member_risk.xlsx").is_file()
+    assert not (ref / "DICT_member_risk.xlsx").exists()
+    index = out["index"]
+    assert index["dictionary_pairs"] == {"FRD_member_risk": "DICT_member_risk.xlsx"}
+
+
+def test_no_dictionary_dir_syncs_exactly_as_before(tmp_path):
+    """The ordinary state until vendors return DICT_ workbooks: two folders
+    listed, not three — an empty-folder probe every tick buys nothing."""
+    frd, ref, _ = _dirs(tmp_path)
+    lib = FakeLibrary()
+    lib.add_frd("f1", "FRD_member_risk.txt", frd_text("member_risk", MEMBER_COLS))
+    calls = []
+    inner = lib.list_documents
+    lib.list_documents = lambda suffixes=None, folder=None: (
+        calls.append(folder) or inner(suffixes=suffixes, folder=folder))
+
+    out = sync_from_sharepoint(
+        lib, frd_dir=frd, reference_dir=ref, reference_folder="STTMs",
+        thresholds=thresholds_from(lambda n, d: d), now_iso="2026-08-27T00:00:00+00:00",
+        frd_prefix="FRD_", reference_prefix="STTM_",
+    )
+    assert len(calls) == 2
+    assert out["dictionary_listed"] == 0
+    assert out["index"]["dictionaries"] == {}
+
+
+def test_dictionary_prefix_filter_counts_what_it_ignores(tmp_path):
+    frd, ref, dic = _dirs(tmp_path)
+    lib = FakeLibrary()
+    lib.add_frd("f1", "FRD_member_risk.txt", frd_text("member_risk", MEMBER_COLS))
+    lib.add_dict("d1", "DICT_member_risk.xlsx",
+                 dict_bytes(tmp_path, "DICT_member_risk.xlsx", MEMBER_COLS))
+    lib.add_dict("d2", "vendor notes.xlsx",
+                 dict_bytes(tmp_path, "vendor notes.xlsx", MEMBER_COLS))
+
+    out = sync_from_sharepoint(
+        lib, frd_dir=frd, reference_dir=ref, reference_folder="STTMs",
+        thresholds=thresholds_from(lambda n, d: d), now_iso="2026-08-27T00:00:00+00:00",
+        frd_prefix="FRD_", reference_prefix="STTM_",
+        dictionary_dir=dic, dictionary_folder=lib.dict_folder, dictionary_prefix="DICT_",
+    )
+    assert out["dictionary_listed"] == 1
+    assert out["dictionary_ignored"] == 1
+    assert not (dic / "vendor_notes.xlsx").exists()
+
+
+def test_a_departed_dictionary_leaves_the_volume(tmp_path):
+    frd, ref, dic = _dirs(tmp_path)
+    lib = FakeLibrary()
+    lib.add_frd("f1", "FRD_member_risk.txt", frd_text("member_risk", MEMBER_COLS))
+    lib.add_dict("d1", "DICT_member_risk.xlsx",
+                 dict_bytes(tmp_path, "DICT_member_risk.xlsx", MEMBER_COLS))
+    kw = dict(frd_dir=frd, reference_dir=ref, reference_folder="STTMs",
+              thresholds=thresholds_from(lambda n, d: d),
+              frd_prefix="FRD_", reference_prefix="STTM_",
+              dictionary_dir=dic, dictionary_folder=lib.dict_folder,
+              dictionary_prefix="DICT_")
+    sync_from_sharepoint(lib, now_iso="2026-08-27T00:00:00+00:00", **kw)
+    assert (dic / "DICT_member_risk.xlsx").is_file()
+
+    lib.dicts.clear()
+    out = sync_from_sharepoint(lib, now_iso="2026-08-27T01:00:00+00:00", **kw)
+    assert out["dictionary_removed"] == 1
+    assert not (dic / "DICT_member_risk.xlsx").exists()
+    assert out["index"]["dictionary_pairs"] == {}
+
+
+def test_an_unchanged_dictionary_is_not_re_downloaded(tmp_path):
+    frd, ref, dic = _dirs(tmp_path)
+    lib = FakeLibrary()
+    lib.add_frd("f1", "FRD_member_risk.txt", frd_text("member_risk", MEMBER_COLS))
+    lib.add_dict("d1", "DICT_member_risk.xlsx",
+                 dict_bytes(tmp_path, "DICT_member_risk.xlsx", MEMBER_COLS))
+    kw = dict(frd_dir=frd, reference_dir=ref, reference_folder="STTMs",
+              thresholds=thresholds_from(lambda n, d: d),
+              frd_prefix="FRD_", reference_prefix="STTM_",
+              dictionary_dir=dic, dictionary_folder=lib.dict_folder,
+              dictionary_prefix="DICT_")
+    sync_from_sharepoint(lib, now_iso="2026-08-27T00:00:00+00:00", **kw)
+    lib.downloads.clear()
+    out = sync_from_sharepoint(lib, now_iso="2026-08-27T01:00:00+00:00", **kw)
+    assert out["dictionary_unchanged"] == 1
+    assert lib.downloads == []

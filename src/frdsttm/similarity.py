@@ -280,7 +280,13 @@ def score_match(frd_feat: dict, wb_feat: dict) -> dict:
 # is "FRD_<name>.docx" and every STTM "STTM_<name>.xlsx", so those key to the
 # same "<name>"; the renderer's own suffix convention ("<doc>.sttm.xlsx") and
 # the older "Community Risk STTM.xlsx" shapes still key the same way.
-_NAME_ROLE_TOKENS = {"sttm", "frd", "mapping", "mappings"}
+_NAME_ROLE_TOKENS = {"sttm", "frd", "mapping", "mappings",
+                     # 2026-08-27: the vendor data dictionary joins the same
+                     # convention — VDD_<name>.xlsx pairs to FRD_<name>.docx by
+                     # the stem after the prefix, exactly as STTM_ does. "dict"
+                     # stays because the first issued template and the worked
+                     # example are named DICT_; both spellings key the same.
+                     "vdd", "dict", "dictionary"}
 
 
 def name_key(name: str) -> str:
@@ -383,6 +389,49 @@ def pair_corpus(frd_feats: dict, wb_feats: dict, thresholds: dict) -> dict:
         "pairs": pairs,
         "unmapped": sorted(d for d in frd_feats if d not in pairs),
         "unpaired_references": sorted(n for n in wb_feats if n not in used_refs),
+    }
+
+
+def pair_dictionaries(frd_names, dictionary_names) -> dict:
+    """Pair vendor dictionaries to FRDs by EXACT NAME KEY only.
+
+    Deliberately no similarity fallback, unlike :func:`pair_corpus`. An
+    approved STTM that scores well against an FRD is a plausible template
+    even if the guess is wrong — the render still gets a layout. A vendor
+    dictionary is different: it is asserted to DESCRIBE the source files of
+    one specific feed, and attaching the wrong vendor's spec would put real
+    column names, types and PHI flags on a feed they do not belong to. That
+    is not a degraded answer, it is a fabricated one. So an ambiguous or
+    absent key leaves the FRD without a dictionary and the run gates.
+
+    Returns ``{"pairs": {doc_id: dictionary_name}, "unpaired_dictionaries":
+    [...], "ambiguous": [key, ...]}``.
+    """
+    frd_by_key: dict[str, list[str]] = {}
+    for doc_id in frd_names:
+        k = name_key(doc_id)
+        if k:
+            frd_by_key.setdefault(k, []).append(doc_id)
+    dict_by_key: dict[str, list[str]] = {}
+    for name in dictionary_names:
+        k = name_key(name)
+        if k:
+            dict_by_key.setdefault(k, []).append(name)
+
+    pairs, used, ambiguous = {}, set(), []
+    for k, doc_ids in frd_by_key.items():
+        names = dict_by_key.get(k, [])
+        if not names:
+            continue
+        if len(doc_ids) != 1 or len(names) != 1:
+            ambiguous.append(k)
+            continue
+        pairs[doc_ids[0]] = names[0]
+        used.add(names[0])
+    return {
+        "pairs": pairs,
+        "unpaired_dictionaries": sorted(n for n in dictionary_names if n not in used),
+        "ambiguous": sorted(ambiguous),
     }
 
 

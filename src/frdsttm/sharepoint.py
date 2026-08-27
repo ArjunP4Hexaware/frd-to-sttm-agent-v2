@@ -86,6 +86,15 @@ class GraphError(RuntimeError):
 class SharePointConfig:
     """Every knob. No literal belongs in call logic; see repo config doctrine.
 
+    SCOPE (worth stating plainly, 2026-08-27): this addresses ONE SITE and one
+    named document library on it, and three named folders inside that library —
+    FRDs, approved STTMs, vendor dictionaries. `site_path` is REQUIRED and
+    `load_config` refuses without it. Nothing here can enumerate the tenant,
+    search across sites, or walk out of the configured library: the client
+    resolves `/sites/{host}:{site_path}`, then a drive by display name, then
+    lists a folder by path. That is also why read-only `Sites.Selected` on the
+    one site is a sufficient grant — see `SharePointItem`.
+
     `client_secret` is held here only to hand to the token call. It is
     excluded from repr so it cannot leak into a traceback or a log line.
     """
@@ -100,13 +109,18 @@ class SharePointConfig:
     reference_folder: str  # folder holding approved STTMs (reviewers upload
     #                        finished workbooks here; the sync watches it);
     #                        "" = same folder as the FRDs
+    vdd_folder: str = ""   # folder holding vendor data dictionaries. BLANK is
+    #                        meaningful and is the default: it means the VDD
+    #                        half of the sync is OFF, and the sync lists two
+    #                        folders rather than probing a third that may not
+    #                        exist. Set it once vendors are returning them.
 
     def __repr__(self) -> str:  # never let the secret reach a log or traceback
         return (
             f"SharePointConfig(tenant_id={self.tenant_id!r}, client_id={self.client_id!r}, "
             f"client_secret=<redacted>, host={self.host!r}, site_path={self.site_path!r}, "
             f"library={self.library!r}, frd_folder={self.frd_folder!r}, "
-            f"reference_folder={self.reference_folder!r})"
+            f"reference_folder={self.reference_folder!r}, vdd_folder={self.vdd_folder!r})"
         )
 
     @property
@@ -146,6 +160,7 @@ def load_config(param, secret) -> SharePointConfig:
         "library": param("sharepoint_library", "Documents"),
         "frd_folder": param("sharepoint_frd_folder", ""),
         "reference_folder": param("sharepoint_reference_folder", ""),
+        "vdd_folder": param("sharepoint_vdd_folder", ""),
     }
     client_secret = secret() or ""
 

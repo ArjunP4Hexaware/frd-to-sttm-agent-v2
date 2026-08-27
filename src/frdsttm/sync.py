@@ -10,6 +10,7 @@ execution target):
 
     SharePoint FRD folder  ──list/download──▶  frd_raw volume
     SharePoint STTM folder ──list/download──▶  sttm_reference volume
+    SharePoint VDD folder  ──list/download──▶  vdd_raw volume
                                                    │
                                   reindex: parse + pair + corpus_index.json
 
@@ -52,6 +53,7 @@ import re
 from pathlib import Path
 
 from frdsttm.corpus import build_corpus_index, save_corpus_index
+from frdsttm.dictionary import DICTIONARY_NAME_PREFIXES, DICTIONARY_SUFFIXES
 from frdsttm.frd_parsing import SUPPORTED_SUFFIXES, normalize_to_markdown
 
 MANIFEST_NAME = "sync_manifest.json"
@@ -69,6 +71,13 @@ REFERENCE_SUFFIXES = {".xlsx"}
 # silent.
 FRD_NAME_PREFIX = "FRD_"
 REFERENCE_NAME_PREFIX = "STTM_"
+# The third input (2026-08-27). Same convention, same stem: DICT_<name>.xlsx
+# pairs to FRD_<name>.docx. It is harvested into its OWN volume rather than
+# alongside the STTMs, because corpus.parse_reference_dir globs every .xlsx
+# in the reference directory and would try to read a vendor dictionary as a
+# template workbook — two different shapes, one glob. The volume is `vdd_raw`,
+# named to sit beside `frd_raw`: two raw source documents, two raw volumes.
+DICTIONARY_PREFIX = DICTIONARY_NAME_PREFIXES
 
 # Same sanitiser the review app applies to uploads: a library file name is
 # attacker-adjacent input and must never escape the destination directory.
@@ -213,13 +222,21 @@ def _sync_folder(client, items, kind: str, dest_dir: Path, manifest: dict,
     manifest["items"] = kept
 
 
-def filter_by_prefix(items, prefix: str) -> tuple[list, int]:
+def filter_by_prefix(items, prefix: str | tuple[str, ...]) -> tuple[list, int]:
     """Keep the items whose name starts with ``prefix`` (case-insensitive);
-    return (kept, ignored_count). An empty prefix keeps everything."""
-    if not prefix:
+    return (kept, ignored_count). An empty prefix keeps everything.
+
+    Accepts SEVERAL prefixes (2026-08-27) so one kind can carry a convention
+    and a live alias at the same time: vendor dictionaries are ``VDD_`` by
+    convention but ``DICT_`` on the template already issued to vendors, and a
+    file someone was asked to fill in must not stop syncing because we renamed
+    the convention afterwards.
+    """
+    prefixes = (prefix,) if isinstance(prefix, str) else tuple(prefix)
+    prefixes = tuple(p.lower() for p in prefixes if p)
+    if not prefixes:
         return list(items), 0
-    p = prefix.lower()
-    kept = [i for i in items if str(i.name).lower().startswith(p)]
+    kept = [i for i in items if str(i.name).lower().startswith(prefixes)]
     return kept, len(items) - len(kept)
 
 
@@ -227,7 +244,11 @@ def sync_from_sharepoint(client, *, frd_dir: str | Path, reference_dir: str | Pa
                          reference_folder: str | None, thresholds: dict,
                          now_iso: str, frd_suffixes=SUPPORTED_SUFFIXES,
                          reference_suffixes=REFERENCE_SUFFIXES,
-                         frd_prefix: str = "", reference_prefix: str = "") -> dict:
+                         frd_prefix: str = "", reference_prefix: str = "",
+                         dictionary_dir: str | Path | None = None,
+                         dictionary_folder: str | None = None,
+                         dictionary_prefix: str = "",
+                         dictionary_suffixes=DICTIONARY_SUFFIXES) -> dict:
     """One sync pass: list → download new/changed → drop departed → reindex.
 
     ``client`` is a frdsttm.sharepoint.SharePointClient (or a test stub with
@@ -238,6 +259,12 @@ def sync_from_sharepoint(client, *, frd_dir: str | Path, reference_dir: str | Pa
     counted in the summary. Graph failures on the LISTING propagate (the
     caller maps them); per-item download failures are collected in
     ``skipped``.
+
+    ``dictionary_dir`` None skips the third kind entirely, which is the
+    ordinary state until vendors start returning DICT_ workbooks — a library
+    with no dictionary folder must sync exactly as it did before, not fail.
+    When it IS set, dictionaries are listed, downloaded and cleaned up by the
+    same code path as the other two kinds: one implementation, three kinds.
     """
     frd_dir, reference_dir = Path(frd_dir), Path(reference_dir)
     frd_dir.mkdir(parents=True, exist_ok=True)
@@ -249,6 +276,15 @@ def sync_from_sharepoint(client, *, frd_dir: str | Path, reference_dir: str | Pa
         client.list_documents(suffixes=set(reference_suffixes), folder=reference_folder),
         reference_prefix)
 
+    dict_items, dict_ignored = [], 0
+    if dictionary_dir is not None:
+        dictionary_dir = Path(dictionary_dir)
+        dictionary_dir.mkdir(parents=True, exist_ok=True)
+        dict_items, dict_ignored = filter_by_prefix(
+            client.list_documents(suffixes=set(dictionary_suffixes),
+                                  folder=dictionary_folder),
+            dictionary_prefix)
+
     manifest = load_manifest(reference_dir)
     summary = {
         "frd_listed": len(frd_items), "reference_listed": len(ref_items),
@@ -256,6 +292,9 @@ def sync_from_sharepoint(client, *, frd_dir: str | Path, reference_dir: str | Pa
         "frd_prefix": frd_prefix, "reference_prefix": reference_prefix,
         "frd_downloaded": 0, "frd_unchanged": 0, "frd_removed": 0,
         "reference_downloaded": 0, "reference_unchanged": 0, "reference_removed": 0,
+        "dictionary_listed": len(dict_items), "dictionary_ignored": dict_ignored,
+        "dictionary_prefix": dictionary_prefix,
+        "dictionary_downloaded": 0, "dictionary_unchanged": 0, "dictionary_removed": 0,
     }
     if manifest.get("reset"):
         summary["manifest_reset"] = manifest["reset"]
@@ -263,8 +302,12 @@ def sync_from_sharepoint(client, *, frd_dir: str | Path, reference_dir: str | Pa
 
     _sync_folder(client, frd_items, "frd", frd_dir, manifest, summary, skipped)
     _sync_folder(client, ref_items, "reference", reference_dir, manifest, summary, skipped)
+    if dictionary_dir is not None:
+        _sync_folder(client, dict_items, "dictionary", Path(dictionary_dir),
+                     manifest, summary, skipped)
 
-    index, parse_skipped = reindex(frd_dir, reference_dir, thresholds, now_iso)
+    index, parse_skipped = reindex(frd_dir, reference_dir, thresholds, now_iso,
+                                   dictionary_dir=dictionary_dir)
     skipped.extend(parse_skipped)
 
     manifest["synced_at"] = now_iso
@@ -277,7 +320,8 @@ def sync_from_sharepoint(client, *, frd_dir: str | Path, reference_dir: str | Pa
 # reindex
 # --------------------------------------------------------------------------- #
 def reindex(frd_dir: str | Path, reference_dir: str | Path, thresholds: dict,
-            now_iso: str, frd_suffixes=SUPPORTED_SUFFIXES) -> tuple[dict, list]:
+            now_iso: str, frd_suffixes=SUPPORTED_SUFFIXES,
+            dictionary_dir: str | Path | None = None) -> tuple[dict, list]:
     """Rebuild + persist corpus_index.json from the files in the volumes.
 
     No network. Returns (index, skipped): one unparsable FRD is reported,
@@ -302,6 +346,7 @@ def reindex(frd_dir: str | Path, reference_dir: str | Path, thresholds: dict,
             except Exception as exc:  # noqa: BLE001 — reported, never dropped
                 skipped.append({"name": path.name, "kind": "frd",
                                 "error": f"{exc.__class__.__name__}: {exc}"})
-    index = build_corpus_index(entries, reference_dir, thresholds, generated_at=now_iso)
+    index = build_corpus_index(entries, reference_dir, thresholds, generated_at=now_iso,
+                               dictionary_dir=dictionary_dir)
     save_corpus_index(index, reference_dir)
     return index, skipped

@@ -74,6 +74,13 @@ REFERENCE_VOLUME = "sttm_reference"
 #: Written by the app at run time, not by this tool -- created only with
 #: --all-volumes so a first deploy does not fail on a missing volume.
 RUNTIME_VOLUMES = ("demo_raw", "sttm_out_app", "sttm_audit")
+#: The vendor-dictionary volume (2026-08-27). Created alongside the two
+#: source volumes rather than under --all-volumes: it is a SOURCE store,
+#: and a deployed App with no vdd_raw reports every FRD as having no
+#: dictionary, which is indistinguishable from "no vendor has returned one"
+#: — a state that must not be reachable by accident.
+DICT_VOLUME = "vdd_raw"
+DICT_PREFIX = ("VDD_", "DICT_")
 
 FRD_PREFIX = "FRD_"
 STTM_PREFIX = "STTM_"
@@ -130,6 +137,13 @@ def stage(source: Path, staging: Path) -> dict:
         now_iso=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         frd_prefix=FRD_PREFIX,
         reference_prefix=STTM_PREFIX,
+        # The third input (2026-08-27). The stand-in folder is FLAT — FRD_,
+        # STTM_ and DICT_ all sit in it — so the folder argument stays None
+        # and the prefix does the separating, exactly as it does for the
+        # other two kinds. LocalFolderClient ignores `folder` by design.
+        dictionary_dir=staging / DICT_VOLUME,
+        dictionary_folder=None,
+        dictionary_prefix=DICT_PREFIX,
     )
 
 
@@ -202,8 +216,15 @@ def main(argv=None) -> int:
               f"(ignored, wrong prefix: {result['frd_ignored']})")
         print(f"  STTMs      : {result['reference_downloaded']} "
               f"(ignored, wrong prefix: {result['reference_ignored']})")
+        print(f"  DICTs      : {result.get('dictionary_downloaded', 0)} "
+              f"(ignored, wrong prefix: {result.get('dictionary_ignored', 0)})")
         pairs = result["index"]["pairs"]
         unmapped = result["index"]["unmapped"]
+        for doc_id, name in sorted(result["index"].get("dictionary_pairs", {}).items()):
+            d = result["index"]["dictionaries"][name]
+            print(f"    {doc_id}  <->  {name}  ({d['n_fields']} column(s))")
+        for name in result["index"].get("unpaired_dictionaries", []):
+            print(f"    (unpaired) {name} — no FRD shares its name key")
         print(f"  paired     : {len(pairs)}  unmapped: {len(unmapped)}")
         for doc_id, p in pairs.items():
             print(f"    {doc_id}  <->  {p['reference']}  ({p['matched_by']})")
@@ -223,6 +244,13 @@ def main(argv=None) -> int:
 
         w = WorkspaceClient(profile=args.profile) if args.profile else WorkspaceClient()
         wanted = [RAW_VOLUME, REFERENCE_VOLUME]
+        # Only when the folder actually held one. Creating an empty
+        # vdd_raw would make "no vendor has returned a dictionary" and
+        # "the volume is there and empty" look identical to the App.
+        n_dict_staged = len(list((staging / DICT_VOLUME).glob("*.xlsx"))) \
+            if (staging / DICT_VOLUME).is_dir() else 0
+        if n_dict_staged:
+            wanted.append(DICT_VOLUME)
         if args.all_volumes:
             wanted += list(RUNTIME_VOLUMES)
 
@@ -234,10 +262,13 @@ def main(argv=None) -> int:
         n_frd = upload_dir(w, staging / RAW_VOLUME, f"{root}/{RAW_VOLUME}", args.dry_run)
         n_ref = upload_dir(w, staging / REFERENCE_VOLUME,
                            f"{root}/{REFERENCE_VOLUME}", args.dry_run)
+        n_dict = (upload_dir(w, staging / DICT_VOLUME, f"{root}/{DICT_VOLUME}", args.dry_run)
+                  if n_dict_staged else 0)
 
     print(f"\n{'would upload' if args.dry_run else 'uploaded'}: "
           f"{n_frd} into {RAW_VOLUME}, {n_ref} into {REFERENCE_VOLUME} "
-          f"(the latter includes {CORPUS_INDEX_NAME})")
+          f"(the latter includes {CORPUS_INDEX_NAME})"
+          + (f", {n_dict} into {DICT_VOLUME}" if n_dict else ""))
     if not args.dry_run:
         print("\nThe deployed App mirrors these volumes on read — no job or "
               "warehouse needed. Start the app and the corpus is there.")

@@ -382,38 +382,178 @@ src/frdsttm/            models.py (FrdIngestionSpec, GatedAmbiguity,
                         similarity.py (deterministic FRD↔STTM scoring,
                         thresholds), corpus.py (corpus_index.json),
                         exemplars.py (retrieved-exemplar prompt blocks);
+                        dictionary.py (2026-08-27: the VENDOR DATA DICTIONARY
+                        parser — the third input's ingestion half. FILES sheet +
+                        one field sheet per file; headers are FOUND not assumed;
+                        STRUCTURE raises (no FILES sheet, no locatable header),
+                        CONTENT gates (a missing field sheet yields an EMPTY
+                        column list plus a named problem, never a guess); the
+                        issued template's worked example rows are DROPPED and
+                        COUNTED so a vendor who returns the template unedited
+                        cannot look fine; unknown columns are kept in `extra`);
                         standards.py (2026-08-26: the two standards contracts —
                         abbreviate/schema_for/catalog_for/normalize_load_strategy/
                         promote_type/column_convention + standards_sha256)
-context/                FRD_to_STTM_Agent_Architecture.pptx (the two-slide
-                        ACFC-style deck; built by scripts/build_architecture_deck.py
-                        from scripts/deck_assets/),
-                        FRD-to-STTM-Agent-Solution-Architecture.pptx (renamed
-                        2026-08-23 from FRD_to_STTM_Agent_System_Architecture.pptx; ONE slide,
-                        TOP-DOWN technology layers with official logos since v5
-                        (scripts/deck_assets/logos/, sources listed in the design doc);
-                        "Signal" theme, white canvas — philosophy + theme spec in
-                        scripts/deck_assets/ONEPAGER_DESIGN.md; built by
-                        scripts/build_architecture_onepager.py — regenerate it
-                        there, never edit the .pptx by hand; python-pptx +
-                        pillow are deck-building deps, not runtime; the
-                        background is a seeded flow-field the script draws),
-                        FRD-to-STTM-Agent-Data-Governance-Architecture.pptx (ONE slide
-                        for a NON-TECHNICAL reader, 2026-08-23: how governance is
-                        implemented — the Collibra register fed by Unity Catalog tags,
-                        the five controls (who / what data / where from / what
-                        happened / who decides) each naming its technology, the
-                        governed flow with its two boundary crossings; reads
-                        LEFT→RIGHT on purpose — four stations in document order,
-                        audit bar beneath, Collibra register column on the right
-                        (Arjun 2026-08-23: not the solution deck's top-down bands);
-                        same Signal theme + helpers; built by
-                        scripts/build_governance_onepager.py — regenerate there,
-                        never edit by hand; Collibra mark from Commons), and
-                        FRD_to_STTM_Agent_Screens.html (self-contained
-                        walkthrough of every review-app screen, captured
-                        2026-08-22 against a synthetic corpus). No client
-                        documents — ever.
+context/                THE DECK HOME. **All three decks below were restyled
+                        2026-08-27 (Arjun) into the ACFC HOUSE STYLE and are
+                        built from scripts/acfc_theme.py — one palette, one set
+                        of primitives, three build scripts. The "Signal" theme
+                        (scripts/deck_assets/ONEPAGER_DESIGN.md) is RETIRED for
+                        context/ and that file is kept as the record of the old
+                        system, not as live guidance.** The style was sampled
+                        LIVE from amerihealthcaritas.com, not guessed: #003DA5
+                        primary blue, #0A2458 navy, #2D2D2D ink, #69B3E7 sky,
+                        #F0F0F0 band, and #D2202F flag red taken from the logo
+                        mark and used ONLY as the attention colour. Type is
+                        Segoe UI (the site sets the licensed Area Normal; Segoe
+                        is the nearest face shipping with Windows Office, so a
+                        deck renders true with nothing to install). Geometry:
+                        SQUARE CORNERS EVERYWHERE, no shadows, flat bands — the
+                        site's buttons are 0px-radius outlined rectangles and
+                        that is the loudest signal in their system. **The ACFC MARK
+                        is CLEARED FOR USE (Arjun, 2026-08-27)** and is the
+                        masthead device on all three decks and in the app —
+                        `scripts/deck_assets/logos/acfc.png` (full colour) and
+                        `acfc_white.png` (knockout), placed by
+                        `acfc_theme.acfc_logo()`. Two hard-won placement rules,
+                        both learned by rendering: never below ~0.9in / 90px
+                        wide (the "Care is the heart of our work" line turns to
+                        mud, and a half-legible logo reads as carelessness, not
+                        branding), and never in colour on navy. A knockout was
+                        tried in the solution deck's doctrine bar and in the
+                        app footer and REMOVED from both for exactly that
+                        reason — one placement done properly beats two.
+                        `flag_bars` is kept for slots too small for the lockup,
+                        not as a stand-in for a mark we may now use.
+                        QA loop that found five overflowing slides on the first
+                        pass and is worth repeating after any edit: build →
+                        `soffice --headless --convert-to pdf` → pymupdf
+                        `get_text("blocks")` → flag any block whose y1 clears
+                        the footer rule. python-pptx renders no auto-fit, so
+                        overflow is invisible until you render.
+
+                        FRD-and-Dictionary-Input-Requirements.pptx (NEW
+                        2026-08-27; scripts/build_input_requirements_deck.py) —
+                        **THREE SLIDES, HARD CAP (Arjun): nobody presents 14.**
+                        It was cut from 14 by one rule — keep what a room cannot
+                        reconstruct for itself — and the cut material moved into
+                        SPEAKER NOTES rather than being deleted, so the deck
+                        reads in three slides and still answers a follow-up. If
+                        a slide comes back, another has to leave. (1) the three
+                        inputs + the one ask; (2) the FRD's eleven Structural
+                        Metadata rows with measured fill rates; (3) both VDD
+                        sheets, column by column, marked for what a data file
+                        could and could not tell us. FOR THE CLIENT'S BSAs: what
+                        to put in the FRD
+                        (the same eleven Structural Metadata rows, no template
+                        change) and what the vendor data dictionary must
+                        contain. Its force is that every number is measured,
+                        not asserted — per-row fill rates across the three real
+                        FRDs, the 0/3 that name a dictionary, the 399/399 and
+                        22/115 column-rule figures from
+                        contracts/naming_standards.json. Slide 13 is the ask:
+                        target column naming is inferred per feed and the
+                        missing input is READ ACCESS to
+                        information_schema.columns, not another document.
+                        CAUTION: this deck is DERIVED from client documents
+                        (verbatim template row names, three FRDs' fill state).
+                        No person names or e-mails appear on any slide, but it
+                        belongs in the same conversation as the sample_documents
+                        / standards Friday purge — decide deliberately, do not
+                        let it ride on "it's only a deck".
+
+                        FRD-to-STTM-Agent-Solution-Architecture.pptx (ONE slide;
+                        scripts/build_architecture_onepager.py) — REDESIGNED
+                        2026-08-27 on TWO axes: the ACFC style above, AND the
+                        architecture. Band A is now THREE INPUTS (FRD ·
+                        DICT_<feed>.xlsx · contracts/*.json) plus the approved
+                        STTM as template+golden, each carrying a status chip —
+                        the standards contracts say LIVE, the vendor dictionary
+                        says DESIGNED · NOT BUILT, because it is (grepped: no
+                        DICT_ handling exists outside scripts/ and templates/).
+                        Band B is the real change: THREE INTERCHANGEABLE
+                        LOADERS behind one duck type (SharePoint — not yet
+                        wired; local folder; direct volume push — in use today)
+                        all landing in Unity Catalog, and the slide states
+                        plainly that **the review app reads Unity Catalog and
+                        SharePoint is not on the request path** (verified in
+                        corpus_routes: IS_DATABRICKS_APP short-circuits to
+                        jobs_runner.mirror_corpus and _source_client is never
+                        consulted there).
+
+                        FRD-to-STTM-Agent-Data-Governance-Architecture.pptx (ONE
+                        slide for a NON-TECHNICAL reader;
+                        scripts/build_governance_onepager.py) — same 2026-08-27
+                        double redesign. Still reads LEFT→RIGHT on purpose (four
+                        stations in document order, audit bar beneath, Collibra
+                        register column on the right — Arjun 2026-08-23: NOT the
+                        solution deck's top-down bands). Updated: station 01 now
+                        says three inputs enter UNITY CATALOG whichever loader
+                        brought them, and station 03's provenance includes
+                        standards_sha256. Added a "still open — for the client,
+                        not for code" block so the slide cannot be read as
+                        claiming docs/AI_GOVERNANCE.md §8 is settled.
+
+                        FRD_to_STTM_Agent_Architecture.pptx (the older two-slide
+                        deck; scripts/build_architecture_deck.py) — NOT restyled;
+                        still Signal-themed. Restyle or retire it before showing
+                        it beside the three above.
+                        FRD_to_STTM_Agent_Screens.html (REBUILT 2026-08-27 by
+                        scripts/build_screens_doc.py, replacing the 2026-08-22
+                        version which predated both the ACFC restyle and the
+                        dictionary work) — the SCREEN CATALOGUE: every page a
+                        reviewer can reach, the state that produces it, what
+                        they can do there, and the backend call behind it. One
+                        self-contained file, every shot inlined as a data URI.
+                        RULE: every image is a REAL capture of the running app
+                        against the synthetic corpus. States needing a billed
+                        call or a wired tenant (run-in-progress, the HITL review
+                        panel, sync running/failed) are listed in a final
+                        section, NAMED not illustrated — a catalogue that
+                        quietly includes invented screens is worse than one with
+                        honest gaps. Regenerate: drive the app in a browser,
+                        then `python scripts/build_screens_doc.py <shots dir>`.
+                        No RAW client documents — ever.
+templates/DICT_TEMPLATE_v1.3.xlsx   the blank vendor data dictionary issued to a
+                        vendor, built by scripts/build_dict_template.py. FILES
+                        sheet + one field sheet per file; the first 9 columns of
+                        each are frozen so ONE parser reads both this and the
+                        worked example. Gitignored by `.gitignore` line 2
+                        (`*.xlsx`) — regenerate it, never hunt for it in git.
+                        **v1.3 (2026-08-27) added the two columns that stood
+                        between "a filled-in dictionary" and "an STTM
+                        generatable from the FRD + VDD ALONE":**
+                        `Null Representation` (FILES) — the FRD's reject rules
+                        say "when MEMBER_ID is NULL" without saying what null
+                        LOOKS LIKE in a delimited file (empty field? the text
+                        NULL? spaces?), and guessing either rejects good records
+                        or loads bad ones; and `Key / Uniqueness` (field
+                        sheets) — an Upsert load strategy needs a match key, and
+                        the FRD's own Business Key / Primary Key rows read "NA"
+                        on every real document, so the vendor is the only one
+                        who knows. Watch the EXAMPLE ROWS when adding a column:
+                        they are positional lists, and inserting a header
+                        without inserting its value shifts every later cell by
+                        one (which silently un-marked a template example row and
+                        made the blank template parse as a real file).
+
+scripts/build_vdd_from_sttm.py   derives a WORKED VDD from an approved STTM's
+                        SOURCE band — the band that is itself a transcription of
+                        the vendor's spec. Replaces the hand-built SD example
+                        (2026-08-25), which could not be reproduced; both worked
+                        examples now come from a command. Reproduces it exactly:
+                        3 files, 399 columns (86/267/46). Three rules earned the
+                        hard way: read only the SOURCE band (both workbooks have
+                        a SECOND `DataType` in the STAGE band — reading past the
+                        boundary takes the TARGET type as the vendor's); drop
+                        audit rows (source "NA" — those are the CLIENT's
+                        columns and must never appear in a document a VENDOR
+                        fills in); and assign file names GLOBALLY best-first,
+                        never greedily in sheet order, with a tie refusing to
+                        decide. **The output is a worked example, NOT evidence,
+                        and it is CIRCULAR for evaluation** — a dictionary
+                        derived from an STTM must never score a run against that
+                        same STTM. The README sheet says so inside the workbook.
 contracts/frd_label_contract.json   the versioned FRD label contract — now a
                         frozen input, no longer mirrored anywhere (see
                         "Upstream" above)
@@ -711,6 +851,266 @@ UNSOURCED above).
 
 Tests: `tests/test_standards.py` (56) + `tests/test_render_standards.py` (15);
 suite now 362 passed / 4 skipped.
+
+## TWO INPUTS — the standards are IN the agent (Arjun, 2026-08-27)
+
+**The agent is given exactly two documents per feed: the FRD and the vendor
+data dictionary.** Everything else it brings itself. State it that way
+everywhere — deck, app, docs — because the earlier "three inputs" framing was
+read in the room as "three things you must supply", which is both wrong and
+the opposite of the point.
+
+- The client's **naming + engineering standards are versioned config the agent
+  ships with** (`contracts/naming_standards.json`, `engineering_standards.json`,
+  loaded by `frdsttm.standards`, hashed into every run as `standards_sha256`).
+  Nobody attaches them to a feed. They were only ever an "input" in the sense
+  that the agent must know them — which is what transcribing them into
+  contracts settled on 2026-08-26.
+- The **approved-STTM corpus** is likewise the agent's own: it maintains it,
+  and uses it as layout template + golden eval. Not something handed over.
+- So the decks draw both INSIDE the platform, under "BUILT INTO THE AGENT",
+  and the input row has exactly two tiles.
+
+## DOES THE VDD TEMPLATE WORK? — MEASURED 2026-08-27
+
+Asked directly, answered by counting every column of both real STTMs and
+asking which input supplies it. **The template is DONE. It is not what stands
+between the agent and a generated STTM.**
+
+| feed | convention | VDD | standards | FRD | not covered |
+|---|---|---|---|---|---|
+| SD (indiv risk) | `as_is` | 12 | 2 | 3 | **0** |
+| CAQH | `prefixed_upper_snake` | 17 | 4 | 6 | **1 — `ColumnName`** |
+
+* **The source side is fully covered by the template**, on both feeds and both
+  dialects. Every source cell a real STTM carries — name, type, length,
+  required, description, allowed values, sample, PHI, position, segment,
+  fixed-width offsets, primary key — has a column in v1.3.
+* **SD-style feeds are 100% generatable from FRD + VDD**, because `as_is`
+  makes the target column name a copy of the source name (measured 399/399).
+* **CAQH-style feeds are covered except the target COLUMN NAME**, which
+  appears twice (stage band and standard band) and is the only cell neither
+  document supplies.
+
+**No addition to the template can close that gap, and adding one would be a
+mistake.** The target column name is a TARGET-side decision — `TPL_MEME_ID`
+is what ACFC's own warehouse calls a member key. Asking a vendor "what should
+ACFC call this column?" is a question they cannot answer and should not be
+handed. The fix is a term catalog from the warehouse
+(`information_schema.columns` over `PR_STD`/`PR_DLK`, or the approved-STTM
+corpus the agent already syncs) — see the column-rules section above.
+
+So: stop iterating on the template. Issue it.
+
+## THE ELIGIBILITY RULE — what may be generated (Arjun, 2026-08-27)
+
+**An FRD may be run only when it has a matching vendor data dictionary AND
+does not already have an approved STTM.** One rule, one implementation:
+`frdsttm.corpus.eligibility_for` / `eligibility_of`, materialised into the
+corpus index as `eligibility` + `generatable` (index v4). Three verdicts,
+exactly one generatable:
+
+| verdict | VDD | STTM | generatable |
+|---|---|---|---|
+| `ready` | yes | no | **yes** |
+| `mapped` | either | yes | no |
+| `no_dictionary` | no | no | no |
+
+`mapped` beats `no_dictionary` deliberately: an FRD that already has an STTM
+has nothing to wait for, and telling a reviewer to chase a vendor for a
+mapped feed is noise.
+
+- **Enforced SERVER-SIDE**, in `demo.start_run` → `_check_eligible`, not only
+  by hiding a button. Hiding a control is presentation; this is a rule about
+  spending money and about not regenerating over a system of record. A caller
+  with the URL gets a 400 naming the reason.
+- **The gate's SCOPE is narrow, and two defaults are deliberately opposite.**
+  `_check_eligible` lets through an absent corpus index (local dev, the
+  offline smoke) AND a doc_id the index does not list (an uploaded or
+  hand-staged document — "has a dictionary and no STTM" is not a question you
+  can ask about a document the corpus never paired). It therefore reads
+  `index["eligibility"].get(doc_id)` directly, NOT `eligibility_of`, which is
+  conservative by design so the picker never renders a live button for an
+  unknown doc. Tightening the gate to use `eligibility_of` breaks the upload
+  path and eleven tests — it was tried on 2026-08-27. A CORRUPT index still
+  raises.
+- **The picker LISTS all three groups** — Ready to map / Waiting on a vendor
+  data dictionary / Already mapped — and only the first has a live button.
+  Hiding the others would leave a reviewer wondering where their document
+  went; each row says what it is waiting on.
+- **"Regenerate this mapping anyway" is GONE.** It existed for the 2026-08-24
+  demo, where regenerating an already-mapped FRD was the only way to show the
+  pipeline end to end — and the accuracy figure it produced was
+  self-referential anyway, because the approved workbook was also the
+  template. This closes the "hide mapped FRDs" item that sat under "Designed,
+  not built".
+- Verified on the real pair: SD (has a VDD, no STTM) → `ready`; CAQH (has an
+  STTM, no VDD) → `mapped`, and `POST /api/demo/runs` refuses it.
+
+## Volumes — `vdd_raw` beside `frd_raw`
+
+`vdd_raw` (was `dict_source` for a few hours on 2026-08-27) holds the vendor
+dictionaries. Named to sit beside `frd_raw`: **two raw source documents, two
+raw volumes.** It is NOT `sttm_reference`, which is globbed for TEMPLATE
+workbooks — a VDD is not one.
+
+**Naming was reviewed and KEPT (2026-08-27)** against a proposal to move to
+`frds` / `vdds` / `reference_sttms` / `output_sttms`. Two arguments carried:
+(1) the current set is already `<document type>_<role>` throughout —
+`frd_raw`, `vdd_raw`, `sttm_reference`, `sttm_out_app` — so the `sttm_*`
+family SORTS TOGETHER in `SHOW VOLUMES`, which the proposal would split;
+(2) `_raw` is the client's own layer vocabulary (RAW / STAGE / STANDARD in
+the EDO naming standard), so it speaks their language, and a plural noun
+loses that. Cost also matters: `frd_raw` and `sttm_reference` already exist
+with data and grants in the workspace, and `sttm_out_*` is load-bearing for
+run insulation (`demo._SET_DIR_RE` pins `sttm_out_(demo|live_e2e)_...`).
+
+**File naming: `VDD_<feed>.xlsx` is the convention, `DICT_` a live alias.**
+`similarity.name_key` strips both, so they key identically and two spellings
+of one feed are AMBIGUOUS rather than double-paired. The alias exists because
+the template already issued to vendors says `DICT_`, and invalidating a
+document someone was asked to fill in is worse than carrying two spellings.
+
+## SharePoint scope — one site, one library, three folders
+
+Worth stating because it gets asked: the client **already** reads from ONE
+NAMED SITE, not the tenant. `SharePointConfig.site_path` is REQUIRED
+(`load_config` refuses without it and rejects a path not starting with `/`),
+resolution is `GET /sites/{host}:{site_path}` → a drive by display name → a
+folder by path. Nothing can enumerate the tenant, search across sites, or walk
+out of the configured library — which is also why read-only `Sites.Selected`
+on the one site is a sufficient grant. `vdd_folder` joined `frd_folder` /
+`reference_folder` as a first-class field on 2026-08-27: three named folders
+on one named library on one named site. Blank `vdd_folder` means VDD sync is
+OFF, and with the eligibility rule that means nothing is generatable — say so
+when configuring a new environment.
+
+## The vendor data dictionary — INGESTION BUILT 2026-08-27
+
+The third input is now **ingested end to end**; it is not yet **consumed by
+the pipeline**. Hold that line when describing it: `DICT_` workbooks sync,
+parse, pair, index and surface in the app, and 02/03/04 still do not read
+them. The next step is a source layout from `dictionary.source_layout()`
+reaching 02 as structured input, which is where the source-side columns stop
+coming from the matched template.
+
+What was built, and the rule each piece encodes:
+
+- **`src/frdsttm/dictionary.py`** — the parser. Two rules do the work:
+  **structure raises, content gates.** No FILES sheet, or a header row that
+  cannot be located in the first 12 rows, raises `DictionaryError` (an
+  unreadable dictionary must never masquerade as an empty one). Anything the
+  vendor merely left blank — a missing field sheet, no descriptions, no PHI
+  flag — is a `problems` entry, and the caller gates. `_yn` is **tri-state**:
+  a blank PHI flag is `None`, never `False`, because "the vendor did not say"
+  and "the vendor said no" are different facts and only one is safe to act on.
+- **The returned-template trap.** The issued template's worked example rows
+  parse perfectly, which is exactly what makes them dangerous: a vendor who
+  returns the template unedited would hand back a dictionary of examples that
+  looks complete. Rows carrying the marker `delete once replaced` are dropped
+  and REPORTED, so a reviewer sees "this vendor returned the template".
+  A trailing prose row (real workbooks carry an assumptions line under the
+  table) is recognised as a note, not a file — but only when EVERY other core
+  cell is blank, so a half-filled real row is never swallowed.
+- **Pairing is EXACT NAME ONLY** (`similarity.pair_dictionaries`), deliberately
+  unlike STTM pairing. A wrongly-guessed template still gives the render a
+  layout; a wrongly-guessed dictionary puts another vendor's column names,
+  types and PHI flags on this feed. That is fabrication, not a degraded
+  answer, so an ambiguous or absent key leaves the FRD without a dictionary.
+- **Its own volume, `dict_source`** (`STTM_DICT_VOLUME`). NOT `sttm_reference`:
+  `corpus.parse_reference_dir` globs every `.xlsx` there as a TEMPLATE
+  workbook, and a dictionary is not one.
+- **Corpus index v3** — `dictionaries` (summary only: counts, file patterns,
+  problem kinds, sha256 — never the 399 rows, so the index stays cheap to load
+  on every request), `dictionary_pairs`, `unpaired_dictionaries`,
+  `ambiguous_dictionaries`, `dictionary_errors`. The version bump is
+  deliberate rather than additive-and-silent: a stage reading a v2 index would
+  see no dictionaries and build the source side from the template alone —
+  precisely the implicit borrow this input exists to remove.
+- **Sync**: a third kind through the SAME `_sync_folder`, so prefix filter,
+  incremental manifest, atomic writes and departed-file cleanup are one
+  implementation for three kinds. `STTM_SHAREPOINT_DICT_FOLDER` **blank is the
+  default and means OFF** — two folders listed, exactly as before. A blank
+  STRING knob is meaningful here; see the blank-env-var caution below.
+- **App**: `GET /api/demo/corpus/frds` carries a dictionary block on EVERY FRD
+  (`has_dictionary: false` is the gating state, not a missing field);
+  `GET /api/demo/corpus/dictionaries/{name}` serves one, allow-listed by the
+  index exactly as the reference download is. `mirror_corpus` tolerates an
+  ABSENT `dict_source` (it will not exist in a workspace deployed before
+  2026-08-27) and reports `dictionary: None` so "no volume" stays
+  distinguishable from "empty volume" — every other volume still raises.
+- **Governance**: `dict_source` is tagged in `90_uc_governance` and joins
+  `READ_VOLUMES`. A BSA who may read the FRD may read the dictionary that
+  describes the same feed's columns — "may run == may read" would be broken
+  by granting one and not the other.
+
+Tests: `tests/test_dictionary.py` (28) + dictionary cases appended to
+`test_sync.py` and `test_corpus_routes.py`. Suite 400 passed / 4 skipped.
+Every fixture is SYNTHETIC and built in-process — these tests must keep
+passing after the `sample_documents/` purge.
+
+**Verified on the real pair:** the SD FRD pairs to its dictionary (3 files,
+399 fields, 86/267/46); the CAQH FRD reports `None`, which is the correct
+gating state because no dictionary for it exists.
+
+## Results are addressable — `?set=&doc=` (2026-08-27)
+
+Found while cataloguing the screens, and it was a real gap rather than a
+documentation one: the results view was reachable ONLY as the tail of a run in
+that browser tab. Navigate away, or come back after an App restart, and a
+completed — BILLED — run could not be looked at again, even though its artifact
+set was sitting in the volume. `DemoFlow` now reads `?set=&doc=` on mount and
+writes it with `history.replaceState` when the results phase is entered, so a
+result can be bookmarked, sent to a colleague, or reopened tomorrow.
+
+Deliberately NOT a router: one query pair, nothing else in the app is
+addressable, and a bare URL still opens the picker. Do not grow this into
+client-side routing without a reason — the app is one surface.
+
+## The review-app UI — ACFC HOUSE STYLE, rebuilt 2026-08-27
+
+**Standing rule (Arjun, 2026-08-27): the frontend must read essentially the
+same in the Hexaware environment and in ACFC's rebuild.** The backend will
+differ; the UI is the half that has to survive the move, and matching UIs are
+"half the battle". So: every rule is expressed in the leaf tokens in
+`index.css`, and **nothing in the shell branches on environment, catalog,
+tenant or mode**. The one exception is `.acfc-envchip`, which changes its TEXT
+and never its box — same chip, same place, either side. Do not add a
+mode-conditional layout; put the difference in a value.
+
+The COLOUR was already right (sampled from the live site 2026-08-21). What was
+missing was the client's LAYOUT language, without which the app read as a
+generic admin panel. Added in `index.css` as `.acfc-*` primitives and used by
+`App.tsx` / `AgentHeader.tsx` / `CorpusPanel.tsx` / `DemoFlow.tsx`:
+
+- a **masthead** — 3px brand rule along the top of the page, white band, the
+  flag device, headline in brand blue, utility chip right, hairline beneath;
+- **full-bleed bands** with a centred `.acfc-container` (76rem — wider than the
+  old `max-w-5xl`; the rows carry long file names plus several chips);
+- **`.acfc-row`** document rows with a left accent edge instead of floating
+  cards, **`.acfc-stat`** square outlined tiles with the numeral in brand blue,
+  **`.acfc-chip`** square outlined status chips, **`.acfc-panel`** with a square
+  accent edge (the same container the decks use, so app and slides read as one
+  system), **`.acfc-notice`** one-line config warnings (they were two tall
+  alert boxes owning the first screen), and a **navy footer band**;
+- **`--brand-red` `#d2202f`**, sampled from the LOGO MARK, is the attention
+  colour and nothing else: "the agent will not guess this". Never decorative.
+- **The ACFC LOGO is deliberately never used.** Matching a client's palette on
+  a vendor's app is ordinary practice; putting their mark on it is not ours to
+  decide. `.acfc-flag` evokes the flag without reproducing it.
+
+The third input is visible where the decisions are made: a chip on every
+picker row (red `no vendor dictionary`, or `dictionary · N columns · N gaps`
+linking to the download), a `with a dictionary — N / total` stat tile, an
+unpaired-dictionary panel, and — most importantly — a notice on the
+already-mapped screen, because that is where a reviewer decides whether to
+spend a billed regeneration and needs to know the source side is ungrounded
+BEFORE spending it, not after.
+
+QA loop worth repeating: `npm run build`, run the backend against the
+synthetic fixture, and LOOK at it in a browser. The first render of this shell
+had the "/ of" denominator wrapping to its own line because `.acfc-stat span`
+caught a nested span — invisible in the source, obvious on screen.
 
 ## SharePoint / Microsoft Graph (added 2026-08-21; READ-ONLY 2026-08-22; sync on app start-up decided 2026-08-22 late — see the decision block at the top)
 

@@ -58,7 +58,7 @@ function ExtractionSummary({ r }: { r: R }) {
   const es = r.extraction_summary;
   return (
     <div>
-      <h2 className="eyebrow mb-2">Extraction</h2>
+      <h2 className="eyebrow-blue mb-2">Extraction</h2>
       <div className="grid grid-cols-3 gap-3 mb-3">
         <Stat label="Feeds" value={es.n_feeds} />
         <Stat label="Target tables" value={es.n_tables} />
@@ -98,24 +98,17 @@ function GateStrip({ r }: { r: R }) {
   const g = r.gate;
   return (
     <div>
-      <h2 className="eyebrow mb-2">Ambiguity gate</h2>
+      <h2 className="eyebrow-blue mb-2">Ambiguity gate</h2>
       <Card className="border-2">
         <CardContent className="py-2">
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <div>
-              <div className="text-3xl font-semibold mono-id">{g.detected}</div>
-              <div className="text-sm text-muted-foreground">ambiguities detected</div>
-            </div>
-            <div>
-              <div className="text-3xl font-semibold mono-id text-pass">{g.auto_confirmed}</div>
-              <div className="text-sm text-muted-foreground">auto-confirmed against the data dictionary</div>
-            </div>
-            <div>
-              <div className={`text-3xl font-semibold mono-id ${g.awaiting_human > 0 ? "text-flag" : ""}`}>
-                {g.awaiting_human}
-              </div>
-              <div className="text-sm text-muted-foreground">awaiting human review</div>
-            </div>
+          <div className="grid grid-cols-3 gap-3">
+            <Stat label="ambiguities detected" value={g.detected} tone="muted" />
+            <Stat label="auto-confirmed against the data dictionary" value={g.auto_confirmed} />
+            <Stat
+              label="awaiting human review"
+              value={g.awaiting_human}
+              tone={g.awaiting_human > 0 ? "alert" : "muted"}
+            />
           </div>
           <div className="mt-3 text-sm text-muted-foreground border-t pt-2 flex flex-wrap gap-x-6 gap-y-1">
             <span>
@@ -176,7 +169,7 @@ function ReviewPanel({ setId, docId }: { setId: string; docId: string }) {
 
   return (
     <div>
-      <h2 className="eyebrow mb-2">Human-in-the-loop review</h2>
+      <h2 className="eyebrow-blue mb-2">Human-in-the-loop review</h2>
       <Card className="border-2">
         <CardHeader>
           <CardTitle className="text-base">
@@ -264,7 +257,7 @@ function VerdictTile({ r }: { r: R }) {
     status === "PASS" ? "text-pass" : status === "PASS_WITH_FLAGS" ? "text-flag" : "text-destructive";
   return (
     <div>
-      <h2 className="eyebrow mb-2">Pipeline verdict</h2>
+      <h2 className="eyebrow-blue mb-2">Pipeline verdict</h2>
       <Card>
         <CardContent className="py-4 text-center">
           <div className={`text-3xl font-semibold ${tone}`}>{status}</div>
@@ -292,7 +285,7 @@ function TemplatePanel({ r }: { r: R }) {
         : "Freeform — no template matched";
   return (
     <div>
-      <h2 className="eyebrow mb-2">Template decision</h2>
+      <h2 className="eyebrow-blue mb-2">Template decision</h2>
       <Card>
         <CardContent className="py-3 flex flex-col gap-2">
           <div className="flex items-center gap-2">
@@ -344,7 +337,7 @@ function EvalPanel({ r }: { r: R }) {
   const ev = r.eval;
   return (
     <div>
-      <h2 className="eyebrow mb-2">Accuracy vs golden STTM</h2>
+      <h2 className="eyebrow-blue mb-2">Accuracy vs golden STTM</h2>
       <Card>
         <CardContent className="py-4 text-center">
           {ev.available ? (
@@ -480,13 +473,23 @@ function MappingTable({
   );
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
+/** The results view's tiles are the SAME object as the picker's — one
+ *  `.acfc-stat`, so a reviewer moving between the two screens sees one
+ *  system rather than two dialects of the same number. `tone` carries the
+ *  meaning the old text-pass / text-flag utilities did. */
+function Stat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  tone?: "muted" | "alert";
+}) {
   return (
-    <Card>
-      <CardContent className="py-2 text-center">
-        <div className="text-2xl font-semibold mono-id">{value}</div>
-        <div className="text-sm text-muted-foreground">{label}</div>
-      </CardContent>
-    </Card>
+    <div className={`acfc-stat${tone ? ` acfc-stat--${tone}` : ""}`}>
+      <b>{value}</b>
+      <span>{label}</span>
+    </div>
   );
 }

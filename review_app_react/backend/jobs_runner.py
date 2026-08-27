@@ -76,6 +76,10 @@ APP_OUT_VOLUME = os.environ.get("STTM_DEMO_APP_OUT_VOLUME", "sttm_out_app")
 # corpus_routes.py use for their local mirrors).
 RAW_VOLUME = os.environ.get("STTM_DEMO_PRELOADED_VOLUME", "frd_raw")
 REFERENCE_VOLUME = os.environ.get("STTM_REFERENCE_VOLUME", "sttm_reference")
+# The vendor data dictionaries (2026-08-27) — `vdd_raw`, named to sit beside
+# `frd_raw`: two raw source documents, two raw volumes. Its own volume and
+# not the reference one, which is globbed for TEMPLATE workbooks.
+DICT_VOLUME = os.environ.get("STTM_VDD_VOLUME", "vdd_raw")
 
 # Job identity: an explicit numeric id wins; otherwise the name is resolved
 # via the Jobs API and must match EXACTLY ONE job. Note that a bundle target
@@ -463,10 +467,21 @@ def mirror_volume_dir(w, remote_dir: str, local_dir: Path) -> int:
     return count
 
 
-def mirror_corpus(w, frd_local: Path, reference_local: Path) -> dict:
-    """Bring the container's copies of frd_raw + sttm_reference in step with
-    Unity Catalog (the sync job's output). Raises JobRunnerError if a volume
-    is unreadable — an unreadable store must never masquerade as empty."""
+def mirror_corpus(w, frd_local: Path, reference_local: Path,
+                  dictionary_local: Path | None = None) -> dict:
+    """Bring the container's copies of frd_raw + sttm_reference (+ vdd_raw)
+    in step with Unity Catalog (the sync job's output). Raises JobRunnerError
+    if a REQUIRED volume is unreadable — an unreadable store must never
+    masquerade as empty.
+
+    The dictionary volume is the one exception, and deliberately so: it is
+    NEW (2026-08-27) and will not exist in a workspace deployed before it.
+    An absent vdd_raw must degrade to "no vendor dictionaries yet", which
+    is the honest state and the one every FRD is in today — not break the
+    picker for the two volumes that do exist. It is reported as
+    ``dictionary: None`` so the difference stays visible rather than reading
+    as an empty volume.
+    """
     out = {}
     for key, remote, local in (("frd", f"{volume_root()}/{RAW_VOLUME}", frd_local),
                                ("reference", f"{volume_root()}/{REFERENCE_VOLUME}", reference_local)):
@@ -477,4 +492,10 @@ def mirror_corpus(w, frd_local: Path, reference_local: Path) -> dict:
                 f"Cannot mirror {remote} ({type(exc).__name__}: {exc}). Create the "
                 f"volume and grant the app's service principal READ on it."
             ) from exc
+    if dictionary_local is not None:
+        try:
+            out["dictionary"] = mirror_volume_dir(
+                w, f"{volume_root()}/{DICT_VOLUME}", Path(dictionary_local))
+        except Exception:  # noqa: BLE001 — see the docstring: absent is legitimate
+            out["dictionary"] = None
     return out

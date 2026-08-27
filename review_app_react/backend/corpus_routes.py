@@ -65,6 +65,7 @@ from sharepoint_routes import _client, _client_secret, _param
 from frdsttm.corpus import (  # noqa: E402
     CORPUS_INDEX_NAME,
     CorpusIndexError,
+    eligibility_of,
     load_corpus_index,
 )
 from frdsttm.local_folder import (  # noqa: E402
@@ -85,6 +86,12 @@ router = APIRouter()
 
 REFERENCE_VOLUME = os.environ.get("STTM_REFERENCE_VOLUME", "sttm_reference")
 REFERENCE_DIR = LOCAL_ROOT / REFERENCE_VOLUME
+
+# The vendor data dictionaries (2026-08-27) — their OWN volume, not the
+# reference one: frdsttm.corpus.parse_reference_dir globs every .xlsx in the
+# reference directory and would try to read a DICT_ workbook as a template.
+DICTIONARY_VOLUME = os.environ.get("STTM_VDD_VOLUME", "vdd_raw")
+DICTIONARY_DIR = LOCAL_ROOT / DICTIONARY_VOLUME
 
 # databricks mode: how stale the container's mirror of the volumes may get
 # before a read re-mirrors from Unity Catalog (another instance or a manual
@@ -109,6 +116,19 @@ CORPUS_REFRESH_SECONDS = _env_int("STTM_CORPUS_REFRESH_SECONDS", 120)
 # FRD_<name>.<ext>, every STTM STTM_<name>.xlsx. Blank disables the filter.
 FRD_NAME_PREFIX = os.environ.get("STTM_FRD_NAME_PREFIX", "FRD_").strip()
 STTM_NAME_PREFIX = os.environ.get("STTM_STTM_NAME_PREFIX", "STTM_").strip()
+# Convention VDD_, with DICT_ kept as a live alias for the template already
+# issued to vendors. Blank disables the filter, as for the other two kinds.
+DICT_NAME_PREFIX = tuple(
+    p.strip() for p in (os.environ.get("STTM_VDD_NAME_PREFIX") or "VDD_,DICT_").split(",")
+    if p.strip()
+)
+
+# Which library folder holds the dictionaries. UNSET means the third input is
+# not in play: the sync lists two folders exactly as it did before, and the
+# picker reports every FRD as having no dictionary. That is the correct
+# default until vendors actually return DICT_ workbooks — an empty folder
+# probe on every sync would be a Graph call that buys nothing.
+DICT_FOLDER = (os.environ.get("STTM_SHAREPOINT_VDD_FOLDER") or "").strip() or None
 
 # Sync when the app starts (decided 2026-08-22 late evening, replacing the
 # cron schedule). "0"/"false"/"no" turns it off — local dev and tests.
@@ -165,14 +185,15 @@ def _now() -> str:
 # index access (with the databricks-mode mirror)
 # --------------------------------------------------------------------------- #
 def _mirror_from_uc() -> dict | None:
-    """Bring the container's frd_raw + sttm_reference copies in step with
-    Unity Catalog. Returns the counts, or None when the volumes are not
-    readable yet — which, for a READ, is the ordinary "nothing synced in
-    this workspace yet" state, not an error (the sync endpoint itself is
+    """Bring the container's frd_raw + sttm_reference (+ vdd_raw) copies
+    in step with Unity Catalog. Returns the counts, or None when the volumes
+    are not readable yet — which, for a READ, is the ordinary "nothing synced
+    in this workspace yet" state, not an error (the sync endpoint itself is
     where an unreadable volume fails loudly)."""
     try:
         w = jobs_runner._workspace_client()
-        return jobs_runner.mirror_corpus(w, PRELOADED_DIR, REFERENCE_DIR)
+        return jobs_runner.mirror_corpus(w, PRELOADED_DIR, REFERENCE_DIR,
+                                         dictionary_local=DICTIONARY_DIR)
     except Exception:  # noqa: BLE001 — see docstring
         return None
 
@@ -199,6 +220,9 @@ def _summary(index, manifest) -> dict:
         "built": False, "generated_at": None, "synced_at": manifest.get("synced_at"),
         "n_frds": 0, "n_references": 0, "n_pairs": 0, "n_unmapped": 0,
         "unpaired_references": [],
+        "n_dictionaries": 0, "n_dictionary_pairs": 0,
+        "unpaired_dictionaries": [], "dictionary_errors": {},
+        "n_generatable": 0,
     }
     if index is None:
         return base
@@ -211,6 +235,15 @@ def _summary(index, manifest) -> dict:
         "n_pairs": len(index["pairs"]),
         "n_unmapped": len(index["unmapped"]),
         "unpaired_references": index["unpaired_references"],
+        # .get throughout: an index built before the third input existed is
+        # rejected by load_corpus_index's version check, but a hand-written
+        # fixture in a test need not carry every key to be summarised.
+        "n_dictionaries": len(index.get("dictionaries", {})),
+        "n_dictionary_pairs": len(index.get("dictionary_pairs", {})),
+        "unpaired_dictionaries": index.get("unpaired_dictionaries", []),
+        "dictionary_errors": index.get("dictionary_errors", {}),
+        # How many FRDs a reviewer may actually start a run on.
+        "n_generatable": len(index.get("generatable", [])),
     }
 
 
@@ -244,6 +277,18 @@ def _strip_index(summary: dict) -> dict:
     return {k: v for k, v in summary.items() if k != "index"}
 
 
+def _counts(index: dict) -> dict:
+    """The five numbers every sync summary reports, in one place."""
+    return {
+        "n_frds": len(index["frds"]),
+        "n_references": len(index["references"]),
+        "n_pairs": len(index["pairs"]),
+        "n_unmapped": len(index["unmapped"]),
+        "n_dictionaries": len(index.get("dictionaries", {})),
+        "n_dictionary_pairs": len(index.get("dictionary_pairs", {})),
+    }
+
+
 def _sync_worker(mode: str, client, reference_folder: str | None) -> None:
     """Local mode: the sync code in-process. Databricks mode: trigger the
     sync JOB, wait, mirror. Either way the Run-lifecycle shape is the same
@@ -260,23 +305,28 @@ def _sync_worker(mode: str, client, reference_folder: str | None) -> None:
                 url = None
             _set_sync(run_page_url=url)
             jobs_runner.wait_for_run(w, run_id)
-            mirrored = jobs_runner.mirror_corpus(w, PRELOADED_DIR, REFERENCE_DIR)
+            mirrored = jobs_runner.mirror_corpus(w, PRELOADED_DIR, REFERENCE_DIR,
+                                                dictionary_local=DICTIONARY_DIR)
             summary = {"job_run_id": run_id, "mirrored": mirrored}
         elif mode == "reindex":
-            index, skipped = reindex(PRELOADED_DIR, REFERENCE_DIR, _thresholds(), _now())
-            summary = {"mode": "reindex", "skipped": skipped,
-                       "n_frds": len(index["frds"]), "n_references": len(index["references"]),
-                       "n_pairs": len(index["pairs"]), "n_unmapped": len(index["unmapped"])}
+            index, skipped = reindex(PRELOADED_DIR, REFERENCE_DIR, _thresholds(), _now(),
+                                     dictionary_dir=DICTIONARY_DIR)
+            summary = {"mode": "reindex", "skipped": skipped, **_counts(index)}
         else:
+            vdd_folder = DICT_FOLDER or getattr(client, "vdd_folder", "") or None
             result = sync_from_sharepoint(
                 client, frd_dir=PRELOADED_DIR, reference_dir=REFERENCE_DIR,
                 reference_folder=reference_folder, thresholds=_thresholds(), now_iso=_now(),
                 frd_prefix=FRD_NAME_PREFIX, reference_prefix=STTM_NAME_PREFIX,
+                # The VDD folder comes from the SITE CONFIG when the source is
+                # SharePoint (one site, one library, three named folders); the
+                # env var is the override and the only way to set it for a
+                # local folder, which is flat and separates kinds by prefix.
+                dictionary_dir=DICTIONARY_DIR if vdd_folder else None,
+                dictionary_folder=vdd_folder, dictionary_prefix=DICT_NAME_PREFIX,
             )
             index = result["index"]
-            summary = {**_strip_index(result), "mode": "sync",
-                       "n_frds": len(index["frds"]), "n_references": len(index["references"]),
-                       "n_pairs": len(index["pairs"]), "n_unmapped": len(index["unmapped"])}
+            summary = {**_strip_index(result), "mode": "sync", **_counts(index)}
         _set_sync(state="done", finished_at=_now(), summary=summary)
     except GraphError as exc:
         _set_sync(state="failed", finished_at=_now(),
@@ -418,6 +468,9 @@ def corpus_frds() -> dict:
     manifest = load_manifest(REFERENCE_DIR)
     frd_meta = manifest_by_local_name(manifest, "frd")
     ref_meta = manifest_by_local_name(manifest, "reference")
+    dict_meta = manifest_by_local_name(manifest, "dictionary")
+    dictionaries = index.get("dictionaries", {})
+    dict_pairs = index.get("dictionary_pairs", {})
     frds = []
     for doc_id, entry in sorted(index["frds"].items()):
         pair = index["pairs"].get(doc_id)
@@ -444,8 +497,77 @@ def corpus_frds() -> dict:
             "reference_modified": rm.get("modified"),
             "reference_size_bytes": (ref_path.stat().st_size
                                      if ref_path is not None and ref_path.is_file() else None),
+            # -- the third input. `has_dictionary` false is the GATING state,
+            # not a missing feature: without a vendor dictionary the source
+            # side of the STTM has no grounded input, and the run must say so
+            # by name rather than fill those columns from a matched template.
+            **_dictionary_fields(dict_pairs.get(doc_id), dictionaries, dict_meta),
+            # The one verdict that decides whether this FRD may be generated.
+            # Computed in frdsttm.corpus so the picker, the run endpoint and
+            # the notebooks cannot drift into three different answers.
+            **{f"eligibility_{k}" if k in ("status", "reason") else k: v
+               for k, v in eligibility_of(index, doc_id).items()
+               if k in ("status", "reason", "generatable")},
         })
-    return {"built": True, "frds": frds}
+    return {"built": True, "frds": frds,
+            "unpaired_dictionaries": index.get("unpaired_dictionaries", []),
+            "dictionary_errors": index.get("dictionary_errors", {})}
+
+
+def _dictionary_fields(name: str | None, dictionaries: dict, meta: dict) -> dict:
+    """The picker's dictionary block for one FRD.
+
+    `n_problems` travels with the pairing on purpose: "a dictionary exists"
+    and "a dictionary that describes every column exists" are different
+    facts, and a reviewer deciding whether to spend a billed run needs the
+    second one. `problem_kinds` names them without shipping the detail — the
+    detail belongs to the run, which parses the workbook itself.
+    """
+    if not name:
+        return {"has_dictionary": False, "dictionary": None,
+                "dictionary_files": 0, "dictionary_fields": 0,
+                "dictionary_problems": 0, "dictionary_problem_kinds": [],
+                "dictionary_web_url": None, "dictionary_modified": None}
+    entry = dictionaries.get(name, {})
+    dm = meta.get(name, {})
+    return {
+        "has_dictionary": True,
+        "dictionary": name,
+        "dictionary_files": entry.get("n_files", 0),
+        "dictionary_fields": entry.get("n_fields", 0),
+        "dictionary_problems": entry.get("n_problems", 0),
+        "dictionary_problem_kinds": entry.get("problem_kinds", []),
+        "dictionary_web_url": dm.get("web_url"),
+        "dictionary_modified": dm.get("modified"),
+    }
+
+
+@router.get("/api/demo/corpus/dictionaries/{name}")
+def corpus_dictionary(name: str):
+    """Serve one vendor data dictionary from the dictionary volume.
+
+    Same allow-list rule as the reference download: only names the corpus
+    index lists are served, so this can never be walked to an arbitrary file
+    on disk. A dictionary carries a vendor's column descriptions and PHI
+    flags — it is client material, and the download is a governed action for
+    the same reason the workbook download is.
+    """
+    index = _index_or_none()
+    if index is None or name not in index.get("dictionaries", {}):
+        raise HTTPException(status_code=404, detail=f"{name} is not in the corpus index")
+    path = DICTIONARY_DIR / Path(name).name
+    if not path.is_file() and IS_DATABRICKS_APP:
+        _mirror_from_uc()
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"{name} is indexed but not present in {DICTIONARY_VOLUME} — "
+                   f"run a sync to bring the volume back in step")
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{Path(name).name}"'},
+    )
 
 
 @router.get("/api/demo/corpus/references/{name}")
