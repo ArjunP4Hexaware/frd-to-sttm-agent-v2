@@ -110,7 +110,10 @@ def view(run_id: str) -> dict:
         try:
             from frdsttm.dictionary import parse_dictionary_workbook
             from frdsttm.render import preview_rows
-            vdd = parse_dictionary_workbook(settings.PATHS.vdds / run["vdd"]["file"])
+            vdd_path = settings.PATHS.vdds / run["vdd"]["file"]
+            if not vdd_path.is_file():
+                storage.pull_documents()          # a fresh container has no mirror yet
+            vdd = parse_dictionary_workbook(vdd_path)
             applied = run.get("applied") or {}
             spec = applied.get("extraction") or run["extraction"]
             sources = applied.get("sources") or run["assessment"]["sources"]

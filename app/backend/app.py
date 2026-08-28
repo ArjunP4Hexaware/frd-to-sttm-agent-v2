@@ -79,7 +79,7 @@ def reindex(request: Request) -> dict:
                 job_run_id, url = jobs.start("reindex", triggered_by=_who(request))
                 _reindex["url"] = url
                 jobs.wait(job_run_id)
-                storage.pull_documents()
+                storage.pull_documents(force=True)
             else:
                 pipeline.reindex(settings.PATHS)
             _reindex["state"] = "done"

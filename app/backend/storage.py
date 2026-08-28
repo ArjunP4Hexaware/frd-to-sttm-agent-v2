@@ -48,12 +48,23 @@ def _mirror_dir(remote: str, local: Path, recursive: bool = False) -> int:
     return n
 
 
-def pull_documents() -> dict:
-    """frds, vdds, reference_sttms (incl. corpus_index.json) → local mirror."""
+_last_pull = 0.0
+PULL_EVERY_SECONDS = 60.0
+
+
+def pull_documents(force: bool = False) -> dict:
+    """frds, vdds, reference_sttms (incl. corpus_index.json) → local mirror.
+    At most once a minute unless forced — the picker calls this per request."""
+    global _last_pull
     if not settings.IS_DATABRICKS:
         return {}
-    return {kind: _mirror_dir(settings.volume_path(kind), getattr(settings.PATHS, attr))
-            for kind, attr in (("frds", "frds"), ("vdds", "vdds"), ("reference", "reference"))}
+    import time
+    if not force and time.monotonic() - _last_pull < PULL_EVERY_SECONDS:
+        return {}
+    out = {kind: _mirror_dir(settings.volume_path(kind), getattr(settings.PATHS, attr))
+           for kind, attr in (("frds", "frds"), ("vdds", "vdds"), ("reference", "reference"))}
+    _last_pull = time.monotonic()
+    return out
 
 
 def list_remote_runs() -> list[str]:
