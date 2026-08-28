@@ -72,3 +72,41 @@ def test_choose_layout_prefers_matching_dialect(data_root):
 def test_new_run_id_uniquifies():
     a = pipeline.new_run_id(set())
     assert pipeline.new_run_id({a}) == f"{a}-2"
+
+
+def test_trailing_comma_is_tolerated_and_malformed_json_retried_once():
+    from frdsttm import extract as ex
+    from conftest import spec_for
+    import json as _json
+
+    assert ex.clean_json_text('```json\n{"a": [1, 2,],}\n```') == '{"a": [1, 2]}'
+
+    class Flaky(FakeClient):
+        def stream(self, **kw):
+            ctx = super().stream(**kw)
+            client = self
+            calls = self.calls
+
+            class C:
+                def __enter__(s_):
+                    return s_
+
+                def __exit__(s_, *a):
+                    return False
+
+                def get_final_message(s_):
+                    m = ctx.get_final_message()
+                    if calls == 1:                      # first answer: not JSON at all
+                        m.content[0].text = "{not json"
+                    return m
+            return C()
+
+    c = Flaky(spec_for())
+    spec, meta = ex.extract(c, "d", "x", model="m")
+    assert c.calls == 2 and meta["attempts"] == 2 and spec.feeds[0].feed_name == "Claims Intake"
+
+    c = Flaky(spec_for())
+    c.spec = {"not": "a spec"}
+    with pytest.raises(RuntimeError, match="does not match"):
+        ex.extract(c, "d", "x", model="m")              # wrong SHAPE is not retried
+    assert c.calls == 2

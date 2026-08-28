@@ -32,7 +32,7 @@ export default function App() {
           {view.kind === "picker" ? (
             <Picker onOpenRun={(runId) => setView({ kind: "run", runId })} />
           ) : (
-            <RunView runId={view.runId} onBack={() => setView({ kind: "picker" })} />
+            <RunView runId={view.runId} onBack={() => setView({ kind: "picker" })} onOpenRun={(runId) => setView({ kind: "run", runId })} />
           )}
         </div>
       </main>

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 
 from pydantic import ValidationError
@@ -81,18 +82,35 @@ def build_prompt(content: str, schema: dict | None = None) -> str:
     )
 
 
-def _strip_fences(raw: str) -> str:
+_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+
+
+def clean_json_text(raw: str) -> str:
+    """Tolerate the two formatting slips a model makes: a ```json fence and a
+    trailing comma before } or ]. Content is never changed."""
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
-    return raw.strip()
+    return _TRAILING_COMMA.sub(r"\1", raw.strip())
+
+
+_strip_fences = clean_json_text
+
+
+class MalformedJson(RuntimeError):
+    """The model's text is not JSON at all (as opposed to JSON of the wrong shape)."""
 
 
 def parse_response(raw_text: str, doc_id: str) -> FrdIngestionSpec:
+    cleaned = clean_json_text(raw_text)
     try:
-        return FrdIngestionSpec.model_validate_json(_strip_fences(raw_text))
+        json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise MalformedJson(f"{doc_id}: the model's answer is not valid JSON ({exc})") from exc
+    try:
+        return FrdIngestionSpec.model_validate_json(cleaned)
     except ValidationError as exc:
         failed = "; ".join(
             f"{'.'.join(str(p) for p in e['loc']) or '<root>'}: {e['msg']}" for e in exc.errors())
@@ -106,10 +124,7 @@ def schema_sha256() -> str:
                                      sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def extract(client, doc_id: str, content: str, *, model: str,
-            max_tokens: int = DEFAULT_MAX_TOKENS) -> tuple[FrdIngestionSpec, dict]:
-    """One streaming call. Returns (spec, meta). Raises on refusal, truncation
-    or a schema mismatch — never returns a half-answer."""
+def _call(client, doc_id, content, model, max_tokens):
     with client.messages.stream(
         model=model, max_tokens=max_tokens, system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": build_prompt(content)}],
@@ -119,12 +134,32 @@ def extract(client, doc_id: str, content: str, *, model: str,
         raise RuntimeError(
             f"{doc_id}: unusable stop_reason={msg.stop_reason!r}"
             + (" — the JSON was truncated; raise max_tokens" if msg.stop_reason == "max_tokens" else ""))
-    raw = "".join(b.text for b in msg.content if b.type == "text")
-    spec = parse_response(raw, doc_id)
+    return msg, "".join(b.text for b in msg.content if b.type == "text")
+
+
+def extract(client, doc_id: str, content: str, *, model: str,
+            max_tokens: int = DEFAULT_MAX_TOKENS) -> tuple[FrdIngestionSpec, dict]:
+    """One streaming call. Returns (spec, meta). Raises on refusal, truncation
+    or a schema mismatch — never returns a half-answer.
+
+    Malformed JSON (not the wrong shape — not JSON at all, after the trailing-
+    comma / fence cleanup) is retried ONCE: it is a formatting slip the model
+    makes occasionally, and a demo should not fail on a comma."""
+    attempts = 0
+    while True:
+        attempts += 1
+        msg, raw = _call(client, doc_id, content, model, max_tokens)
+        try:
+            spec = parse_response(raw, doc_id)
+            break
+        except MalformedJson:
+            if attempts >= 2:
+                raise
     u = msg.usage
     meta = {
         "model": model,
         "stop_reason": msg.stop_reason,
+        "attempts": attempts,
         "input_tokens": getattr(u, "input_tokens", 0),
         "output_tokens": getattr(u, "output_tokens", 0),
         "system_prompt_sha256": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest(),

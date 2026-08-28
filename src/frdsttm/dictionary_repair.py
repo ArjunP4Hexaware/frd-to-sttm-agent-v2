@@ -99,13 +99,7 @@ def build_prompt(text: str) -> str:
     )
 
 
-def _strip_fences(raw: str) -> str:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return raw.strip()
+from frdsttm.extract import clean_json_text as _strip_fences  # noqa: E402
 
 
 def repair_dictionary(client, path: str | Path, *, model: str, max_tokens: int = 64000) -> tuple[dict, dict]:

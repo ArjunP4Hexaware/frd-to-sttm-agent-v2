@@ -11,6 +11,7 @@ import {
   useAnswer,
   useRender,
   useRun,
+  useStartRun,
   workbookUrl,
   type RunView as Run,
   type SourceEntry,
@@ -21,10 +22,11 @@ import {
  * happening now, what the agent read, whether it can build the STTM, the
  * questions it will not answer itself, then the workbook.
  */
-export function RunView({ runId, onBack }: { runId: string; onBack: () => void }) {
+export function RunView({ runId, onBack, onOpenRun }: { runId: string; onBack: () => void; onOpenRun?: (runId: string) => void }) {
   const q = useRun(runId);
   const answer = useAnswer(runId);
   const render = useRender(runId);
+  const startAgain = useStartRun();
   const qc = useQueryClient();
   const r = q.data;
   const running = r?.live?.phase === "running" || r?.status === "extracting";
@@ -76,7 +78,19 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
       {running && <Progress startedAt={r.live?.started_at ?? r.created_at} task={task} />}
 
       {error && !running && (
-        <Alert variant="destructive"><AlertTitle>The run failed</AlertTitle><AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription></Alert>
+        <Alert variant="destructive">
+          <AlertTitle>The run failed</AlertTitle>
+          <AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription>
+          {!r.render && onOpenRun && (
+            <div className="mt-3 flex items-center gap-3">
+              <Button disabled={startAgain.isPending} onClick={() => startAgain.mutate(r.doc_id, { onSuccess: (x) => onOpenRun(x.run_id) })}>
+                {startAgain.isPending ? "Starting…" : "Run again"}
+              </Button>
+              <span className="text-sm">Starts a fresh run on the same FRD and dictionary.</span>
+              {startAgain.isError && <span className="text-sm text-[var(--brand-red)]">{(startAgain.error as Error).message}</span>}
+            </div>
+          )}
+        </Alert>
       )}
 
       {r.frd && a && (
