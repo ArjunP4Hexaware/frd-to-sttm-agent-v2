@@ -2,12 +2,10 @@ import { useEffect } from "react";
 import { Alert, AlertDescription, AlertTitle, Button, Spinner } from "@databricks/appkit-ui/react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  STATUS_LABEL,
   VDD_PROBLEM_LABEL,
   documentUrl,
   useDocuments,
   useReindexState,
-  useRuns,
   useStartRun,
   type DocumentEntry,
 } from "../api";
@@ -21,7 +19,6 @@ import { HowItWorks } from "./HowItWorks";
  */
 export function Picker({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
   const docs = useDocuments();
-  const runs = useRuns();
   const reindexState = useReindexState();
   const start = useStartRun();
   const qc = useQueryClient();
@@ -149,24 +146,6 @@ export function Picker({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
         </div>
       </div>
 
-      {runs.data && runs.data.runs.length > 0 && (
-        <Group title="Runs" hint="Every run, newest first. Open one to answer its questions, regenerate, or download the workbook.">
-          {runs.data.runs.slice(0, 12).map((r) => (
-            <div key={r.run_id} className="acfc-row">
-              <div className="flex items-center gap-3 min-w-0 flex-wrap">
-                <span className="mono-id text-xs text-muted-foreground">{r.run_id}</span>
-                <span className="mono-id text-sm truncate">{r.doc_id}</span>
-                <span className={`acfc-chip ${r.status === "rendered" ? "acfc-chip--ok" : r.status === "failed" || r.status === "cannot_generate" ? "acfc-chip--gap" : "acfc-chip--quiet"}`}>
-                  {r.live?.phase === "running" ? "running" : STATUS_LABEL[r.status] ?? r.status}
-                </span>
-                {r.n_questions > 0 && <span className="text-xs text-muted-foreground">{r.n_answered}/{r.n_questions} questions answered</span>}
-                {r.n_sources > 0 && <span className="text-xs text-muted-foreground">{r.n_sources} source{r.n_sources === 1 ? "" : "s"}</span>}
-              </div>
-              <Button variant="outline" onClick={() => onOpenRun(r.run_id)}>Open</Button>
-            </div>
-          ))}
-        </Group>
-      )}
     </div>
   );
 }

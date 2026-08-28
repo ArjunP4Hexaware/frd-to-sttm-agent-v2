@@ -10,8 +10,9 @@ Open https://frd-sttm-review-app-7405616719878880.0.azure.databricksapps.com and
 picker to show both FRDs (the first load mirrors the volumes — 5–10 s). If the Runs list is empty,
 press **Reindex the volumes** once.
 
-Fallback if the live model call misbehaves: the Runs list holds a finished SD run
-(`run_20260828_021025`, 411 rows) — open it and walk the same screens.
+Fallback if the live model call misbehaves: a finished SD run is reachable by URL —
+append `?run=run_20260828_023551` (411 rows, 5/5 answered) — and walk the same screens.
+A failed run shows a **Run again** button; a second attempt normally succeeds.
 
 ## The story (one sentence)
 
@@ -37,6 +38,9 @@ asks for what it will not guess, and builds the STTM in ACFC's own workbook layo
    MAPPING sheets in the client's own layout, 411 rows, column names as the vendor wrote them,
    audit columns from the standards.
 7. **Run report** (optional) — the same facts as a markdown page.
+
+If a run fails with a JSON/format error, press **Run again** — the model occasionally slips on
+formatting; the second attempt is a fresh call.
 
 ## Questions people ask
 
