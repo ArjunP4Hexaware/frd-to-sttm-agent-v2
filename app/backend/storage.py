@@ -35,9 +35,9 @@ def _mirror_dir(remote: str, local: Path, recursive: bool = False) -> int:
             continue
         keep.add(name)
         target = local / name
+        # Always write: a rewritten corpus_index.json can keep its size to the byte
+        # (only the timestamp changed), so size is not a freshness check.
         payload = w.files.download(entry.path).contents.read()
-        if target.is_file() and target.stat().st_size == len(payload):
-            continue
         tmp = target.with_suffix(target.suffix + ".part")
         tmp.write_bytes(payload)
         tmp.replace(target)
