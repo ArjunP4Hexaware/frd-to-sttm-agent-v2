@@ -21,7 +21,7 @@ resources:
         - name: provider
           default: databricks
         - name: model
-          default: claude-opus-5
+          default: claude-sonnet-5
         - name: triggered_by
           default: manual
       tasks:

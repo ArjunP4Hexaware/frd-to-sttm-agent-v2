@@ -36,7 +36,7 @@ Read `docs/ARCHITECTURE.md` first; `README.md` has the commands.
 `arjun_workspace.sttm_agent`. Job `frd_sttm_pipeline` (bundle, dev target —
 the deployed name is prefixed; `STTM_JOB_ID` in `app.yaml` pins the id).
 App `frd-sttm-review-app`, deployed from the repo root. Claude through the
-workspace's Foundation Model APIs (`databricks-claude-opus-5`); no Anthropic key.
+workspace's Foundation Model APIs (`databricks-claude-sonnet-5`); no Anthropic key.
 Stop the App when not demoing — it bills per hour.
 
 ## Arjun's working rules (from ~/.claude/CLAUDE.md)

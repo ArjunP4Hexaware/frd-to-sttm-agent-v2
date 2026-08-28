@@ -22,7 +22,7 @@ from pydantic import ValidationError
 
 from frdsttm.models import FrdIngestionSpec
 
-DEFAULT_MODEL = "claude-opus-5"
+DEFAULT_MODEL = "claude-sonnet-5"
 DEFAULT_MAX_TOKENS = 64000
 DATABRICKS_MODEL_PREFIX = "databricks-"
 DATABRICKS_ANTHROPIC_PATH = "/serving-endpoints/anthropic"

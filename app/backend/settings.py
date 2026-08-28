@@ -24,7 +24,7 @@ VOLUMES = {
     "output": os.environ.get("STTM_OUTPUT_VOLUME", "output_sttms"),
 }
 PROVIDER = os.environ.get("STTM_PROVIDER", "databricks").strip().lower() or "databricks"
-MODEL = os.environ.get("STTM_MODEL", "claude-opus-5").strip() or "claude-opus-5"
+MODEL = os.environ.get("STTM_MODEL", "claude-sonnet-5").strip() or "claude-sonnet-5"
 JOB_NAME = os.environ.get("STTM_JOB_NAME", "frd_sttm_pipeline")
 JOB_ID = os.environ.get("STTM_JOB_ID", "").strip()
 

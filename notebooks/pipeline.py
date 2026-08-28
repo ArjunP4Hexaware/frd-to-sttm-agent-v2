@@ -53,7 +53,7 @@ SCHEMA = _param("schema", "sttm_agent")
 RUN_ID = _param("run_id", "")
 DOC_ID = _param("doc_id", "")
 PROVIDER = _param("provider", "databricks")
-MODEL = _param("model", "claude-opus-5")
+MODEL = _param("model", "claude-sonnet-5")
 TRIGGERED_BY = _param("triggered_by", "manual")
 PAIRING_TABLE = _param("pairing_table", "frd_pairing")
 

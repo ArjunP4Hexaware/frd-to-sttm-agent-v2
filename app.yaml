@@ -16,7 +16,7 @@ env:
   - name: "STTM_PROVIDER"
     value: "databricks"
   - name: "STTM_MODEL"
-    value: "claude-opus-5"
+    value: "claude-sonnet-5"
   - name: "STTM_JOB_NAME"
     value: "frd_sttm_pipeline"
   # Set after `databricks bundle deploy` to the job id it created.
