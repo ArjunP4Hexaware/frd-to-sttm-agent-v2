@@ -406,8 +406,10 @@ def _render_into_single_sheet(spec, units, layout, out_path):
     if leftover:
         info["source_level_rules"] = leftover
     _fill_sheet(ws, layout, u["rows"], placement)
+    # Every other sheet carries the template feed's own content (a reference
+    # mapping, a lookup) — structure is borrowed, content never is.
     for name in wb.sheetnames:
-        if name != layout["sheet"] and name.startswith("MAPPING-"):
+        if name != layout["sheet"]:
             del wb[name]
             info["removed_sheets"].append(name)
     wb.save(out_path)
