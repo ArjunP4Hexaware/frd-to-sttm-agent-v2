@@ -59,13 +59,26 @@ def pull_documents() -> dict:
 def list_remote_runs() -> list[str]:
     if not settings.IS_DATABRICKS:
         return []
-    return sorted((Path(e.path).name for e in client().files.list_directory_contents(settings.volume_path("output"))
+    try:
+        entries = list(client().files.list_directory_contents(settings.volume_path("output")))
+    except Exception as exc:  # noqa: BLE001
+        if "not found" in str(exc).lower():
+            return []
+        raise
+    return sorted((Path(e.path).name for e in entries
                    if e.is_directory and Path(e.path).name.startswith("run_")), reverse=True)
 
 
 def pull_run(run_id: str) -> None:
-    if settings.IS_DATABRICKS:
+    """Mirror one run directory; a run the job has not written yet is not an error."""
+    if not settings.IS_DATABRICKS:
+        return
+    try:
         _mirror_dir(f"{settings.volume_path('output')}/{run_id}", settings.PATHS.run_dir(run_id))
+    except Exception as exc:  # noqa: BLE001 — absent remote dir → the caller's FileNotFoundError
+        if "not found" in str(exc).lower() or type(exc).__name__ in ("NotFound", "ResourceDoesNotExist"):
+            return
+        raise
 
 
 def pull_all_runs() -> None:
