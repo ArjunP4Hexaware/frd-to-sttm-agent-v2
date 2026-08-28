@@ -53,7 +53,7 @@ rebuild was an explicit override.
    the VDD is. Use them (a) as a template check — a missing row is a question or
    blocker before any model call; (b) as a second reading beside Claude's, so a
    disagreement (table says `stg_mbr`, prose says `stg_member`) becomes a
-   question, the way `project_id` already works in `completeness.enrich`. Claude
+   question, the way `project_id` is reconciled in `completeness.enrich`. Claude
    still reads the prose — rules, recycle logic, attribution — that is what needs
    a model, not the .docx format. ~150 lines + tests in `frd_parsing` /
    `completeness`.

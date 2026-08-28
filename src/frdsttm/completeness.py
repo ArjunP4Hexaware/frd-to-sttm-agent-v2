@@ -29,6 +29,7 @@ from frdsttm import standards as std
 from frdsttm.frd_parsing import PROJECT_ID_LINE_RE
 from frdsttm.models import FrdIngestionSpec
 from frdsttm.reference_layout import loose_tokens
+from frdsttm.render import _column_mentions
 
 STATUS_READY = "ready"
 STATUS_NEEDS_INPUT = "needs_input"
@@ -81,6 +82,16 @@ _STRICT_LISTS = ("file_name_patterns", "record_segments", "lobs", "requirement_i
 _ADVISORY_SCALARS = ("recycle_rule", "history_backfill", "archive_retention", "phi_pii_notes")
 _ADVISORY_LISTS = ("validation_rules", "load_windows_sla")
 
+# What render.py actually writes into the workbook. A grounding miss on any
+# other field cannot change a single cell, so it is a NOTE for the reviewer,
+# never a question that gates the run (Arjun, 2026-08-28: only surface
+# questions that affect how the STTM is written).
+_ON_WORKBOOK = frozenset({
+    "file_name_patterns", "lobs", "landing_location", "recycle_rule", "validation_rules",
+    "frequency", "source_system", "domain", "sub_domain", "delimiter", "feed_name",
+    "catalog", "schema", "tables",
+})
+
 
 def _strict_ok(value: str, ncontent: str) -> bool:
     if norm(value) in ncontent:
@@ -102,7 +113,7 @@ def grounding_audit(spec: dict, content: str) -> tuple[dict, list[dict]]:
     silent keep and never a silent drop."""
     ncontent = norm(content)
     ctokens = set(_tokens(content))
-    strict_failed, advisory_flagged, questions = [], [], []
+    strict_failed, advisory_flagged, questions, off_workbook = [], [], [], []
     n_strict = n_advisory = 0
 
     def strict(path, value, ctx, source):
@@ -112,6 +123,9 @@ def grounding_audit(spec: dict, content: str) -> tuple[dict, list[dict]]:
         n_strict += 1
         if not _strict_ok(str(value), ncontent):
             strict_failed.append(f"{path}: {value!r}")
+            if ctx["field"] not in _ON_WORKBOOK:
+                off_workbook.append(f"{path}: {value!r} is not verbatim in the FRD — kept; it is not written to the workbook")
+                return
             questions.append(_question(
                 "unverified",
                 f"The extracted {ctx['field'].replace('_', ' ')} {value!r} could not be found "
@@ -125,6 +139,9 @@ def grounding_audit(spec: dict, content: str) -> tuple[dict, list[dict]]:
         n_advisory += 1
         if not _advisory_ok(str(value), ctokens):
             advisory_flagged.append(f"{path}: {value!r}")
+            if ctx["field"] not in _ON_WORKBOOK:
+                off_workbook.append(f"{path}: {value!r} only loosely matches the FRD — kept; it is not written to the workbook")
+                return
             questions.append(_question(
                 "weak_match",
                 f"This {ctx['field'].replace('_', ' ')} only loosely matches the FRD's wording: "
@@ -157,7 +174,8 @@ def grounding_audit(spec: dict, content: str) -> tuple[dict, list[dict]]:
             advisory(f"{p}.{f}", feed.get(f), {"path": p, "field": f, "feed_index": i}, name)
 
     summary = {"strict_checked": n_strict, "strict_failed": strict_failed,
-               "advisory_checked": n_advisory, "advisory_flagged": advisory_flagged}
+               "advisory_checked": n_advisory, "advisory_flagged": advisory_flagged,
+               "off_workbook": off_workbook}
     return summary, questions
 
 
@@ -179,11 +197,10 @@ def enrich(spec: dict, content: str) -> tuple[list[str], list[dict]]:
             proj["project_id"] = pid
             notes.append(f"project_id {pid} taken from the FRD's 'Project ID' line (the model returned none)")
         elif proj["project_id"] != pid:
-            questions.append(_question(
-                "project_id",
-                f"The model read the project id as {proj['project_id']!r}; the FRD's 'Project ID' "
-                f"line says {pid!r}. Which is right?",
-                {"agent": proj["project_id"], "frd": pid}, options=(proj["project_id"], pid)))
+            # not on the workbook, and the FRD's own line is read by code: it wins
+            notes.append(f"project_id: the model read {proj['project_id']!r}, the FRD's 'Project ID' "
+                         f"line says {pid!r} — the FRD's line is used")
+            proj["project_id"] = pid
     pairs = list(dict.fromkeys(f"{r} {c}" for r, c in _REGION_LOB_RE.findall(content)))
     if pairs:
         for feed in spec.get("feeds", []):
@@ -193,28 +210,69 @@ def enrich(spec: dict, content: str) -> tuple[list[str], list[dict]]:
     return notes, questions
 
 
-def attribution_questions(spec: dict) -> list[dict]:
+def _rule_names_source(rule: str, feed: dict) -> bool:
+    """Does the rule's own text name this source — one of its file patterns
+    (the FRD's 'from the below files: a.csv; b.csv') or its feed name?"""
+    text = norm(rule)
+    names = list(feed.get("file_name_patterns") or []) + [feed.get("feed_name") or ""]
+    return any(n and norm(n) in text for n in names)
+
+
+def _drop_rule(feed: dict, rule: str) -> None:
+    key = norm(rule)
+    feed["validation_rules"] = [r for r in feed.get("validation_rules") or [] if norm(r) != key]
+    if feed.get("recycle_rule") and norm(feed["recycle_rule"]) == key:
+        feed["recycle_rule"] = None
+
+
+def attribution_questions(spec: dict, columns_by_feed: dict | None = None) -> tuple[list[dict], list[str]]:
     """The same rule on several sources: the FRD's 'the below files' prose.
-    The agent will not pick an owner — the reviewer does."""
+    Returns (questions, notes); mutates the spec where the documents settle it.
+
+    A rule that names every source it sits on is settled by the FRD. A rule
+    that names no column can only land in each source's description — it
+    stays on all of them. A rule naming a column that exactly one source has
+    belongs to that source, by the dictionary. Only a rule naming a column
+    that several sources SHARE, with no file named, is a real question — and
+    that one the agent will not answer."""
     feeds = spec.get("feeds", [])
+    columns_by_feed = columns_by_feed or {}
     if len(feeds) < 2:
-        return []
+        return [], []
     seen: dict = {}
     for i, f in enumerate(feeds):
         for rule in (f.get("validation_rules") or []) + ([f["recycle_rule"]] if f.get("recycle_rule") else []):
             e = seen.setdefault(norm(rule), {"rule": rule, "names": [], "idx": []})
             e["names"].append(f.get("feed_name") or f"source {i + 1}")
             e["idx"].append(i)
-    out = []
+    questions, notes = [], []
     for e in seen.values():
-        if len(e["idx"]) > 1:
-            out.append(_question(
-                "attribution",
-                f"This rule was attached to {len(e['names'])} sources ({', '.join(e['names'])}). "
-                f"Which does it apply to? — {e['rule'][:200]!r}",
-                {"rule": e["rule"], "feed_indices": e["idx"], "names": e["names"]},
-                options=tuple(e["names"]) + (ALL_SOURCES,)))
-    return out
+        if len(e["idx"]) < 2:
+            continue
+        rule, idx, short = e["rule"], e["idx"], e["rule"][:80]
+        if all(_rule_names_source(rule, feeds[i]) for i in idx):
+            notes.append(f"rule kept on all {len(idx)} sources — the FRD names each file: {short!r}")
+            continue
+        with_col = [i for i in idx if _column_mentions(rule, columns_by_feed.get(i) or [])]
+        if not with_col:
+            notes.append(f"rule names no column; kept on all {len(idx)} sources as source-level text: {short!r}")
+            continue
+        if len(with_col) == 1:
+            owner = with_col[0]
+            for i in idx:
+                if i != owner:
+                    _drop_rule(feeds[i], rule)
+            notes.append(f"rule attributed to {feeds[owner].get('feed_name')!r} — the only source whose "
+                         f"dictionary has the column it names: {short!r}")
+            continue
+        names = [feeds[i].get("feed_name") or f"source {i + 1}" for i in with_col]
+        questions.append(_question(
+            "attribution",
+            f"This rule names a column that {len(names)} sources share ({', '.join(names)}) and the FRD "
+            f"does not say which file it applies to. Which does it? — {rule[:200]!r}",
+            {"rule": rule, "feed_indices": with_col, "names": names},
+            options=tuple(names) + (ALL_SOURCES,)))
+    return questions, notes
 
 
 # --------------------------------------------------------------------------- #
@@ -344,7 +402,7 @@ def assess(spec: dict, content: str, vdd: dict | None, vdd_name: str | None) -> 
     notes, questions = enrich(spec, content)
     grounding, gq = grounding_audit(spec, content)
     questions += gq
-    questions += attribution_questions(spec)
+    notes += grounding.get("off_workbook", [])
 
     blockers = []
     if not spec.get("feeds"):
@@ -359,6 +417,11 @@ def assess(spec: dict, content: str, vdd: dict | None, vdd_name: str | None) -> 
 
     pairing, pq = pair_files(spec, vdd)
     questions += pq
+    columns_by_feed = {i: [f["name"] for f in (vdd or {}).get("fields", {}).get(p.get("field_sheet") or "", [])]
+                       for i, p in pairing.items()}
+    aq, an = attribution_questions(spec, columns_by_feed)
+    questions += aq
+    notes += an
     sources, tq = derive_targets(spec)
     questions += tq
     for s in sources:

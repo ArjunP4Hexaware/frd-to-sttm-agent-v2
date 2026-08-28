@@ -25,23 +25,56 @@ def test_invented_table_becomes_a_question(tmp_path):
     assert q["source"] == "Claims Intake"
 
 
-def test_shared_rule_is_an_attribution_question():
-    spec = spec_for()
+def _two_sources(rule):
+    spec = spec_for(validation_rules=[rule])
     spec["feeds"].append({**spec["feeds"][0], "feed_name": "Second", "file_name_patterns": ["b.csv"]})
-    qs = c.attribution_questions(spec)
-    assert len(qs) == 1 and qs[0]["options"] == ["Claims Intake", "Second", c.ALL_SOURCES]
+    return spec
+
+
+def test_shared_rule_on_a_shared_column_is_an_attribution_question():
+    spec = _two_sources("If CLAIM_ID is NULL, reject the record.")
+    qs, notes = c.attribution_questions(spec, {0: ["CLAIM_ID"], 1: ["CLAIM_ID", "OTHER"]})
+    assert len(qs) == 1 and qs[0]["options"] == ["Claims Intake", "Second", c.ALL_SOURCES] and not notes
+
+
+def test_shared_rule_that_names_every_file_is_settled_by_the_frd():
+    spec = _two_sources("If CLAIM_ID is NULL, reject — from the below files: claims_YYYYMMDD.csv; b.csv")
+    qs, notes = c.attribution_questions(spec, {0: ["CLAIM_ID"], 1: ["CLAIM_ID"]})
+    assert qs == [] and len(notes) == 1 and "names each file" in notes[0]
+    assert len(spec["feeds"][0]["validation_rules"]) == 1 and len(spec["feeds"][1]["validation_rules"]) == 1
+
+
+def test_generic_shared_rule_stays_on_all_sources_without_a_question():
+    spec = _two_sources("All the required fields should be populated from the inbound file.")
+    qs, notes = c.attribution_questions(spec, {0: ["CLAIM_ID"], 1: ["MEMBER_ID"]})
+    assert qs == [] and "names no column" in notes[0]
+    assert len(spec["feeds"][0]["validation_rules"]) == 1 and len(spec["feeds"][1]["validation_rules"]) == 1
+
+
+def test_rule_naming_a_column_only_one_source_has_is_attributed_by_code():
+    spec = _two_sources("If MEMBER_ID is NULL, reject the record.")
+    qs, notes = c.attribution_questions(spec, {0: ["CLAIM_ID"], 1: ["MEMBER_ID"]})
+    assert qs == [] and "attributed to 'Second'" in notes[0]
+    assert spec["feeds"][0]["validation_rules"] == [] and len(spec["feeds"][1]["validation_rules"]) == 1
+
+
+def test_grounding_miss_off_the_workbook_is_a_note_not_a_question(tmp_path):
+    spec = spec_for(requirement_ids=["SRQ999999"])           # invented, but never rendered
+    summary, qs = c.grounding_audit(spec, _content(tmp_path))
+    assert summary["strict_failed"] == ["feeds[0].requirement_ids: 'SRQ999999'"]
+    assert qs == [] and len(summary["off_workbook"]) == 1
+
+
+def test_project_id_disagreement_is_a_note_and_the_frd_wins(tmp_path):
+    spec = spec_for(project_id="7654321")
+    notes, qs = c.enrich(spec, _content(tmp_path))
+    assert qs == [] and spec["project"]["project_id"] == "1234567" and "FRD's line is used" in notes[0]
 
 
 def test_enrich_fills_project_id_from_frd(tmp_path):
     spec = spec_for(project_id=None)
     notes, qs = c.enrich(spec, _content(tmp_path))
     assert spec["project"]["project_id"] == "1234567" and notes and not qs
-
-
-def test_enrich_disagreement_is_a_question(tmp_path):
-    spec = spec_for(project_id="9999999")
-    _, qs = c.enrich(spec, _content(tmp_path))
-    assert qs[0]["kind"] == "project_id" and qs[0]["options"] == ["9999999", "1234567"]
 
 
 def test_pair_files_single_is_automatic(tmp_path):
@@ -111,9 +144,9 @@ def test_answers_change_status_and_apply(tmp_path):
 
 
 def test_apply_attribution_keeps_rule_on_chosen_source_only():
-    spec = spec_for()
-    spec["feeds"].append({**spec["feeds"][0], "feed_name": "Second"})
-    a = {"blockers": [], "questions": c.attribution_questions(spec), "sources": []}
+    spec = _two_sources("If CLAIM_ID is NULL, reject the record.")
+    qs, _ = c.attribution_questions(spec, {0: ["CLAIM_ID"], 1: ["CLAIM_ID"]})
+    a = {"blockers": [], "questions": qs, "sources": []}
     c.record_answer(a, a["questions"][0]["id"], "Second")
     c.apply_answers(spec, a)
     assert spec["feeds"][0]["validation_rules"] == [] and len(spec["feeds"][1]["validation_rules"]) == 1

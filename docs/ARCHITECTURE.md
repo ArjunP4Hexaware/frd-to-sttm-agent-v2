@@ -25,8 +25,9 @@ The FRD template and VDD template that BSAs and vendors fill in are in `template
 
 1. **extract** — `frd_parsing` turns the `.docx` into markdown; one Claude call (`extract.py`, schema-in-prompt, validated back into `FrdIngestionSpec`) returns the feed-level facts. The VDD is parsed by `dictionary.py`.
 2. **assess** (`completeness.py`) —
-   * grounding: every identifier the model returned (file patterns, tables, schemas, ids) must appear verbatim in the FRD, or it becomes an `unverified` question (keep / remove / correct); prose is token-overlap checked → `weak_match`;
-   * a rule attached to several sources → `attribution` question;
+   * grounding: every identifier the model returned (file patterns, tables, schemas, ids) must appear verbatim in the FRD, or it becomes an `unverified` question (keep / remove / correct); prose is token-overlap checked → `weak_match`. A miss on a field the workbook never carries (`requirement_ids`, `sttm_reference`, `history_backfill`, …) is a **note**, not a question;
+   * a rule attached to several sources → `attribution` question **only if** it names a column those sources share and the FRD does not say which file: a rule that names every file is settled by the FRD, one that names no column stays on all sources, one whose column exactly one source has is attributed by the dictionary (each is a note);
+   * the rule: **a question is asked only when different answers would write a different workbook and the documents do not settle it** (2026-08-28);
    * each source is paired to a VDD file by name tokens; an undecidable one → `file_pairing` question;
    * targets per layer: the FRD wins, the standards fill (`schema_for`, `catalog_for`), the rest → `target_gap` question;
    * blockers: no dictionary, an empty dictionary, no sources, nothing pairable.
