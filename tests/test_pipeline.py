@@ -110,3 +110,13 @@ def test_trailing_comma_is_tolerated_and_malformed_json_retried_once():
     with pytest.raises(RuntimeError, match="does not match"):
         ex.extract(c, "d", "x", model="m")              # wrong SHAPE is not retried
     assert c.calls == 2
+
+
+def test_own_sttm_is_never_used_even_for_layout(data_root):
+    from conftest import make_reference_sheet_per_table
+    (data_root / "reference_sttms" / "STTM_Other_Feed.xlsx").unlink()
+    make_reference_sheet_per_table(data_root / "reference_sttms" / "STTM_Claims_Intake.xlsx")   # the feed's OWN
+    assert pipeline.choose_layout(_paths(data_root), "FRD_Claims_Intake", 3) is None
+    make_reference_sheet_per_table(data_root / "reference_sttms" / "STTM_Other_Feed.xlsx")
+    lay = pipeline.choose_layout(_paths(data_root), "FRD_Claims_Intake", 3)
+    assert lay["path"].endswith("STTM_Other_Feed.xlsx")

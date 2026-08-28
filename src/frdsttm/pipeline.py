@@ -118,22 +118,25 @@ def _own_reference(paths: Paths, doc_id: str) -> Path | None:
 
 def choose_layout(paths: Paths, doc_id: str, n_sources: int) -> dict | None:
     """An approved workbook whose SHAPE fits (one sheet per source file when
-    there are several sources, one wide sheet otherwise), preferring another
-    feed's workbook; the feed's own approved STTM only as the last structural
-    resort. Content is never read from it."""
+    there are several sources, one wide sheet otherwise) — from ANOTHER feed.
+
+    The feed's own approved STTM is never opened, for any purpose, not even
+    its layout: in production the agent has no access to it, and reading it
+    here would make every result self-referential. No fitting workbook from
+    another feed → the built-in layout."""
     want = "sheet_per_table" if n_sources > 1 else "single_sheet"
     own = _own_reference(paths, doc_id)
-    candidates = [p for p in sorted(paths.reference.glob("*.xlsx")) if not p.name.startswith("~$")] \
-        if paths.reference.is_dir() else []
-    others = [p for p in candidates if own is None or p.name != own.name]
-    for group in (others, [own] if own else []):
-        for p in group:
-            try:
-                lay = layout_of(str(p))
-            except Exception:  # noqa: BLE001 — an unreadable workbook is not a layout
-                continue
-            if lay.get("dialect") == want and (lay.get("sheets") or lay.get("sheet")):
-                return lay
+    own_key = corpus.name_key(doc_id)
+    candidates = [p for p in sorted(paths.reference.glob("*.xlsx"))
+                  if not p.name.startswith("~$") and corpus.name_key(p.name) != own_key
+                  and (own is None or p.name != own.name)] if paths.reference.is_dir() else []
+    for p in candidates:
+        try:
+            lay = layout_of(str(p))
+        except Exception:  # noqa: BLE001 — an unreadable workbook is not a layout
+            continue
+        if lay.get("dialect") == want and (lay.get("sheets") or lay.get("sheet")):
+            return lay
     return None
 
 

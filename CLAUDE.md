@@ -15,8 +15,10 @@ Read `docs/ARCHITECTURE.md` first; `README.md` has the commands.
 
 - **Two inputs per feed, paired by name**: `FRD_<x>` ↔ `VDD_<x>`. No similarity
   pairing — a wrongly paired dictionary puts another vendor's columns on a source.
-- **A run never reads an approved STTM for content.** `reference_sttms` supplies
-  layout only, and never the feed's own workbook first.
+- **A run never opens the feed's OWN approved STTM — for anything, layout
+  included** (Arjun, 2026-08-28, after it was done "structure only": no). Other
+  feeds' workbooks may supply layout; nothing supplies content. No fitting
+  other workbook → the built-in layout.
 - **Nothing is invented.** A value is from the FRD, the VDD, or the standards,
   or it is a question (`completeness.py`). A missing dictionary is a blocker.
 - **Four volumes, one table**: `frds`, `vdds`, `reference_sttms`, `output_sttms`;
