@@ -1,5 +1,9 @@
-# Databricks Apps manifest for the review app, at the repo root because the
-# App is deployed from the repo root (see app.yaml). The single source of
-# truth is review_app_react/requirements.txt -- edit THAT file (it is kept in
-# parity with pyproject.toml); this one only includes it.
--r review_app_react/requirements.txt
+# Databricks Apps installs this file. Keep in step with pyproject.toml.
+fastapi
+uvicorn[standard]
+pydantic>=2
+databricks-sdk
+anthropic>=0.60
+python-docx
+pypdf
+openpyxl

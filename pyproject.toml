@@ -1,45 +1,20 @@
 [project]
 name = "frdsttm"
-version = "0.1.0"
-description = "FRD-to-STTM agent: generates source-to-target mapping workbooks from Functional Requirements Documents on Databricks"
+version = "1.0.0"
+description = "FRD + vendor data dictionary -> STTM workbook, on Databricks"
 requires-python = ">=3.11"
 dependencies = [
-    # Notebook-parity core — what 02_extract %pip-installs inside Databricks.
     "anthropic>=0.60",
     "pydantic>=2",
+    "openpyxl",
+    "python-docx",
+    "pypdf",
+    "databricks-sdk",
 ]
 
 [project.optional-dependencies]
-# Everything else the pipeline notebooks need to run as plain local scripts
-# (docx/pdf parsing, workbook rendering, the no-Spark local Delta tables).
-# The SharePoint stages (00/05) add nothing here -- frdsttm.sharepoint is
-# standard library only.
-local = [
-    "python-docx",
-    "pypdf",
-    "openpyxl",
-    "deltalake",
-    # deltalake 1.x no longer depends on pyarrow, but frdsttm.local_tables
-    # imports it directly for the local Delta writer -- found 2026-08-22 when
-    # the recreated py3.14 venv broke local mode. Keep it explicit.
-    "pyarrow",
-    "databricks-sdk",
-]
-# The review app's FastAPI backend (review_app_react/backend). The deployed
-# Databricks App does NOT read this — Apps installs
-# review_app_react/requirements.txt, kept in sync by hand.
-ui = [
-    "fastapi",
-    # FastAPI needs this at import time for the UploadFile/Form routes; it is
-    # NOT a transitive dep of fastapi, and its absence only surfaces when the
-    # app module is imported.
-    "python-multipart",
-    "uvicorn[standard]",
-    "databricks-sdk",
-]
-dev = [
-    "pytest",
-]
+app = ["fastapi", "uvicorn[standard]"]
+dev = ["pytest", "httpx"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -50,4 +25,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "app/backend"]

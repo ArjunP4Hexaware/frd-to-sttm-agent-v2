@@ -1,58 +1,55 @@
 """
-frdsttm.frd_parsing — the FRD normalizer (docx/pdf/md/txt → markdown).
+frdsttm.frd_parsing — the FRD parser (.docx / .pdf / .md / .txt → markdown).
 
-Factored verbatim out of notebooks/01_frd_ingest.py (2026-08-22) so the
-review app backend (corpus bootstrap) and the corpus/similarity modules can
-parse FRDs with EXACTLY the text the pipeline's ingest stage produces —
-one parser, no drift. 01_frd_ingest consumes this module through the
-notebooks/_frd_parsing.py shim (%run in Databricks, plain import locally),
-the same pattern as _models / _live_extraction.
+Fidelity, not summarisation: headings, tables (pipe tables), bullets and
+paragraphs in document order. Content controls (<w:sdt>) are unwrapped,
+nested tables inside cells are flattened inline, TOC entries are dropped,
+requirement ids (SRQ226433 …) become bold markers so the model can anchor
+on them.
 
-Behavioral contract (see the notebook header and SKILL.md "Stage 1"):
-fidelity not summarization; SDT unwrapping; requirement-id bold markers;
-TOC dropped but Header-styled body kept; sanity gates live in the caller.
+The labels below describe the client's FRD template (templates/FRD_TEMPLATE
+.docx). If the template changes, change them here.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
-import sys
-from datetime import datetime, timezone
 from pathlib import Path
-
-# Shared FRD label contract (contracts/frd_label_contract.json), loaded via
-# frdsttm.label_contract — the versioned artifact this parser and the
-# upstream brd-to-frd-agent renderer both key off.
-from frdsttm.label_contract import PROJECT_ID_DIGITS_RE, REQ_ID_FAMILIES
 
 SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt", ".docx", ".pdf"}
 
-# Requirement-id families seen across the BRD (BR/REQ/FR) and the
-# IS-Methodology FRD templates (SRQ/SIR/NFR/MDST), from the shared label
-# contract. Reshaped to bold markers.
+#: Requirement-id families the FRD template uses.
+REQ_ID_FAMILIES = ("BR", "REQ", "FR", "SRQ", "SIR", "NFR", "MDST")
+#: "Project ID: 1005034" — 6-8 digits.
+PROJECT_ID_LINE_RE = re.compile(r"project\s*id\s*:?\s*(\d{6,8})")
+PROJECT_ID_DIGITS_RE = re.compile(r"(\d{6,8})")
+#: Section headings the template carries, for reference.
+SECTION_LABELS = {
+    "in_scope": "In Scope",
+    "out_of_scope": "Out of Scope",
+    "assumptions_constraints_dependencies": "Assumptions, Constraints & Dependencies",
+    "data_ingestion_requirements": "Data Ingestion Requirements",
+    "data_quality": "Data Quality",
+    "technical_metadata": "Technical Metadata",
+    "administrative_metadata": "Administrative Metadata",
+}
+
 _REQUIREMENT_ID_RE = re.compile(
     r"^\s*((?:" + "|".join(REQ_ID_FAMILIES) + r")[-\s]?\d+)\b[\s:.—–-]*(.*)$", re.I
 )
-
-# Styles that are navigation chrome, not document content. Only TOC styles:
-# real page headers/footers live in separate document parts that the body
-# walk never sees, and the IS-Methodology template styles a *body* paragraph
-# ('Project ID: 1005034 ...') as 'Header' — skipping it drops the project id.
 _SKIP_STYLE_RE = re.compile(r"^(toc\b|toc header$)", re.I)
-
 _ORDINAL_WORDS = {
     "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6,
     "1st": 1, "2nd": 2, "3rd": 3, "4th": 4, "5th": 5, "6th": 6,
 }
 
 
-class UnsupportedFormatError(ValueError):
-    pass
+class FrdParseError(ValueError):
+    """The file is not a usable FRD (unsupported type, empty, no structure)."""
 
 
 def _read_text_forgiving(path: Path) -> str:
-    """Read text without exploding on real-world encodings (UTF-8 BOM,
-    cp1252, UTF-16). Never raises; normalizes newlines to '\\n'."""
     data = path.read_bytes()
     text = None
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
@@ -73,10 +70,6 @@ def _read_text_forgiving(path: Path) -> str:
 
 
 def _heading_level(style_name: str) -> int | None:
-    """Markdown '#' count for a paragraph style, else None.
-    'Title' -> 1; any '... heading N ...' -> N+1 (built-in 'Heading 2' and
-    template styles like 'Document Heading 2' alike); ordinal-word styles
-    ('3rd Level Heading') -> level+1. Title stays the sole level-1."""
     name = style_name.strip().lower()
     if name == "title":
         return 1
@@ -91,9 +84,6 @@ def _heading_level(style_name: str) -> int | None:
 
 
 def _outline_level(par) -> int | None:
-    """Fallback when the style name doesn't reveal a level: Word's
-    w:outlineLvl, checked on the paragraph then its style. lvl 0 -> '##'
-    (consistent with Heading 1 -> '##'; Title remains the sole '#')."""
     from docx.oxml.ns import qn
 
     sources = [par._p.pPr]
@@ -115,9 +105,6 @@ def _is_bullet_style(style_name: str) -> bool:
 
 
 def _iter_block_items(document):
-    """Yield ('paragraph', Paragraph)/('table', Table) in true document
-    order, recursing into content controls (<w:sdt>) whose sdtContent
-    hides paragraphs/tables from the flat body lists."""
     from docx.oxml.ns import qn
     from docx.table import Table
     from docx.text.paragraph import Paragraph
@@ -141,11 +128,6 @@ def _md_cell(text: str) -> str:
 
 
 def _cell_content(cell, depth: int = 0) -> str:
-    """Cell text plus any nested tables' content. python-docx's cell.text
-    covers only the cell's own paragraphs — a table nested *inside* the cell
-    (the IS-Methodology template does this, e.g. its Region/LOB code list)
-    is invisible to it and was silently dropped. Flatten nested tables
-    inline: cells joined with ' ', rows with '; '. Depth-capped."""
     parts = [cell.text]
     if depth < 2:
         for nt in cell.tables:
@@ -160,10 +142,6 @@ def _cell_content(cell, depth: int = 0) -> str:
 
 
 def _table_to_markdown(table) -> list[str]:
-    """Pipe-table conversion. A merged cell surfaces once per grid position
-    with the same underlying <w:tc>; emit its text only on first appearance.
-    Identity via `is` against a kept-alive list (id() is unsafe on lxml's
-    transient wrappers)."""
     rows = []
     seen_tcs: list = []
     for row in table.rows:
@@ -204,7 +182,6 @@ def docx_to_markdown(filepath: str) -> str:
 
     document = docx.Document(filepath)
     out: list[str] = []
-
     for kind, block in _iter_block_items(document):
         if kind == "table":
             table_md = _table_to_markdown(block)
@@ -213,15 +190,12 @@ def docx_to_markdown(filepath: str) -> str:
                 out.extend(table_md)
                 out.append("")
             continue
-
         text = block.text.strip()
         if not text:
             continue
-
         style = block.style.name if block.style else "Normal"
         if _SKIP_STYLE_RE.match(style.strip()):
             continue
-
         level = _heading_level(style)
         if level is None:
             level = _outline_level(block)
@@ -235,13 +209,10 @@ def docx_to_markdown(filepath: str) -> str:
             marker = _requirement_marker(text)
             out.append(marker if marker else text)
             out.append("")
-
     return _collapse_blank_lines("\n".join(out)).strip() + "\n"
 
 
 def pdf_to_markdown(filepath: str) -> str:
-    """Best-effort: prose survives, tables flatten (pypdf has no layout
-    model). Fine for prose FRDs; use docx sources whenever available."""
     from pypdf import PdfReader
 
     reader = PdfReader(filepath)
@@ -267,9 +238,8 @@ def normalize_to_markdown(filepath: str) -> str:
         return docx_to_markdown(filepath)
     if suffix == ".pdf":
         return pdf_to_markdown(filepath)
-    raise UnsupportedFormatError(
-        f"Unsupported file type '{suffix}'. Supported: "
-        f"{', '.join(sorted(SUPPORTED_SUFFIXES))}"
+    raise FrdParseError(
+        f"Unsupported file type '{suffix}'. Supported: {', '.join(sorted(SUPPORTED_SUFFIXES))}"
     )
 
 
@@ -277,12 +247,29 @@ def _collapse_blank_lines(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text)
 
 
-# 6-8 digit project id, per the shared label contract's digits pattern
-# (see the contract bootstrap in the parser cell above).
-_PROJECT_ID_RE = PROJECT_ID_DIGITS_RE
-
-
 def infer_project_id(filename: str) -> str | None:
-    """Project id from the filename when present (e.g. ..._1005034.docx)."""
-    m = _PROJECT_ID_RE.search(filename)
+    m = PROJECT_ID_DIGITS_RE.search(filename)
     return m.group(1) if m else None
+
+
+def parse_frd(path: str | Path) -> dict:
+    """One FRD file → {doc_id, source_file, content, content_sha256, project_id,
+    heading_count, table_count}. Raises FrdParseError when the result is not a
+    usable document (near-empty, or a .docx with no headings)."""
+    path = Path(path)
+    md = normalize_to_markdown(str(path))
+    heading_count = sum(1 for line in md.splitlines() if line.startswith("#"))
+    table_count = sum(1 for line in md.splitlines() if line.startswith("| ---"))
+    if len(md) < 500:
+        raise FrdParseError(f"{path.name}: suspiciously small ({len(md)} chars) — not a usable FRD")
+    if path.suffix.lower() == ".docx" and heading_count == 0:
+        raise FrdParseError(f"{path.name}: no headings recognised — heading styles not understood")
+    return {
+        "doc_id": path.stem,
+        "source_file": path.name,
+        "content": md,
+        "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "project_id": infer_project_id(path.name),
+        "heading_count": heading_count,
+        "table_count": table_count,
+    }

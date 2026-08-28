@@ -1,17 +1,16 @@
 """
 frdsttm.dictionary — the vendor data dictionary (VDD) parser.
 
-The THIRD input, decided 2026-08-25 and built 2026-08-27. A vendor data
-dictionary is one workbook per feed, named ``DICT_<name>.xlsx`` to match its
+The second of the two inputs. A vendor data
+dictionary is one workbook per feed, named ``VDD_<name>.xlsx`` to match its
 ``FRD_<name>.docx``, holding what the FRD structurally cannot: every source
 COLUMN. The FRD carries the feed-level frame (file pattern, format, target
 schema/table per layer, load strategy, landing folder, DQ rules) and names
 roughly two columns; one real STTM has ~410 column rows. That gap is the
-whole reason this module exists — see docs/THREE_INPUT_ARCHITECTURE.md and
-the decision block in CLAUDE.md.
+whole reason this module exists — see docs/ARCHITECTURE.md.
 
-Shape, fixed by templates/DICT_TEMPLATE (scripts/build_dict_template.py) and
-backward-compatible with the worked example in sample_documents/:
+Shape, fixed by templates/VDD_TEMPLATE.xlsx (tools/build_vdd_template.py) and
+backward-compatible with the worked examples in sample_documents/:
 
     FILES sheet            one ROW per physical file the vendor delivers.
                            Core columns: File Name Pattern · File Title ·
@@ -44,9 +43,8 @@ Doctrine this module is deliberately built to, all of it load-bearing:
 * **Structure raises, content gates.** A workbook with no FILES sheet, or a
   FILES sheet whose header row cannot be located, raises
   :class:`DictionaryError` — an unreadable dictionary must never masquerade
-  as an empty one (the rule ``corpus.parse_reference_dir`` already holds for
-  reference workbooks). Anything the vendor merely left blank is a problem,
-  not an exception.
+  as an empty one. Anything the vendor merely left blank is a problem, not an
+  exception.
 * **Headers are FOUND, not assumed.** The header row is located by matching
   the known core headers, so a vendor who adds a title or logo row above the
   table still parses. Matching is case- and space-insensitive and tolerates
@@ -73,15 +71,9 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-#: The library naming convention, and one live alias.
-#:
-#: ``VDD_<feed>.xlsx`` is the convention — it matches the volume it lands in
-#: (``vdd_raw``, beside ``frd_raw``) and the way the client says it out loud.
-#: ``DICT_`` is accepted because the template already issued to vendors and the
-#: worked example in this repo are named that way, and invalidating a document
-#: someone has already been asked to fill in is a worse outcome than carrying
-#: two spellings. `frdsttm.similarity.name_key` strips both, so a VDD_ and a
-#: DICT_ file key identically and cannot both pair to one FRD.
+#: The naming convention, and one live alias: ``VDD_<name>.xlsx`` is the
+#: convention; ``DICT_`` is accepted because the template already issued to
+#: vendors is named that way. `frdsttm.corpus.name_key` strips both.
 DICTIONARY_NAME_PREFIX = "VDD_"
 DICTIONARY_NAME_PREFIXES = ("VDD_", "DICT_")
 DICTIONARY_SUFFIXES = {".xlsx"}
@@ -202,7 +194,7 @@ def _find_header_row(rows, headers: dict, required: tuple) -> tuple[int, dict]:
         raise DictionaryError(
             f"no header row found in the first 12 rows — expected a row naming "
             f"{', '.join(required)}. Columns may be renamed but not removed; "
-            f"re-issue templates/DICT_TEMPLATE to the vendor."
+            f"re-issue templates/VDD_TEMPLATE.xlsx to the vendor."
         )
     return best[0], best[1]
 
@@ -327,7 +319,7 @@ def parse_dictionary_workbook(path: str | Path) -> dict:
             raise DictionaryError(
                 f"{path.name} has no FILES sheet (sheets: {', '.join(wb.sheetnames)}). "
                 f"Every vendor dictionary starts with one row per delivered file; "
-                f"re-issue templates/DICT_TEMPLATE to the vendor."
+                f"re-issue templates/VDD_TEMPLATE.xlsx to the vendor."
             )
 
         rows = _row_values(wb[files_sheet])
@@ -485,12 +477,9 @@ def _parse_field_sheet(ws, sheet_name: str, file_pattern: str, file_rec: dict,
 def parse_dictionary_dir(dictionary_dir: str | Path) -> dict:
     """{workbook name: parsed dictionary} for every ``.xlsx`` in a directory.
 
-    Unlike ``corpus.parse_reference_dir``, ONE unreadable dictionary does not
-    sink the rest: it is returned under ``_errors`` so the corpus still
-    builds and the reviewer sees exactly which vendor spec is unusable. A
-    reference workbook is a template that skews every decision made against
-    it; a dictionary belongs to one feed, so its failure is local to that
-    feed and gating it is the proportionate response.
+    ONE unreadable dictionary does not sink the rest: it is returned under
+    ``errors`` so the index still builds and the reviewer sees exactly which
+    vendor spec is unusable.
     """
     out, errors = {}, {}
     for path in sorted(Path(dictionary_dir).glob("*.xlsx")):
@@ -504,12 +493,12 @@ def parse_dictionary_dir(dictionary_dir: str | Path) -> dict:
 
 
 def source_layout(parsed: dict) -> dict:
-    """The shape stages 02–04 consume: {file pattern: [column, ...]}.
+    """{file pattern: [column, ...]} — the shape the pipeline consumes.
 
     A file whose field sheet was missing or empty maps to ``[]`` — present in
-    the layout, with no columns. That distinction matters: an absent key
-    means the dictionary never mentioned the file, an empty list means it
-    mentioned it and could not describe it. Both gate; they gate differently.
+    the layout, with no columns. An absent key means the dictionary never
+    mentioned the file; an empty list means it mentioned it and could not
+    describe it.
     """
     by_sheet = parsed.get("fields", {})
     return {f["file_name_pattern"]: list(by_sheet.get(f.get("field_sheet") or "", []))

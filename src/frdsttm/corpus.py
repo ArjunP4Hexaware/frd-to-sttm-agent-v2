@@ -1,329 +1,174 @@
 """
-frdsttm.corpus — the FRD/STTM corpus index.
+frdsttm.corpus — what is in the four volumes, and what may be generated.
 
-One JSON artifact, ``corpus_index.json``, living IN THE REFERENCE VOLUME
-(`sttm_reference` in Unity Catalog; `local_dev_fixtures/sttm_reference/`
-locally) next to the workbooks it indexes — so the notebooks read it from
-the same /Volumes path they already read references from, and it travels
-with them. Built by the SharePoint sync (frdsttm.sync — the scheduled
-`frd_sttm_sharepoint_sync` job and the review app's "Sync now"), or by any
-caller with parsed FRDs + a reference dir; consumed by:
+`build_index` reads the FRD, VDD and reference-STTM directories and pairs
+them BY NAME: ``FRD_<x>.docx`` ↔ ``VDD_<x>.xlsx`` ↔ ``STTM_<x>.xlsx``. No
+similarity, no guessing — a wrongly paired dictionary would put another
+vendor's columns on a source. The result is ``corpus_index.json`` in the
+reference volume and, in Databricks, the ``frd_pairing`` table (one row per
+FRD).
 
-- stage 02 (retrieved exemplars for the extraction prompt),
-- stage 04 (template decision + exclude-own-reference eval),
-- the review app (unmapped-FRD list, pairing display).
-
-Everything here is deterministic code over parsed artifacts — no model
-calls, no network. Absence of the index is a legitimate state everywhere:
-each consumer falls back to its pre-corpus behavior (02: no exemplar
-block; 04: legacy filename-token reference pick; app: corpus panel shows
-"not synced yet"). A corrupt index, by contrast, raises — a half-readable
-index must never silently degrade a run (see docs/TEMPLATE_ARCHITECTURE.md).
+Eligibility, one rule: an FRD may be generated when it has a paired VDD.
+An approved STTM does not block regeneration (the run never reads it), it
+only marks the FRD as already mapped.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 
-from frdsttm import term_catalog as _tc
 from frdsttm.dictionary import parse_dictionary_dir
-from frdsttm.reference_workbooks import parse_reference_workbook
-from frdsttm.similarity import (
-    deserialize_features,
-    frd_features,
-    pair_corpus,
-    pair_dictionaries,
-    serialize_features,
-    workbook_features,
-)
+from frdsttm.reference_layout import parse_reference_workbook
 
-CORPUS_INDEX_NAME = "corpus_index.json"
-# 2 (2026-08-22): entries carry content_sha256; pairs carry matched_by.
-# 5 (2026-08-27, later still): `term_catalog` — the source→target column
-#   vocabulary harvested from the approved STTMs at SYNC time, so a RUN reads
-#   a vocabulary instead of opening a workbook. See frdsttm.term_catalog.
-# 4 (2026-08-27, later): per-FRD `eligibility` — the ONE place that decides
-#   which FRDs may be generated. See `eligibility_for`.
-# 3 (2026-08-27): vendor data dictionaries — `dictionaries`,
-#   `dictionary_pairs`, `unpaired_dictionaries`, `dictionary_errors`. The
-#   bump is deliberate rather than additive-and-silent: a stage reading a v2
-#   index would see no dictionaries and render a source side from the
-#   template alone, which is exactly the implicit borrow the third input
-#   exists to remove. Better to raise and be rebuilt.
-CORPUS_INDEX_VERSION = 5
+INDEX_NAME = "corpus_index.json"
+INDEX_VERSION = 6
+FRD_SUFFIXES = (".docx", ".pdf", ".md", ".markdown", ".txt")
+_ROLE_TOKENS = {"frd", "sttm", "vdd", "dict"}
 
 
 class CorpusIndexError(RuntimeError):
-    """The index file exists but cannot be used. Distinct from 'absent',
-    which is an ordinary fallback state, never an error."""
+    pass
 
 
-def parse_reference_dir(reference_dir: str | Path) -> dict:
-    """{workbook_name: parsed dictionary} for every .xlsx in the directory.
-    A workbook that fails to parse raises — a template library with a
-    silently-missing member would skew every decision made against it."""
-    out = {}
-    for path in sorted(Path(reference_dir).glob("*.xlsx")):
-        out[path.name] = parse_reference_workbook(str(path))
+def name_key(name: str) -> str:
+    """``FRD_Medicare_Expansion.docx`` and ``VDD_Medicare Expansion.xlsx`` →
+    the same key. Strips extensions, role prefixes/suffixes, punctuation."""
+    stem = str(name)
+    while True:
+        head, dot, tail = stem.rpartition(".")
+        if not dot or not tail or not tail.isalnum() or len(tail) > 5:
+            break
+        stem = head
+    tokens = [t for t in re.split(r"[^a-z0-9]+", stem.lower()) if t]
+    while tokens and tokens[-1] in _ROLE_TOKENS:
+        tokens.pop()
+    while tokens and tokens[0] in _ROLE_TOKENS:
+        tokens.pop(0)
+    return "".join(tokens)
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _by_key(names) -> dict[str, list[str]]:
+    out: dict = {}
+    for n in names:
+        k = name_key(n)
+        if k:
+            out.setdefault(k, []).append(n)
     return out
 
 
-def build_corpus_index(frd_entries, reference_dir: str | Path,
-                       thresholds: dict, generated_at: str,
-                       dictionary_dir: str | Path | None = None) -> dict:
-    """Build the full index.
+def build_index(frds_dir: Path, vdds_dir: Path, reference_dir: Path) -> dict:
+    frds_dir, vdds_dir, reference_dir = Path(frds_dir), Path(vdds_dir), Path(reference_dir)
+    frds = sorted(p for p in frds_dir.iterdir() if p.is_file() and p.suffix.lower() in FRD_SUFFIXES
+                  and not p.name.startswith("~$")) if frds_dir.is_dir() else []
+    sttms = sorted(p for p in reference_dir.glob("*.xlsx") if not p.name.startswith("~$")) \
+        if reference_dir.is_dir() else []
+    parsed = parse_dictionary_dir(vdds_dir) if vdds_dir.is_dir() else {"dictionaries": {}, "errors": {}}
 
-    ``frd_entries``: iterable of {"doc_id", "source_file", "content"} — the
-    stage-01 shape (`frd_documents` rows locally or in UC), so the features
-    are computed over exactly the text extraction sees. An optional
-    ``content_sha256`` (fingerprint of the SOURCE FILE bytes, as the sync
-    records it) is carried through; absent, the fingerprint is taken over
-    the parsed text so every entry still has one.
-    ``generated_at``: caller-supplied ISO timestamp (kept out of this module
-    so index construction stays a pure function of its inputs).
-    ``dictionary_dir``: the vendor-dictionary volume, or None when the third
-    input is not in play — an absent directory is an ordinary state (no
-    vendor has returned a DICT_ workbook yet), never an error.
-    """
-    reference_dir = Path(reference_dir)
-    dictionaries = parse_reference_dir(reference_dir)
+    vdd_by_key = _by_key(parsed["dictionaries"])
+    sttm_by_key = _by_key(p.name for p in sttms)
+    frd_by_key = _by_key(p.name for p in frds)
 
-    frd_feats, frds = {}, {}
-    for e in frd_entries:
-        doc_id = e["doc_id"]
-        feat = frd_features(doc_id, e["content"])
-        frd_feats[doc_id] = feat
-        frds[doc_id] = {
-            "source_file": e.get("source_file", ""),
-            "n_chars": len(e["content"]),
-            "content_sha256": e.get("content_sha256")
-            or hashlib.sha256(e["content"].encode("utf-8")).hexdigest(),
-            "features": serialize_features(feat),
+    vdds = {}
+    for name, d in parsed["dictionaries"].items():
+        vdds[name] = {"n_files": d["n_files"], "n_fields": d["n_fields"],
+                      "files": [f["file_name_pattern"] for f in d["files"]],
+                      "problems": [p["kind"] for p in d["problems"]],
+                      "sha256": _sha(vdds_dir / name)}
+    references = {}
+    for p in sttms:
+        try:
+            parsed_wb = parse_reference_workbook(str(p))
+            references[p.name] = {"dialect": parsed_wb["dialect"],
+                                  "n_sources": len(parsed_wb["feeds"]),
+                                  "n_columns": sum(len(f["fields"]) for f in parsed_wb["feeds"].values()),
+                                  "sha256": _sha(p)}
+        except Exception as exc:  # noqa: BLE001 — one bad workbook must not sink the index
+            references[p.name] = {"dialect": None, "n_sources": 0, "n_columns": 0,
+                                  "sha256": _sha(p), "error": f"{type(exc).__name__}: {exc}"}
+
+    documents, used_vdd, used_sttm = {}, set(), set()
+    for p in frds:
+        key = name_key(p.name)
+        vdd_names = vdd_by_key.get(key, [])
+        sttm_names = sttm_by_key.get(key, [])
+        ambiguous = len(frd_by_key.get(key, [])) > 1 or len(vdd_names) > 1 or len(sttm_names) > 1
+        vdd = vdd_names[0] if len(vdd_names) == 1 and not ambiguous else None
+        sttm = sttm_names[0] if len(sttm_names) == 1 and not ambiguous else None
+        used_vdd.update(vdd_names if vdd else [])
+        used_sttm.update(sttm_names if sttm else [])
+        documents[p.stem] = {
+            "frd": p.name, "sha256": _sha(p), "vdd": vdd, "sttm": sttm,
+            "ambiguous_name": ambiguous,
+            **eligibility(vdd, sttm, ambiguous, vdds.get(vdd) if vdd else None),
         }
-
-    wb_feats, references = {}, {}
-    for name, dictionary in dictionaries.items():
-        feat = workbook_features(name, dictionary)
-        wb_feats[name] = feat
-        references[name] = {
-            "dialect": dictionary["dialect"],
-            "n_feeds": len(dictionary.get("feeds", {})),
-            "n_columns": sum(len(f.get("fields", []))
-                             for f in dictionary.get("feeds", {}).values()),
-            "content_sha256": hashlib.sha256(
-                (reference_dir / name).read_bytes()).hexdigest(),
-            "features": serialize_features(feat),
-        }
-
-    pairing = pair_corpus(frd_feats, wb_feats, thresholds)
-
-    # -- the TERM CATALOG. Harvested here, at sync time, from the approved
-    # workbooks the corpus already parsed — so a RUN never opens an STTM and
-    # the "two inputs" rule (FRD + VDD) holds literally. Measured worth:
-    # target-column accuracy went 0% (generate) -> 94% (match against this).
-    catalog = _tc.build_catalog(dictionaries)
-
-    # -- the third input. Summary only: the index stays small enough to load
-    # on every request, so it records WHICH dictionary describes a feed and
-    # how complete it is, never the 399 column rows themselves. A consumer
-    # that needs the columns parses the workbook it names.
-    vdds, vdd_errors = {}, {}
-    if dictionary_dir is not None and Path(dictionary_dir).is_dir():
-        parsed = parse_dictionary_dir(dictionary_dir)
-        vdd_errors = parsed["errors"]
-        for name, d in parsed["dictionaries"].items():
-            vdds[name] = {
-                "n_files": d["n_files"],
-                "n_fields": d["n_fields"],
-                "files": [f["file_name_pattern"] for f in d["files"]],
-                "n_problems": len(d["problems"]),
-                "problem_kinds": sorted({p["kind"] for p in d["problems"]}),
-                "content_sha256": hashlib.sha256(
-                    (Path(dictionary_dir) / name).read_bytes()).hexdigest(),
-            }
-    vdd_pairing = pair_dictionaries(frds.keys(), vdds.keys())
-
-    # -- the THREE-WAY mapping. An FRD's row in the corpus is now a triple:
-    # the FRD, the vendor dictionary that describes its source files, and the
-    # approved STTM if one exists. `eligibility` is the verdict derived from
-    # it, computed HERE so the notebooks, the API and the picker cannot drift
-    # into three different answers to "may this be generated?".
-    eligibility = {
-        doc_id: eligibility_for(doc_id, pairing["pairs"], vdd_pairing["pairs"])
-        for doc_id in frds
-    }
-
     return {
-        "version": CORPUS_INDEX_VERSION,
-        "generated_at": generated_at,
-        "thresholds": dict(thresholds),
-        "frds": frds,
+        "version": INDEX_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "documents": documents,
+        "vdds": vdds,
         "references": references,
-        "pairs": pairing["pairs"],
-        "unmapped": pairing["unmapped"],
-        "unpaired_references": pairing["unpaired_references"],
-        "dictionaries": vdds,
-        "dictionary_pairs": vdd_pairing["pairs"],
-        "unpaired_dictionaries": vdd_pairing["unpaired_dictionaries"],
-        "ambiguous_dictionaries": vdd_pairing["ambiguous"],
-        "dictionary_errors": vdd_errors,
-        "eligibility": eligibility,
-        "generatable": sorted(d for d, e in eligibility.items() if e["generatable"]),
-        "term_catalog": _tc.serialize(catalog),
-        "term_catalog_stats": _tc.catalog_stats(catalog),
+        "unpaired_vdds": sorted(n for n in vdds if n not in used_vdd),
+        "unpaired_references": sorted(p.name for p in sttms if p.name not in used_sttm),
+        "vdd_errors": parsed["errors"],
     }
 
 
-def save_corpus_index(index: dict, reference_dir: str | Path) -> Path:
-    path = Path(reference_dir) / CORPUS_INDEX_NAME
-    path.write_text(json.dumps(index, indent=2, ensure_ascii=False, sort_keys=True),
-                    encoding="utf-8")
+def eligibility(vdd, sttm, ambiguous, vdd_entry) -> dict:
+    if ambiguous:
+        return {"status": "ambiguous", "generatable": False,
+                "reason": "More than one file shares this name — rename so FRD_/VDD_/STTM_ pair one-to-one."}
+    if vdd is None:
+        return {"status": "no_dictionary", "generatable": False,
+                "reason": "No vendor data dictionary is paired with this FRD. Add VDD_<same name>.xlsx."}
+    if vdd_entry and vdd_entry.get("n_fields", 0) == 0:
+        return {"status": "no_dictionary", "generatable": False,
+                "reason": f"{vdd} names no columns — the vendor returned an empty dictionary."}
+    if sttm:
+        return {"status": "mapped", "generatable": True,
+                "reason": "Already has an approved STTM. A new draft reads only the FRD and the VDD, "
+                          "never the approved workbook."}
+    return {"status": "ready", "generatable": True, "reason": "FRD and vendor data dictionary present."}
+
+
+def pairing_rows(index: dict) -> list[dict]:
+    """One row per FRD — the `frd_pairing` table."""
+    rows = []
+    for doc_id, d in sorted(index["documents"].items()):
+        v = index["vdds"].get(d["vdd"] or "", {})
+        r = index["references"].get(d["sttm"] or "", {})
+        rows.append({
+            "doc_id": doc_id, "frd_file": d["frd"], "frd_sha256": d["sha256"],
+            "vdd_file": d["vdd"], "vdd_files": int(v.get("n_files") or 0),
+            "vdd_columns": int(v.get("n_fields") or 0),
+            "sttm_file": d["sttm"], "sttm_columns": int(r.get("n_columns") or 0),
+            "status": d["status"], "generatable": bool(d["generatable"]), "reason": d["reason"],
+            "indexed_at": index["generated_at"],
+        })
+    return rows
+
+
+def save_index(index: dict, reference_dir: Path) -> Path:
+    path = Path(reference_dir) / INDEX_NAME
+    path.write_text(json.dumps(index, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
     return path
 
 
-def load_corpus_index(reference_dir: str | Path) -> dict | None:
-    """The index, or None when absent (the ordinary fallback state)."""
-    path = Path(reference_dir) / CORPUS_INDEX_NAME
+def load_index(reference_dir: Path) -> dict | None:
+    path = Path(reference_dir) / INDEX_NAME
     if not path.is_file():
         return None
     try:
         index = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise CorpusIndexError(
-            f"corpus index at {path} exists but is unreadable "
-            f"({exc.__class__.__name__}: {exc}) — rebuild it (run the "
-            f"SharePoint sync, or a reindex); refusing to run as if no corpus "
-            f"existed"
-        ) from exc
-    if index.get("version") != CORPUS_INDEX_VERSION:
-        raise CorpusIndexError(
-            f"corpus index at {path} has version {index.get('version')!r}, "
-            f"this code expects {CORPUS_INDEX_VERSION} — rebuild it (run the "
-            f"SharePoint sync, or a reindex)"
-        )
+        raise CorpusIndexError(f"{path} is unreadable ({exc}) — rebuild the index") from exc
+    if index.get("version") != INDEX_VERSION:
+        raise CorpusIndexError(f"{path} is version {index.get('version')!r}, expected {INDEX_VERSION} — rebuild the index")
     return index
-
-
-def frd_features_from_index(index: dict, doc_id: str) -> dict | None:
-    entry = index.get("frds", {}).get(doc_id)
-    return deserialize_features(entry["features"]) if entry else None
-
-
-def reference_features_from_index(index: dict) -> dict:
-    return {name: deserialize_features(e["features"])
-            for name, e in index.get("references", {}).items()}
-
-
-def own_reference_for(index: dict, doc_id: str) -> str | None:
-    """The workbook name this doc is paired with (its ground truth), or None."""
-    pair = index.get("pairs", {}).get(doc_id)
-    return pair["reference"] if pair else None
-
-
-#: The three verdicts an FRD can have. Exactly one is generatable.
-ELIGIBILITY_READY = "ready"                  # has a VDD, has no STTM
-ELIGIBILITY_MAPPED = "mapped"                # already has an approved STTM
-ELIGIBILITY_NO_DICTIONARY = "no_dictionary"  # no STTM, but no VDD either
-
-
-def eligibility_for(doc_id: str, sttm_pairs: dict, dictionary_pairs: dict) -> dict:
-    """May this FRD be generated, and if not, why not?
-
-    The rule (Arjun, 2026-08-27): a reviewer may only start a run on an FRD
-    that has a matching vendor dictionary AND does not already have an
-    approved STTM. Both halves have a reason:
-
-    * **no dictionary → not generatable.** Without one the source side of the
-      workbook has no grounded input, so the run would render a frame and gate
-      every column. That is the correct BEHAVIOUR when a run happens, but it
-      is not worth a billed model call — better to ask the vendor first.
-    * **already mapped → generatable AGAIN as of 2026-08-27**, and the reason
-      it was ever blocked is worth keeping written down. The block existed
-      because a run READ the feed's own approved STTM — as its layout
-      template and as its eval reference — so regenerating a mapped feed
-      scored itself against its own answers. That is gone: a run now ingests
-      the FRD and the VDD only, and the column vocabulary reaches it as a
-      harvested catalog with the feed's own workbook excluded
-      (`frdsttm.term_catalog`). Regenerating a mapped feed therefore produces
-      an INDEPENDENT draft, and comparing it to the approved workbook
-      afterwards is a real measurement rather than a tautology. The approved
-      workbook is still never touched and the app still publishes nothing.
-
-    Returns ``{"status", "generatable", "reason", "dictionary", "reference"}``.
-    ``reason`` is written for a person to read in the picker, not for a log.
-    """
-    reference = (sttm_pairs.get(doc_id) or {}).get("reference") \
-        if isinstance(sttm_pairs.get(doc_id), dict) else sttm_pairs.get(doc_id)
-    dictionary = dictionary_pairs.get(doc_id)
-    if reference and not dictionary:
-        # Mapped but with nothing to ground the source side. Generating would
-        # gate every source column, which is not worth a billed call when the
-        # approved workbook already answers the question.
-        return {
-            "status": ELIGIBILITY_MAPPED, "generatable": False,
-            "reason": "This FRD already has an approved STTM and no vendor data dictionary. "
-                      "There is nothing to ground a fresh draft's source columns, so the "
-                      "approved workbook is presented as-is.",
-            "dictionary": None, "reference": reference,
-        }
-    if reference:
-        return {
-            "status": ELIGIBILITY_MAPPED, "generatable": True,
-            "reason": "Already mapped, and regeneratable: the run reads only the FRD and the "
-                      "vendor dictionary, never this feed's approved STTM, so the draft is "
-                      "independent of it and can be compared against it honestly. The "
-                      "approved workbook is not touched.",
-            "dictionary": dictionary, "reference": reference,
-        }
-    if not dictionary:
-        return {
-            "status": ELIGIBILITY_NO_DICTIONARY, "generatable": False,
-            "reason": "No vendor data dictionary is paired with this FRD, so the source "
-                      "columns cannot be grounded. Ask the vendor for VDD_<feed>.xlsx and "
-                      "name it in the FRD's Structural Metadata › Source Data Dictionary row.",
-            "dictionary": None, "reference": None,
-        }
-    return {
-        "status": ELIGIBILITY_READY, "generatable": True,
-        "reason": "Has a vendor data dictionary and no STTM yet — ready to map.",
-        "dictionary": dictionary, "reference": None,
-    }
-
-
-def eligibility_of(index: dict, doc_id: str) -> dict:
-    """This FRD's verdict from a built index, or a not-in-corpus refusal.
-
-    An unknown doc_id is NOT generatable: the caller is asking about a
-    document the corpus has never seen, and answering "sure" would let a run
-    start on something the index cannot vouch for.
-    """
-    entry = index.get("eligibility", {}).get(doc_id)
-    if entry:
-        return entry
-    return {
-        "status": ELIGIBILITY_NO_DICTIONARY, "generatable": False,
-        "reason": f"{doc_id!r} is not in the corpus index — run a sync, or rebuild the index.",
-        "dictionary": None, "reference": None,
-    }
-
-
-def term_catalog_of(index: dict) -> dict:
-    """The harvested vocabulary, ready for `frdsttm.term_catalog.lookup`.
-
-    Absent on an older index is an ordinary empty state — the caller then has
-    no vocabulary and falls back to the source column, which is the `as_is`
-    convention and the honest default.
-    """
-    return _tc.deserialize(index.get("term_catalog") or {})
-
-
-def dictionary_for(index: dict, doc_id: str) -> str | None:
-    """The vendor dictionary describing this FRD's source files, or None.
-
-    None is the gating state, not a fallback: with no dictionary the source
-    side of the STTM has no grounded input, and the run must say so by name
-    rather than fill the columns from a matched template.
-    """
-    return index.get("dictionary_pairs", {}).get(doc_id)
