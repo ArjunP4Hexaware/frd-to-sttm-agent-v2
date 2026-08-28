@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "kind": "engineering_standards",
   "_about": [
     "Transcription of the STTM-relevant rules from the client's engineering/coding",
@@ -37,12 +37,53 @@
       "_status": "UNSOURCED",
       "_note": "The mapping from a vendor datatype to a standard-layer datatype is not tabulated anywhere. Observed pairs only, from the two mapped STTMs.",
       "observed": [
-        {"source_type": ["int", "integer"], "standard": "Int"},
-        {"source_type": ["numeric", "decimal"], "standard": "Decimal(10,2)"},
-        {"source_type": ["varchar", "char", "string", "alpha numeric"], "standard": "String"},
-        {"source_type": ["datetime2", "date", "timestamp"], "standard": "String",
-         "_caution": "CAQH types 20 datetime2 source fields but renders them String in BOTH layers ('Load as is'). Do not promote dates without checking the convention in force."}
+        {
+          "source_type": [
+            "int",
+            "integer"
+          ],
+          "standard": "Int"
+        },
+        {
+          "source_type": [
+            "numeric",
+            "decimal"
+          ],
+          "standard": "Decimal(10,2)"
+        },
+        {
+          "source_type": [
+            "varchar",
+            "char",
+            "string",
+            "alpha numeric"
+          ],
+          "standard": "String"
+        },
+        {
+          "source_type": [
+            "datetime2",
+            "date",
+            "timestamp"
+          ],
+          "standard": "String",
+          "_caution": "CAQH types 20 datetime2 source fields but renders them String in BOTH layers ('Load as is'). Do not promote dates without checking the convention in force."
+        }
       ]
+    },
+    "infer_from_example": {
+      "_status": "OBSERVED",
+      "_about": [
+        "When the vendor declares no specific type (String / blank), the standard-layer type may be",
+        "inferred from the vendor's EXAMPLE VALUE in the data dictionary. Measured 2026-08-28 on the",
+        "approved SD STTM: an example with a decimal point -> Decimal(10,2) on 139 of 139 rows; no",
+        "decimal point -> String on 241 of 258. The column NAME does not predict the type (`_pct` is",
+        "Decimal 93 / String 42; every `_count` column is String), so the name is deliberately not used.",
+        "Stage stays String regardless. Switch off with enabled=false; every inferred cell is recorded",
+        "in the run's provenance as 'example value'."
+      ],
+      "enabled": true,
+      "decimal_point_example": "Decimal(10,2)"
     }
   },
   "data_quality": {
@@ -63,15 +104,23 @@
     "apply_at": {
       "_status": "STATED",
       "_quote": "Ensure to apply the proper Data Quality rules when loading the data into the Stage and Standard tables.",
-      "layers": ["stage", "standard"]
+      "layers": [
+        "stage",
+        "standard"
+      ]
     }
   },
   "run_control_table": {
     "_status": "STATED",
     "_about": "The run-log shape the client's pipelines write. Not an STTM cell — recorded so the agent never invents a different one, and so CodeGen has it.",
     "columns": [
-      "OBJECT_NAME", "SRC_REC_COUNT", "TGT_REC_COUNT", "REJECTED_REC_COUNT",
-      "EXEC_STATUS", "ERROR_MESSAGE", "BATCH_DATE"
+      "OBJECT_NAME",
+      "SRC_REC_COUNT",
+      "TGT_REC_COUNT",
+      "REJECTED_REC_COUNT",
+      "EXEC_STATUS",
+      "ERROR_MESSAGE",
+      "BATCH_DATE"
     ]
   },
   "security": {

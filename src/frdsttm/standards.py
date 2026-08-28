@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -149,4 +150,29 @@ def promote_type(source_type: str | None) -> Optional[str]:
     for rule in ENGINEERING["type_promotion"]["promotions"]["observed"]:
         if key in [str(x).lower() for x in rule["source_type"]]:
             return rule["standard"]
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# standard-layer type from the vendor's EXAMPLE value (config-switched)
+# --------------------------------------------------------------------------- #
+_DECIMAL_EXAMPLE = re.compile(r"^[-+]?\d{1,3}(,\d{3})*\.\d+%?$|^[-+]?\d*\.\d+%?$")
+
+
+def infer_from_example_enabled() -> bool:
+    return bool(ENGINEERING["type_promotion"].get("infer_from_example", {}).get("enabled"))
+
+
+def type_from_example(example) -> Optional[str]:
+    """Standard-layer type inferred from the vendor's EXAMPLE VALUE, or None.
+
+    The analyst's own rule, measured on the approved SD workbook: an example
+    with a decimal point is Decimal(10,2) (139/139); anything else is left
+    alone (String). The column NAME is deliberately not consulted — it does
+    not predict the type. Off unless the standards config enables it."""
+    if not infer_from_example_enabled() or example is None:
+        return None
+    s = str(example).strip()
+    if _DECIMAL_EXAMPLE.match(s):
+        return ENGINEERING["type_promotion"]["infer_from_example"].get("decimal_point_example", "Decimal(10,2)")
     return None

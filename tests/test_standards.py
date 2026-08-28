@@ -25,6 +25,10 @@ def test_load_strategy_aliases():
     assert std.normalize_load_strategy("Nonsense") is None
 
 
+def test_infer_from_example_is_a_switch_in_the_config():
+    assert std.ENGINEERING_VERSION == "1.1.0" and std.infer_from_example_enabled() is True
+
+
 def test_type_promotion_from_source_type():
     assert std.stage_default_type() == "String"
     assert std.promote_type("int") == "Int"

@@ -78,16 +78,28 @@ def build_rows(source: dict, feed: dict, vdd_fields: list[dict]) -> tuple[list[d
     stage, standard = source["layers"]["stage"], source["layers"]["standard"]
     stage_dt = std.stage_default_type()
     rows, unpromoted, segments = [], set(), []
+    n_from_example = 0
     for f in vdd_fields:
         seg = f.get("segment") or ""
         if seg not in segments:
             segments.append(seg)
         stage_tbl = _table_for_segment(stage["tables"], seg)
         std_tbl = _table_for_segment(standard["tables"], seg) or stage_tbl
+        # Standard type, in order: the vendor's declared type when it is specific;
+        # else the vendor's example value (decimal point -> Decimal); else String.
         promoted = std.promote_type(f.get("datatype"))
         if promoted is None and f.get("datatype"):
             unpromoted.add(str(f["datatype"]))
+        origin = "vendor type"
+        if promoted is None or promoted == stage_dt:
+            from_example = std.type_from_example(f.get("example"))
+            if from_example:
+                promoted, origin = from_example, "example value"
+                n_from_example += 1
+        if promoted is None:
+            origin = "default"
         r = _row(f)
+        r["type_origin"] = origin
         r["stage"] = _target(stage, stage_tbl, f.get("name") or "", stage_dt)
         r["standard"] = _target(standard, std_tbl, f.get("name") or "", promoted or stage_dt)
         rows.append(r)
@@ -104,7 +116,7 @@ def build_rows(source: dict, feed: dict, vdd_fields: list[dict]) -> tuple[list[d
             r["standard"] = _target(standard, std_tbl, sc["name"], sc.get("datatype", "String"))
             rows.append(r)
             n_audit += 1
-    return rows, {"n_rows": len(rows), "n_audit_rows": n_audit,
+    return rows, {"n_rows": len(rows), "n_audit_rows": n_audit, "inferred_from_example": n_from_example,
                   "unpromoted_types": sorted(unpromoted), "segments": [s for s in segments if s]}
 
 
@@ -426,7 +438,7 @@ def render_workbook(spec: dict, sources: list[dict], vdd: dict, out_path: str | 
     placement, unpromoted vendor types)."""
     override = pairing_override or {}
     files_by_pattern = {f["file_name_pattern"]: f for f in vdd.get("files", [])}
-    units, notes = [], {"unpromoted_types": set(), "rule_placement": []}
+    units, notes = [], {"unpromoted_types": set(), "rule_placement": [], "inferred_from_example": 0}
     for s in sources:
         feed = spec["feeds"][s["feed_index"]]
         pattern = override.get(s["feed_index"]) or s.get("file")
@@ -435,6 +447,7 @@ def render_workbook(spec: dict, sources: list[dict], vdd: dict, out_path: str | 
         rows, rn = build_rows(s, feed, fields) if fields else ([], {"unpromoted_types": []})
         placement = place_rules(feed, rows)
         notes["unpromoted_types"].update(rn.get("unpromoted_types", []))
+        notes["inferred_from_example"] += rn.get("inferred_from_example", 0)
         notes["rule_placement"].append({"source": s["feed_name"], **placement})
         units.append({"source": s, "feed": feed, "rows": rows, "placement": placement, "file": pattern})
     if not any(u["rows"] for u in units):
@@ -452,6 +465,7 @@ def render_workbook(spec: dict, sources: list[dict], vdd: dict, out_path: str | 
     info["rows_per_source"] = {u["source"]["feed_name"]: len(u["rows"]) for u in units}
     info["files_per_source"] = {u["source"]["feed_name"]: u["file"] for u in units}
     info["unpromoted_types"] = sorted(notes["unpromoted_types"])
+    info["inferred_from_example"] = notes["inferred_from_example"]
     info["rule_placement"] = notes["rule_placement"]
     return info
 
@@ -469,6 +483,7 @@ def preview_rows(spec: dict, sources: list[dict], vdd: dict, pairing_override: d
         rows, _ = build_rows(s, spec["feeds"][s["feed_index"]], fields) if fields else ([], {})
         out.append({"source": s["feed_name"], "file": pattern, "n_rows": len(rows),
                     "rows": [{"source_column": r["source_column"], "datatype": r["datatype"],
-                              "stage": r["stage"], "standard": r["standard"], "audit": r["audit"]}
+                              "stage": r["stage"], "standard": r["standard"], "audit": r["audit"],
+                              "type_origin": r.get("type_origin")}
                              for r in rows[:limit]]})
     return out

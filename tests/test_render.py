@@ -109,3 +109,26 @@ def test_render_refuses_with_no_rows(tmp_path):
         assert "no rows" in str(exc)
     else:
         raise AssertionError("expected a refusal")
+
+
+def test_standard_type_from_example_value_when_vendor_says_string(tmp_path):
+    from frdsttm import standards as std
+    assert std.type_from_example("0.56") == "Decimal(10,2)"
+    assert std.type_from_example("1,234.50") == "Decimal(10,2)"
+    assert std.type_from_example("46508") is None
+    assert std.type_from_example("2024.01.05") is None and std.type_from_example("") is None
+    files = {"claims_YYYYMMDD.csv": [
+        ("PCT_A", "String", "Y", "N", "d", "", "0.56", ""),      # String declared, decimal example -> Decimal
+        ("POP_B", "String", "Y", "N", "d", "", "46508", ""),     # String declared, integer example -> String
+        ("CNT_C", "int", "Y", "N", "d", "", "12.5", ""),         # vendor type is specific -> vendor wins
+        ("AMT_D", "", "Y", "N", "d", "", "3.14", ""),            # no type at all, decimal example -> Decimal
+    ]}
+    spec, vdd, sources = _ready(tmp_path, spec_for(), files)
+    rows, notes = render.build_rows(sources[0], spec["feeds"][0], vdd["fields"]["file1"])
+    by = {r["source_column"]: r for r in rows if not r["audit"]}
+    assert by["PCT_A"]["standard"]["datatype"] == "Decimal(10,2)" and by["PCT_A"]["type_origin"] == "example value"
+    assert by["POP_B"]["standard"]["datatype"] == "String" and by["POP_B"]["type_origin"] == "vendor type"
+    assert by["CNT_C"]["standard"]["datatype"] == "Int" and by["CNT_C"]["type_origin"] == "vendor type"
+    assert by["AMT_D"]["standard"]["datatype"] == "Decimal(10,2)"
+    assert all(r["stage"]["datatype"] == "String" for r in rows if not r["audit"])   # stage is never inferred
+    assert notes["inferred_from_example"] == 2

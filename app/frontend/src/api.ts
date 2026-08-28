@@ -120,6 +120,7 @@ export interface RunView {
     rows_per_source: Record<string, number>;
     unfilled_columns: Record<string, string[]>;
     unpromoted_types: string[];
+    inferred_from_example?: number;
     unanswered: string[];
   };
   live: Live | null;

@@ -343,6 +343,9 @@ def report_md(run: dict) -> str:
                   + (f", layout from `{r['layout_from']}`" if r.get("layout_from") else " (built-in layout)")]
         for src, n in r.get("rows_per_source", {}).items():
             lines.append(f"- {src}: {n} rows from `{r.get('files_per_source', {}).get(src)}`")
+        if r.get("inferred_from_example"):
+            lines.append(f"- {r['inferred_from_example']} standard-layer types inferred from the vendor's example "
+                         f"value (a decimal point → Decimal(10,2)); the vendor declared String. Stage stays String.")
         if r.get("unpromoted_types"):
             lines.append(f"- vendor types with no standard-layer promotion rule (kept as stage type): "
                          f"{', '.join(r['unpromoted_types'])}")
