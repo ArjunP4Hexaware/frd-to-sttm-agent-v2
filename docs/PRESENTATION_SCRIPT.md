@@ -89,27 +89,41 @@ demo build to keep it small. If asked, say exactly that.
 
 ## Demo — the Socially Determined workflow
 
-### 1. The SD FRD (open the .docx)
+### 1. The SD FRD (open the .docx) — six things to single out, in this order
 
-> "This is a real FRD, exactly as your BSA wrote it. Notice the sections — Introduction, In Scope,
-> Assumptions, then Requirements and Data Ingestion Requirements. The agent reads all of it, but the
-> heart is this table — **Structural Metadata**."
-
-Scroll to the Structural Metadata table and point:
-
-* **Target Schema** — `stg_sdoh/sdoh` for the two community files, `stg_cm/cm` for the individual
-  file. *"Two schemas, three files — the agent has to attach the right schema to each file."*
-* **Target Table Name** — the three file patterns: `demographics_package_YYYY_MM.csv`,
-  `analytics_package_YYYY_MM.csv`, `sd_ind_risk_…psv`.
-* **Load Strategy STG / STD** — `Truncate and Load` / `Append`.
-* **Source Data Dictionary** — *"File and field descriptions are mentioned in the mapping
-  document."* Say: *"That row points at the STTM — the document we're trying to produce. Circular.
-  It's the slot where the vendor data dictionary belongs, and it's why the dictionary is a first-
-  class input."*
-
-Then the Data Quality prose: *"If the ZIP_CODE column is NULL, then we are rejecting the record
-… from the below files."* — *"'The below files.' Which files? The agent will not decide that. You
-will see it ask."*
+1. **The header line `Project ID: 1003866`.** *"Every run is tied to this id and to a fingerprint
+   of this exact file — if the FRD changes, the run knows."*
+2. **The section list** — Introduction, In Scope, Assumptions, Requirements, Data Ingestion
+   Requirements. *"This is the template every ACFC FRD follows; the agent is written against it."*
+3. **The Functional Requirement cell** that starts *"Source and Target table details are provided
+   in mapping document … Frequency of data refresh – Monthly Run … Staging Layer: Schema Name:
+   stg_sdoh, Load Strategy – Truncate and Load, Table Name: sd_community_demographic_risk …"*
+   *"Here the FRD states the target tables and schemas in prose. This is what Claude reads and
+   turns into structured facts — and every one of these names is then checked back against this
+   text word for word."*
+4. **The Structural Metadata table.** Point at three rows:
+   * **Target Schema** — `stg_sdoh/sdoh` for the two community files, `stg_cm/cm` for the
+     individual file. *"Two schemas, three files; the agent has to attach the right one to each."*
+   * **Domain and Subdomain** — `Social Determinants of Health / Public` for two files, `Care
+     Management / Social Determinants of Health` for the third. *"The ACFC naming standard's
+     domain table has no entry for 'Social Determinants of Health'. The FRD states the schema
+     anyway, so the FRD wins — if it hadn't, this would have come back as a question."*
+   * **Source Data Dictionary** — *"File and field descriptions are mentioned in the mapping
+     document."* *"That row points at the STTM — the document we are trying to produce. Circular.
+     It's the slot the vendor data dictionary belongs in, and it's why the dictionary is a first-
+     class input."*
+   Also worth a glance: **ADLS Location** — three `mftlanding\inbound\…` paths, one per file — and
+   **Load Strategy STG / STD** — `Truncate and Load` / `Append`.
+5. **The Data Quality description cell:** *"If the ZIP_CODE column is NULL, then we are rejecting
+   the record and moving it to the reject table from the below files. If the MEMBER_ID column is
+   NULL … from the below file. Recycle Flag (Enabled for 7 Days) Y (Check with SBSB_ID from Facets
+   in the PR_STD.FACETS.CMC_SBSB_SUBSC FOR GRGR_CK = 31 …)"*
+   *"Three rules in one cell. 'The below files' — which files? The agent will not decide that. In
+   a few minutes you'll see it ask you. And notice ZIP_CODE and MEMBER_ID: the agent places each
+   rule on the row whose column it names in the workbook."*
+6. **The ADF / email cell:** *"ADF Pipeline should not fail when there is an issue with any one of
+   the outbound files. Email notification should be sent to Support team …"* *"A rule that names
+   no column and no file. It lands in the workbook at source level, not pinned to a guessed row."*
 
 ### 2. The FRD template (open `templates/FRD_TEMPLATE.docx`)
 
