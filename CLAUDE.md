@@ -42,3 +42,19 @@ Stop the App when not demoing — it bills per hour.
 Concise. Real-world examples. Ask when ambiguous. Anything that costs money —
 ask first. Push back hard when warranted. He writes the code by default; this
 rebuild was an explicit override.
+
+## Post-demo list (in priority order)
+
+1. **Read the FRD's Structural Metadata table by code** (Arjun, 2026-08-28). The
+   template's fixed eleven rows (Target Schema, Target Table Name, Load Strategy,
+   ADLS Location, Source Data Dictionary…) are a table, so read them exactly, as
+   the VDD is. Use them (a) as a template check — a missing row is a question or
+   blocker before any model call; (b) as a second reading beside Claude's, so a
+   disagreement (table says `stg_mbr`, prose says `stg_member`) becomes a
+   question, the way `project_id` already works in `completeness.enrich`. Claude
+   still reads the prose — rules, recycle logic, attribution — that is what needs
+   a model, not the .docx format. ~150 lines + tests in `frd_parsing` /
+   `completeness`.
+2. Purge `sample_documents/` and the `standards/*.docx` from git history
+   (`git filter-repo`), keep them outside the repo.
+3. Re-point the Databricks Git folder / App at `main` once `staging` is merged.
