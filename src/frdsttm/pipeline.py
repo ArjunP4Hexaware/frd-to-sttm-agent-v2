@@ -21,6 +21,7 @@ The notebook and the review app both call these; neither contains logic.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 import traceback
@@ -68,6 +69,12 @@ def new_run_id(existing: set[str] | None = None) -> str:
         n += 1
         rid = f"{base}-{n}"
     return rid
+
+
+def sttm_file_name(doc_id: str) -> str:
+    """``FRD_<x>`` → ``STTM_<x>.xlsx`` — the library's own naming convention."""
+    stem = re.sub(r"^frd[_\-\s]*", "", doc_id, flags=re.I) or doc_id
+    return f"STTM_{stem}.xlsx"
 
 
 def load_run(paths: Paths, run_id: str) -> dict:
@@ -213,7 +220,7 @@ def run_render(paths: Paths, run_id: str) -> dict:
         assessment = json.loads(json.dumps(run["assessment"]))
         applied = completeness.apply_answers(spec, assessment)
         layout = choose_layout(paths, run["doc_id"], len(spec.get("feeds") or []))
-        out = paths.run_dir(run_id) / f"{run['doc_id']}.xlsx"
+        out = paths.run_dir(run_id) / sttm_file_name(run["doc_id"])
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
             tmp_path = tmp.name
         try:

@@ -55,7 +55,7 @@ def test_full_run_flow(api):
     run_id = r.json()["run_id"]
     run = _wait(client, run_id)
     assert run["status"] == "rendered" and fake.calls == 1
-    assert run["preview"][0]["n_rows"] == 7 and run["summary"]["workbook"] == "FRD_Claims_Intake.xlsx"
+    assert run["preview"][0]["n_rows"] == 7 and run["summary"]["workbook"] == "STTM_Claims_Intake.xlsx"
     wb = client.get(f"/api/runs/{run_id}/workbook")
     assert wb.status_code == 200 and wb.content[:2] == b"PK"
     assert client.get("/api/runs").json()["runs"][0]["run_id"] == run_id

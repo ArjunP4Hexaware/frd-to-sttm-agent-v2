@@ -190,13 +190,13 @@ export function RunView({ runId, onBack, onOpenRun }: { runId: string; onBack: (
           <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
             <h3 className="eyebrow-blue">STTM workbook</h3>
             <div className="flex gap-2">
-              <Button asChild><a href={workbookUrl(r.run_id)} download>Download {r.render.workbook}</a></Button>
+              <Button asChild><a href={workbookUrl(r.run_id)} download>Download the STTM workbook</a></Button>
               <Button variant="outline" asChild><a href={reportUrl(r.run_id)} target="_blank" rel="noreferrer">Run report</a></Button>
             </div>
           </div>
           <Card>
             <CardContent className="py-3 text-sm flex flex-col gap-1">
-              <span><b>{r.render.n_rows} rows</b> across {Object.keys(r.render.rows_per_source).length} sheet{Object.keys(r.render.rows_per_source).length === 1 ? "" : "s"}{r.render.layout_from ? <>, written into the layout of <span className="mono-id">{r.render.layout_from}</span> (structure only — no content was read from it)</> : ", in the built-in layout"}.</span>
+              <span><span className="mono-id">{r.render.workbook}</span> — <b>{r.render.n_rows} rows</b> across {Object.keys(r.render.rows_per_source).length} sheet{Object.keys(r.render.rows_per_source).length === 1 ? "" : "s"}{r.render.layout_from ? <>, written into the layout of <span className="mono-id">{r.render.layout_from}</span> (structure only — no content was read from it)</> : ", in the built-in layout"}.</span>
               <span className="text-muted-foreground">Generated {r.render.rendered_at.slice(0, 16).replace("T", " ")} UTC. Column names are the vendor's, carried as-is. Stage types are String; standard types are promoted from the vendor type per the ACFC coding standard.</span>
               {r.render.unanswered.length > 0 && <span className="text-[var(--brand-flag)]">{r.render.unanswered.length} question(s) were still open when this was generated.</span>}
               {r.render.unpromoted_types.length > 0 && <span className="text-muted-foreground">Vendor types with no promotion rule (kept as String in standard): {r.render.unpromoted_types.join(", ")}.</span>}

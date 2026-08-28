@@ -13,7 +13,7 @@ def test_extract_ready_renders_immediately(data_root):
     run = pipeline.run_extract(_paths(data_root), "run_1", "FRD_Claims_Intake", client=FakeClient(spec_for()),
                                provider="anthropic", model="m")
     assert run["status"] == pipeline.STATUS_RENDERED
-    assert (data_root / "output_sttms" / "run_1" / "FRD_Claims_Intake.xlsx").is_file()
+    assert (data_root / "output_sttms" / "run_1" / "STTM_Claims_Intake.xlsx").is_file()
     assert (data_root / "output_sttms" / "run_1" / "report.md").is_file()
     assert run["render"]["layout_from"] is None          # the other feed's workbook is sheet-per-table; one source → built-in
     assert run["standards_sha256"] and run["extraction_meta"]["input_tokens"] == 10
@@ -57,7 +57,7 @@ def test_reindex_and_list_runs(data_root):
     assert idx["documents"]["FRD_Claims_Intake"]["generatable"]
     pipeline.run_extract(paths, "run_5", "FRD_Claims_Intake", client=FakeClient(spec_for()), provider="anthropic", model="m")
     runs = pipeline.list_runs(paths)
-    assert runs[0]["run_id"] == "run_5" and runs[0]["workbook"] == "FRD_Claims_Intake.xlsx"
+    assert runs[0]["run_id"] == "run_5" and runs[0]["workbook"] == "STTM_Claims_Intake.xlsx"
 
 
 def test_choose_layout_prefers_matching_dialect(data_root):
