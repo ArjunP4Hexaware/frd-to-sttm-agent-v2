@@ -163,6 +163,7 @@ export const useReindexState = () =>
     queryKey: ["reindex"],
     queryFn: () => fetchJson<ReindexState>("/api/reindex"),
     refetchInterval: (q) => (q.state.data?.state === "running" ? 2000 : false),
+    refetchIntervalInBackground: true,
   });
 
 export const useReindex = () =>
@@ -180,6 +181,9 @@ export const useRun = (runId: string | null) =>
     // only run.json's "extracting" status remains to tell us so.
     refetchInterval: (q) =>
       q.state.data?.live?.phase === "running" || q.state.data?.status === "extracting" ? 3000 : false,
+    // Keep polling when the tab is not focused — a reviewer switches to Excel or the job page and
+    // comes back expecting the result, not a stale spinner.
+    refetchIntervalInBackground: true,
     retry: false,
   });
 
