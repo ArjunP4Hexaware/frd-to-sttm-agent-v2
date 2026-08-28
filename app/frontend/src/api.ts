@@ -123,6 +123,8 @@ export interface RunView {
     unanswered: string[];
   };
   live: Live | null;
+  /** The sources as applied after answers (falls back to the first assessment). */
+  sources: SourceEntry[];
   preview: { source: string; file: string | null; n_rows: number; rows: PreviewRow[]; error?: string }[];
   summary: RunSummary | null;
 }

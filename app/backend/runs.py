@@ -122,6 +122,8 @@ def view(run_id: str) -> dict:
             preview = [{"error": f"{type(exc).__name__}: {exc}"}]
     out["preview"] = preview
     out["summary"] = pipeline.summary(run)
+    # Once rendered, show the sources AS APPLIED (answers folded in), not as first assessed.
+    out["sources"] = (run.get("applied") or {}).get("sources") or (run.get("assessment") or {}).get("sources") or []
     return out
 
 

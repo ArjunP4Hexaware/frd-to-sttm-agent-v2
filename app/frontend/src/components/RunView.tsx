@@ -71,11 +71,11 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
         </Alert>
       )}
 
-      {a && a.sources.length > 0 && (
+      {a && r.sources.length > 0 && (
         <section>
           <h3 className="eyebrow-blue mb-2">Sources</h3>
           <div className="flex flex-col gap-2">
-            {a.sources.map((s) => (
+            {r.sources.map((s) => (
               <Card key={s.feed_index}>
                 <CardHeader>
                   <CardTitle className="mono-id text-sm">{s.feed_name}</CardTitle>
