@@ -229,11 +229,11 @@ export const STATUS_LABEL: Record<string, string> = {
 /** One plain sentence per status — the first thing a reviewer reads on a run. */
 export const STATUS_EXPLANATION: Record<string, string> = {
   extracting:
-    "The agent is reading the FRD and the vendor data dictionary and extracting the source and target facts. This runs as a Databricks job and usually takes one to three minutes.",
+    "The agent is reading both documents: Claude extracts the source and target facts from the FRD, and the vendor data dictionary is parsed column by column. This runs as a Databricks job and usually takes one to three minutes.",
   ready:
     "The agent found everything it needs in the two documents. Generate the STTM whenever you are ready.",
   needs_input:
-    "The agent read both documents and will not guess the items below. Answer them, then generate the STTM — no second model call is made.",
+    "The agent has read both the FRD and the vendor data dictionary. It will not guess the items below — answer them, then generate the STTM. No second model call is made.",
   cannot_generate:
     "The STTM cannot be built from these documents. The reasons are listed below; fix the input and start a new run.",
   rendered:

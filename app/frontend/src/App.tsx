@@ -39,7 +39,7 @@ export default function App() {
       <footer className="acfc-footer">
         <div className="acfc-container">
           <span>
-            <strong>Two inputs</strong> <span className="sep">·</span> the FRD and the vendor data dictionary{" "}
+            <strong>Two inputs, both read</strong> <span className="sep">·</span> the FRD (by Claude) and the vendor data dictionary (by code){" "}
             <span className="sep">·</span> <strong>nothing is guessed</strong> — what is missing is asked
           </span>
           <span>Column names are carried as-is from the dictionary; the client standards decide the target side</span>

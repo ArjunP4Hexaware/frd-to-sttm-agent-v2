@@ -81,13 +81,13 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
 
       {r.frd && a && (
         <section>
-          <h3 className="eyebrow-blue mb-2">What the agent read</h3>
+          <h3 className="eyebrow-blue mb-2">What the agent read — both documents</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <Stat label="FRD" value={`${r.frd.heading_count} headings · ${r.frd.table_count} tables`} sub={r.frd.source_file} />
+            <Stat label="FRD — read by Claude" value={`${r.frd.heading_count} headings · ${r.frd.table_count} tables`} sub={`${r.frd.source_file} → source files, target tables, rules`} />
             <Stat
-              label="Vendor data dictionary"
+              label="Vendor data dictionary — parsed by code"
               value={r.vdd ? `${r.vdd.n_fields} columns · ${r.vdd.n_files} file${r.vdd.n_files === 1 ? "" : "s"}` : "none paired"}
-              sub={r.vdd ? r.vdd.file : "the source columns have no grounding"}
+              sub={r.vdd ? `${r.vdd.file} → every row of the STTM` : "the source columns have no grounding"}
               tone={r.vdd ? undefined : "alert"}
             />
             <Stat
@@ -208,8 +208,8 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
 
 const EXTRACT_STEPS = [
   "Read the FRD (.docx → text, headings and tables kept)",
-  "Read the vendor data dictionary (every file, every column)",
-  "Extract the source and target facts from the FRD with Claude",
+  "Read the vendor data dictionary (every file, every column, type and flag — parsed exactly, no model involved)",
+  "Extract the source files, target tables and rules from the FRD's prose with Claude",
   "Check every identifier verbatim against the FRD; pair each source with its dictionary file",
   "Decide the target side from the FRD and the ACFC standards; list what is still missing",
 ];
