@@ -103,17 +103,19 @@ def load(run_id: str) -> dict:
 def view(run_id: str) -> dict:
     """run.json + the live phase + the rows the workbook will carry."""
     run = load(run_id)
-    out = {k: v for k, v in run.items() if k not in ("traceback",)}
+    out = {k: v for k, v in run.items() if k not in ("traceback", "vdd_normalised")}
     out["live"] = active(run_id)
     preview = []
     if run.get("assessment") and run.get("vdd") and run["vdd"].get("file") and not run["assessment"]["blockers"]:
         try:
             from frdsttm.dictionary import parse_dictionary_workbook
             from frdsttm.render import preview_rows
-            vdd_path = settings.PATHS.vdds / run["vdd"]["file"]
-            if not vdd_path.is_file():
-                storage.pull_documents()          # a fresh container has no mirror yet
-            vdd = parse_dictionary_workbook(vdd_path)
+            vdd = run.get("vdd_normalised")
+            if vdd is None:
+                vdd_path = settings.PATHS.vdds / run["vdd"]["file"]
+                if not vdd_path.is_file():
+                    storage.pull_documents()          # a fresh container has no mirror yet
+                vdd = parse_dictionary_workbook(vdd_path)
             applied = run.get("applied") or {}
             spec = applied.get("extraction") or run["extraction"]
             sources = applied.get("sources") or run["assessment"]["sources"]

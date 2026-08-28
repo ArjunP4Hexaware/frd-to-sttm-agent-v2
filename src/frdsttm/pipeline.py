@@ -30,6 +30,7 @@ from pathlib import Path
 
 from frdsttm import completeness, corpus, extract as ex, render, standards as std
 from frdsttm.dictionary import DictionaryError, parse_dictionary_workbook
+from frdsttm.dictionary_repair import repair_dictionary
 from frdsttm.frd_parsing import parse_frd
 from frdsttm.reference_layout import layout_of
 
@@ -146,22 +147,41 @@ def run_extract(paths: Paths, run_id: str, doc_id: str, *, provider: str = "data
         run["frd"] = {k: frd[k] for k in ("source_file", "content_sha256", "project_id",
                                           "heading_count", "table_count")}
         run["frd"]["chars"] = len(frd["content"])
+        if client is None:
+            client = ex.build_client(provider)
+        model_name = ex.databricks_model_name(model) if provider == "databricks" else model
         vdd_path = _find_vdd(paths, doc_id)
         vdd = None
         run["vdd"] = None
         if vdd_path is not None:
+            # Code first (exact, free). If the workbook does not fit the template —
+            # unreadable structure, or read as empty — Claude normalises it, with
+            # every column name verified against the workbook text.
+            parse_error = None
             try:
                 vdd = parse_dictionary_workbook(vdd_path)
+            except DictionaryError as exc:
+                parse_error = str(exc)
+            if vdd is None or vdd["n_fields"] == 0:
+                try:
+                    vdd, rmeta = repair_dictionary(client, vdd_path, model=model_name, max_tokens=max_tokens)
+                    run["vdd_repair_meta"] = {**rmeta, "code_parser_said": parse_error or "no columns found"}
+                except Exception as exc:  # noqa: BLE001 — the fallback failing is a recorded fact, not a crash
+                    run["vdd_repair_meta"] = {"error": f"{type(exc).__name__}: {exc}",
+                                              "code_parser_said": parse_error or "no columns found"}
+                    if vdd is None:
+                        vdd = None
+            if vdd is None:
+                run["vdd"] = {"file": vdd_path.name, "error": parse_error, "n_files": 0, "n_fields": 0,
+                              "files": [], "problems": [], "normalised_by_model": False}
+            else:
                 run["vdd"] = {"file": vdd_path.name, "n_files": vdd["n_files"], "n_fields": vdd["n_fields"],
                               "files": [f["file_name_pattern"] for f in vdd["files"]],
-                              "problems": vdd["problems"]}
-            except DictionaryError as exc:
-                run["vdd"] = {"file": vdd_path.name, "error": str(exc), "n_files": 0, "n_fields": 0,
-                              "files": [], "problems": []}
-        if client is None:
-            client = ex.build_client(provider)
-        model_name = ex.databricks_model_name(model) if provider == "databricks" else model
+                              "problems": vdd["problems"],
+                              "normalised_by_model": bool(vdd.get("normalised_by_model"))}
         spec, meta = ex.extract(client, doc_id, frd["content"], model=model_name, max_tokens=max_tokens)
+        if vdd is not None and vdd.get("normalised_by_model"):
+            run["vdd_normalised"] = vdd            # the render must use the same normalised columns
         run["extraction"] = json.loads(spec.model_dump_json(by_alias=True))
         run["extraction"]["source_file"] = frd["source_file"]
         run["extraction_meta"] = meta
@@ -188,8 +208,7 @@ def run_render(paths: Paths, run_id: str) -> dict:
         raise ValueError("this run cannot be rendered: " +
                          "; ".join(b["text"] for b in run["assessment"]["blockers"]))
     try:
-        vdd_path = paths.vdds / run["vdd"]["file"]
-        vdd = parse_dictionary_workbook(vdd_path)
+        vdd = run.get("vdd_normalised") or parse_dictionary_workbook(paths.vdds / run["vdd"]["file"])
         spec = json.loads(json.dumps(run["extraction"]))
         assessment = json.loads(json.dumps(run["assessment"]))
         applied = completeness.apply_answers(spec, assessment)
@@ -280,7 +299,9 @@ def report_md(run: dict) -> str:
         lines += [f"FRD: `{f['source_file']}` ({f['chars']:,} chars, {f['heading_count']} headings, "
                   f"{f['table_count']} tables)"]
     v = run.get("vdd")
-    lines += [f"VDD: `{v['file']}` ({v['n_files']} files, {v['n_fields']} columns)" if v
+    lines += [f"VDD: `{v['file']}` ({v['n_files']} files, {v['n_fields']} columns)"
+              + (" — did not fit the template; normalised by Claude, column names verified against the workbook"
+                 if v.get("normalised_by_model") else "") if v
               else "VDD: **none paired**", ""]
     a = run.get("assessment")
     if a:

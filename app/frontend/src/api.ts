@@ -101,7 +101,7 @@ export interface RunView {
   model?: string;
   provider?: string;
   frd?: { source_file: string; chars: number; heading_count: number; table_count: number };
-  vdd?: { file: string; n_files: number; n_fields: number; files: string[]; problems: { kind: string; detail: string }[] } | null;
+  vdd?: { file: string; n_files: number; n_fields: number; files: string[]; problems: { kind: string; detail: string }[]; normalised_by_model?: boolean; error?: string | null } | null;
   extraction?: { feeds: { feed_name: string | null; file_name_patterns: string[]; validation_rules: string[] }[] };
   assessment?: {
     status: string;
@@ -150,6 +150,7 @@ export interface ReindexState {
   error: string | null;
   url: string | null;
   finished_at: string | null;
+  trigger?: string | null;
 }
 
 export const useConfig = () =>
@@ -229,11 +230,11 @@ export const STATUS_LABEL: Record<string, string> = {
 /** One plain sentence per status — the first thing a reviewer reads on a run. */
 export const STATUS_EXPLANATION: Record<string, string> = {
   extracting:
-    "The agent is reading both documents: Claude extracts the source and target facts from the FRD, and the vendor data dictionary is parsed column by column. This runs as a Databricks job and usually takes one to three minutes.",
+    "The agent is reading both documents: Claude extracts the source files, target tables and rules from the FRD, and the vendor data dictionary is read column by column (normalised by Claude if it strays from the template). This runs as a Databricks job and usually takes one to three minutes.",
   ready:
-    "The agent found everything it needs in the two documents. Generate the STTM whenever you are ready.",
+    "Everything needed to build the STTM was found in the two documents — nothing is missing. Generate whenever you are ready.",
   needs_input:
-    "The agent has read both the FRD and the vendor data dictionary. It will not guess the items below — answer them, then generate the STTM. No second model call is made.",
+    "Below is what the agent extracted from the FRD and the dictionary, and what is still missing to build the STTM. It will not guess those items — answer them, then generate. No second model call is made.",
   cannot_generate:
     "The STTM cannot be built from these documents. The reasons are listed below; fix the input and start a new run.",
   rendered:
@@ -254,6 +255,8 @@ export const VDD_PROBLEM_LABEL: Record<string, string> = {
   sheet_not_listed: "a sheet is not listed on FILES",
   no_field_sheet_named: "a FILES row names no field sheet",
   files_row_ignored: "a FILES row was read as a note",
+  normalised_by_model: "the workbook did not fit the template and was normalised by Claude (column names verified)",
+  model_columns_not_in_workbook: "column names the model returned that are not in the workbook were dropped",
   file_without_pattern: "a FILES row has no file name pattern",
 };
 

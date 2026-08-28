@@ -6,7 +6,6 @@ import {
   VDD_PROBLEM_LABEL,
   documentUrl,
   useDocuments,
-  useReindex,
   useReindexState,
   useRuns,
   useStartRun,
@@ -23,7 +22,6 @@ import { HowItWorks } from "./HowItWorks";
 export function Picker({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
   const docs = useDocuments();
   const runs = useRuns();
-  const reindex = useReindex();
   const reindexState = useReindexState();
   const start = useStartRun();
   const qc = useQueryClient();
@@ -91,10 +89,10 @@ export function Picker({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
           </Alert>
         )}
 
-        {docs.data && !docs.data.built && (
+        {docs.data && !docs.data.built && !reindexing && (
           <div className="acfc-notice acfc-notice--warn">
-            <b>No index yet</b>
-            <span>Put documents in the volumes and press “Reindex the volumes”.</span>
+            <b>No documents indexed yet</b>
+            <span>Put FRD_ / VDD_ / STTM_ files in the volumes; the app indexes them on start-up.</span>
           </div>
         )}
 
@@ -135,18 +133,19 @@ export function Picker({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
           </div>
         )}
 
-        <div className="flex items-center gap-3 flex-wrap border-t pt-4">
-          <Button variant="outline" disabled={reindexing || reindex.isPending} onClick={() => reindex.mutate(undefined, { onSuccess: () => qc.invalidateQueries({ queryKey: ["reindex"] }) })}>
-            {reindexing ? <><Spinner /> Reindexing…</> : "Reindex the volumes"}
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            Re-reads the four volumes and re-pairs FRDs, dictionaries and approved STTMs. No model call.
-            {docs.data?.generated_at ? <> Last indexed <span className="mono-id">{docs.data.generated_at.slice(0, 16).replace("T", " ")} UTC</span>.</> : ""}
-          </span>
-          {reindexState.data?.url && (
-            <a href={reindexState.data.url} target="_blank" rel="noreferrer" className="text-xs underline">job run ↗</a>
+        <div className="flex items-center gap-3 flex-wrap border-t pt-3 text-xs text-muted-foreground">
+          {reindexing ? (
+            <span className="flex items-center gap-2"><Spinner /> Indexing the volumes — pairing FRDs, dictionaries and approved STTMs. No model call.</span>
+          ) : (
+            <span>
+              The volumes are indexed automatically when the app starts and after every upload.
+              {docs.data?.generated_at ? <> Last indexed <span className="mono-id">{docs.data.generated_at.slice(0, 16).replace("T", " ")} UTC</span>.</> : ""}
+            </span>
           )}
-          {reindexState.data?.state === "failed" && <span className="text-xs text-[var(--brand-red)]">{reindexState.data.error}</span>}
+          {reindexState.data?.url && reindexing && (
+            <a href={reindexState.data.url} target="_blank" rel="noreferrer" className="underline">indexing job ↗</a>
+          )}
+          {reindexState.data?.state === "failed" && <span className="text-[var(--brand-red)]">Indexing failed: {reindexState.data.error}</span>}
         </div>
       </div>
 

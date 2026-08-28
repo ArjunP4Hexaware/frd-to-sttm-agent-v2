@@ -85,7 +85,7 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             <Stat label="FRD — read by Claude" value={`${r.frd.heading_count} headings · ${r.frd.table_count} tables`} sub={`${r.frd.source_file} → source files, target tables, rules`} />
             <Stat
-              label="Vendor data dictionary — parsed by code"
+              label={r.vdd?.normalised_by_model ? "Vendor data dictionary — normalised by Claude" : "Vendor data dictionary — read column by column"}
               value={r.vdd ? `${r.vdd.n_fields} columns · ${r.vdd.n_files} file${r.vdd.n_files === 1 ? "" : "s"}` : "none paired"}
               sub={r.vdd ? `${r.vdd.file} → every row of the STTM` : "the source columns have no grounding"}
               tone={r.vdd ? undefined : "alert"}
@@ -103,9 +103,14 @@ export function RunView({ runId, onBack }: { runId: string; onBack: () => void }
               tone={unanswered > 0 ? "alert" : undefined}
             />
           </div>
-          {r.vdd && r.vdd.problems.length > 0 && (
+          {r.vdd?.normalised_by_model && (
+            <p className="text-xs mt-2 text-[var(--brand-navy)]">
+              This dictionary did not follow the template, so Claude normalised it into the template shape. Every column name it returned was verified word-for-word against the workbook; anything it could not find was dropped, never invented.
+            </p>
+          )}
+          {r.vdd && r.vdd.problems.filter((p) => p.kind !== "normalised_by_model").length > 0 && (
             <p className="text-xs text-muted-foreground mt-2">
-              Dictionary gaps the vendor left: {Array.from(new Set(r.vdd.problems.map((p) => VDD_PROBLEM_LABEL[p.kind] ?? p.kind))).join("; ")}. Those cells stay blank in the workbook.
+              Dictionary gaps: {Array.from(new Set(r.vdd.problems.filter((p) => p.kind !== "normalised_by_model").map((p) => VDD_PROBLEM_LABEL[p.kind] ?? p.kind))).join("; ")}. Those cells stay blank in the workbook.
             </p>
           )}
         </section>

@@ -7,6 +7,7 @@ Deployed: Databricks App (app.yaml) — the pipeline runs as the bundle job.
 from __future__ import annotations
 
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -20,7 +21,15 @@ import storage
 from frdsttm import corpus, pipeline
 from frdsttm.frd_parsing import SUPPORTED_SUFFIXES
 
-app = FastAPI(title="FRD to STTM Agent")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # Index the volumes the moment the App starts — nobody should have to press a
+    # button to see their documents. Runs in a thread; the picker shows its state.
+    start_reindex(by="startup")
+    yield
+
+
+app = FastAPI(title="FRD to STTM Agent", lifespan=_lifespan)
 
 
 def _who(request: Request) -> str:
@@ -63,20 +72,22 @@ def documents() -> dict:
             "generated_at": index["generated_at"]}
 
 
-_reindex = {"state": "idle", "error": None, "url": None, "finished_at": None}
+_reindex = {"state": "idle", "error": None, "url": None, "finished_at": None, "trigger": None}
+_reindex_lock = threading.Lock()
 
 
-@app.post("/api/reindex", status_code=202)
-def reindex(request: Request) -> dict:
-    if _reindex["state"] == "running":
-        raise HTTPException(status_code=409, detail="a reindex is already running")
-    _reindex.update(state="running", error=None, url=None, finished_at=None)
+def start_reindex(by: str) -> dict:
+    """Index the four volumes in the background (the job in databricks mode)."""
+    with _reindex_lock:
+        if _reindex["state"] == "running":
+            return dict(_reindex)
+        _reindex.update(state="running", error=None, url=None, finished_at=None, trigger=by)
 
     def work():
         try:
             if settings.IS_DATABRICKS:
                 import jobs
-                job_run_id, url = jobs.start("reindex", triggered_by=_who(request))
+                job_run_id, url = jobs.start("reindex", triggered_by=by)
                 _reindex["url"] = url
                 jobs.wait(job_run_id)
                 storage.pull_documents(force=True)
@@ -89,6 +100,12 @@ def reindex(request: Request) -> dict:
             _reindex["finished_at"] = runs._now()
     threading.Thread(target=work, daemon=True).start()
     return dict(_reindex)
+
+
+@app.post("/api/reindex", status_code=202)
+def reindex(request: Request) -> dict:
+    """Re-run the indexing on demand (after an upload, or by a tool)."""
+    return start_reindex(by=_who(request))
 
 
 @app.get("/api/reindex")
@@ -130,6 +147,7 @@ async def upload_document(kind: str, file: UploadFile = File(...)) -> dict:
     if not name or not ok:
         raise HTTPException(status_code=400, detail=f"unexpected file type for a {kind}: {name!r}")
     storage.push_document(_KIND_DIR[kind], name, await file.read())
+    start_reindex(by="upload")
     return {"kind": kind, "name": name}
 
 
