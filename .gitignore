@@ -1,5 +1,6 @@
 # client documents never enter the repo except sample_documents/ (deliberate, purged on a date)
 local_data/
+screenshots/
 *.xlsx
 *.docx
 *.pdf
