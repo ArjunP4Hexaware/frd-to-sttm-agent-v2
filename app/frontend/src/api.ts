@@ -176,7 +176,10 @@ export const useRun = (runId: string | null) =>
     queryKey: ["run", runId],
     queryFn: () => fetchJson<RunView>(`/api/runs/${encodeURIComponent(runId as string)}`),
     enabled: runId !== null,
-    refetchInterval: (q) => (q.state.data?.live?.phase === "running" ? 3000 : false),
+    // Poll while the job is running — also when the App restarted mid-run and
+    // only run.json's "extracting" status remains to tell us so.
+    refetchInterval: (q) =>
+      q.state.data?.live?.phase === "running" || q.state.data?.status === "extracting" ? 3000 : false,
     retry: false,
   });
 
@@ -211,12 +214,43 @@ export const documentUrl = (docId: string, kind: "frd" | "vdd" | "sttm") =>
   `/api/documents/${encodeURIComponent(docId)}/${kind}`;
 
 export const STATUS_LABEL: Record<string, string> = {
-  extracting: "Reading the FRD and the dictionary",
-  ready: "Everything needed is present",
+  extracting: "Reading the documents",
+  ready: "Ready to generate",
   needs_input: "Needs your answers",
   cannot_generate: "Cannot generate",
   rendered: "STTM generated",
   failed: "Failed",
+};
+
+/** One plain sentence per status — the first thing a reviewer reads on a run. */
+export const STATUS_EXPLANATION: Record<string, string> = {
+  extracting:
+    "The agent is reading the FRD and the vendor data dictionary and extracting the source and target facts. This runs as a Databricks job and usually takes one to three minutes.",
+  ready:
+    "The agent found everything it needs in the two documents. Generate the STTM whenever you are ready.",
+  needs_input:
+    "The agent read both documents and will not guess the items below. Answer them, then generate the STTM — no second model call is made.",
+  cannot_generate:
+    "The STTM cannot be built from these documents. The reasons are listed below; fix the input and start a new run.",
+  rendered:
+    "The STTM workbook is ready to download. Every row comes from the vendor dictionary; the target side comes from the FRD and the client standards.",
+  failed: "The run did not complete. The error is shown below; start a new run once it is addressed.",
+};
+
+export const VDD_PROBLEM_LABEL: Record<string, string> = {
+  missing_descriptions: "some columns have no description",
+  missing_datatypes: "some columns have no data type",
+  missing_required_flags: "some columns have no required flag",
+  missing_phi_flags: "some columns have no PHI flag",
+  missing_segments: "some columns name no record segment",
+  field_sheet_missing: "a field sheet named on FILES is missing",
+  field_sheet_empty: "a field sheet is empty",
+  template_example_rows: "the template's example rows were still present",
+  field_count_mismatch: "declared and actual field counts differ",
+  sheet_not_listed: "a sheet is not listed on FILES",
+  no_field_sheet_named: "a FILES row names no field sheet",
+  files_row_ignored: "a FILES row was read as a note",
+  file_without_pattern: "a FILES row has no file name pattern",
 };
 
 export const QUESTION_KIND_LABEL: Record<string, string> = {
