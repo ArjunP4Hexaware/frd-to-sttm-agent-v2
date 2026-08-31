@@ -23,6 +23,21 @@ output_sttms/<run_id>/run.json · <x>.xlsx · report.md
 
 Four Unity Catalog volumes in `<catalog>.sttm_agent`: `frds`, `vdds`, `reference_sttms` (approved STTMs, used for **layout only** — a run never reads one for content), `output_sttms`. One table, `frd_pairing`, lists every FRD with its paired VDD and STTM and whether it can be generated.
 
+### Or upload a pair
+
+A reviewer can skip the volumes entirely and hand the agent two files:
+
+```
+POST /api/runs/upload    multipart: frd=<file> vdd=<file>   → { run_id, doc_id }
+```
+
+The pair is written to `output_sttms/<run_id>/inputs/` and used **exactly as
+declared** — `FRD_<x>` / `VDD_<x>` does not have to match, because a person, not
+a name key, said these two go together. Neither file joins the corpus: the
+volumes stay the curated client library, and `GET /api/runs/<id>/inputs/frd|vdd`
+is the way back to what was uploaded. Everything after that — extract, assess,
+questions, render — is the same code path as a corpus run.
+
 ## Layout
 
 ```

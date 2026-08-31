@@ -36,7 +36,7 @@ def _clear(run_id: str):
         _active.pop(run_id, None)
 
 
-def _job_or_local(run_id: str, task: str, doc_id: str, by: str, local_fn):
+def _job_or_local(run_id: str, task: str, doc_id: str, by: str, local_fn, **job_kwargs):
     def work():
         try:
             if settings.IS_DATABRICKS:
@@ -44,7 +44,8 @@ def _job_or_local(run_id: str, task: str, doc_id: str, by: str, local_fn):
                 try:
                     job_run_id, url = None, None
                     import jobs
-                    job_run_id, url = jobs.start(task, run_id=run_id, doc_id=doc_id, triggered_by=by)
+                    job_run_id, url = jobs.start(task, run_id=run_id, doc_id=doc_id, triggered_by=by,
+                                                 **job_kwargs)
                     _set(run_id, job_run_id=job_run_id, url=url)
                     jobs.wait(job_run_id)
                 finally:
@@ -58,18 +59,53 @@ def _job_or_local(run_id: str, task: str, doc_id: str, by: str, local_fn):
     threading.Thread(target=work, daemon=True).start()
 
 
-def start(doc_id: str, by: str = "app") -> str:
+def busy() -> bool:
     with _lock:
-        if any(a.get("phase") == "running" for a in _active.values()):
-            raise RuntimeError("a run is already in progress — one at a time")
+        return any(a.get("phase") == "running" for a in _active.values())
+
+
+def allocate_run_id() -> str:
+    """A run id reserved before anything is written — an uploaded pair has to
+    land under its run's inputs/ before the run can be started."""
     existing = {p.name for p in settings.PATHS.output.iterdir()} if settings.PATHS.output.is_dir() else set()
     existing |= set(storage.list_remote_runs())
-    run_id = pipeline.new_run_id(existing)
+    return pipeline.new_run_id(existing)
+
+
+def start(doc_id: str, by: str = "app", *, run_id: str | None = None,
+          frd_file: str | None = None, vdd_file: str | None = None) -> str:
+    """`frd_file`/`vdd_file` name a pair already written under `<run_id>/inputs/`
+    (see `app.upload_pair`); without them the run reads the corpus volumes."""
+    if busy():
+        raise RuntimeError("a run is already in progress — one at a time")
+    run_id = run_id or allocate_run_id()
     _set(run_id, phase="running", task="extract", doc_id=doc_id, started_at=_now(), error=None)
     _job_or_local(run_id, "extract", doc_id, by,
                   lambda: pipeline.run_extract(settings.PATHS, run_id, doc_id, provider=settings.PROVIDER,
-                                               model=settings.MODEL, triggered_by=by))
+                                               model=settings.MODEL, triggered_by=by,
+                                               frd_file=frd_file, vdd_file=vdd_file),
+                  frd_file=frd_file or "", vdd_file=vdd_file or "")
     return run_id
+
+
+def rerun_uploaded(source_run_id: str, by: str = "app") -> str:
+    """Start a fresh run on the pair uploaded for an earlier run. The corpus has
+    no copy to fall back on, so the two files are copied into the new run."""
+    run = load(source_run_id)
+    inputs = run.get("inputs") or {}
+    if not inputs.get("frd"):
+        raise ValueError(f"{source_run_id} did not use uploaded files")
+    src = settings.PATHS.inputs_dir(source_run_id)
+    if not (src / inputs["frd"]).is_file():
+        storage.pull_run(source_run_id)
+    if busy():
+        raise RuntimeError("a run is already in progress — one at a time")
+    run_id = allocate_run_id()
+    for name in (inputs["frd"], inputs.get("vdd")):
+        if name:
+            storage.push_run_input(run_id, name, (src / name).read_bytes())
+    return start(run["doc_id"], by=by, run_id=run_id,
+                 frd_file=inputs["frd"], vdd_file=inputs.get("vdd"))
 
 
 def render(run_id: str, by: str = "app") -> None:
@@ -112,14 +148,15 @@ def view(run_id: str) -> dict:
             from frdsttm.render import preview_rows
             vdd = run.get("vdd_normalised")
             if vdd is None:
-                vdd_path = settings.PATHS.vdds / run["vdd"]["file"]
-                if not vdd_path.is_file():
+                vdd_path = pipeline.vdd_source(settings.PATHS, run)
+                if not vdd_path.is_file() and not (run.get("inputs") or {}).get("vdd"):
                     storage.pull_documents()          # a fresh container has no mirror yet
                 vdd = parse_dictionary_workbook(vdd_path)
             applied = run.get("applied") or {}
             spec = applied.get("extraction") or run["extraction"]
             sources = applied.get("sources") or run["assessment"]["sources"]
-            preview = preview_rows(spec, sources, vdd, applied.get("pairing_override"), limit=60)
+            preview = preview_rows(spec, sources, vdd, applied.get("pairing_override"), limit=60,
+                                   blank_type_sheets=applied.get("blank_type_sheets"))
         except Exception as exc:  # noqa: BLE001 — a preview problem is not a run problem
             preview = [{"error": f"{type(exc).__name__}: {exc}"}]
     out["preview"] = preview

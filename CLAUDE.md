@@ -15,6 +15,11 @@ Read `docs/ARCHITECTURE.md` first; `README.md` has the commands.
 
 - **Two inputs per feed, paired by name**: `FRD_<x>` ↔ `VDD_<x>`. No similarity
   pairing — a wrongly paired dictionary puts another vendor's columns on a source.
+  A reviewer may instead **declare** the pair by uploading both files at once
+  (`POST /api/runs/upload`, 2026-08-31): those keep their real names, live under
+  `output_sttms/<run_id>/inputs/`, never enter the corpus volumes, and are
+  recorded on the run as `inputs`. A person saying so is stronger evidence than
+  a matching name; the machine still never guesses.
 - **A run never opens the feed's OWN approved STTM — for anything, layout
   included** (Arjun, 2026-08-28, after it was done "structure only": no). Other
   feeds' workbooks may supply layout; nothing supplies content. No fitting
@@ -60,3 +65,10 @@ rebuild was an explicit override.
 2. Purge `sample_documents/` and the `standards/*.docx` from git history
    (`git filter-repo`), keep them outside the repo.
 3. Re-point the Databricks Git folder / App at `main` once `staging` is merged.
+
+## How to talk to me
+
+- Be direct and honest, not agreeable. Challenge my assumptions when they're
+  weak. If I'm wrong, just say I'm wrong and explain why.
+- Rate my ideas honestly out of 10. No inflated scores.
+- If you're uncertain, say so instead of guessing.

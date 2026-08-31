@@ -28,11 +28,14 @@ def resolve_job_id() -> int:
         f"to the job id (a dev-mode deploy prefixes the name).")
 
 
-def start(task: str, run_id: str = "", doc_id: str = "", triggered_by: str = "app") -> tuple[int, str | None]:
+def start(task: str, run_id: str = "", doc_id: str = "", triggered_by: str = "app",
+          frd_file: str = "", vdd_file: str = "") -> tuple[int, str | None]:
     w = storage.client()
     params = {"task": task, "run_id": run_id, "doc_id": doc_id, "triggered_by": triggered_by,
               "provider": settings.PROVIDER, "model": settings.MODEL,
-              "catalog": settings.CATALOG, "schema": settings.SCHEMA}
+              "catalog": settings.CATALOG, "schema": settings.SCHEMA,
+              # empty unless the reviewer uploaded the pair for this run
+              "frd_file": frd_file, "vdd_file": vdd_file}
     waiter = w.jobs.run_now(job_id=resolve_job_id(), job_parameters=params)
     job_run_id = getattr(waiter, "run_id", None) or waiter.response.run_id
     try:

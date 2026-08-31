@@ -121,9 +121,14 @@ export interface RunView {
     unfilled_columns: Record<string, string[]>;
     unpromoted_types: string[];
     inferred_from_example?: number;
+    /** Cells the vendor gave nothing for — marked amber in the workbook. */
+    marked_types?: number;
     unanswered: string[];
   };
   live: Live | null;
+  /** Set when the reviewer uploaded the pair for this run instead of picking a
+   *  corpus FRD — the two files live under the run, not in the volumes. */
+  inputs?: { frd: string; vdd: string | null } | null;
   /** The sources as applied after answers (falls back to the first assessment). */
   sources: SourceEntry[];
   preview: { source: string; file: string | null; n_rows: number; rows: PreviewRow[]; error?: string }[];
@@ -191,12 +196,30 @@ export const useRun = (runId: string | null) =>
 
 export const useStartRun = () =>
   useMutation({
-    mutationFn: (docId: string) =>
+    mutationFn: (body: { doc_id: string; from_run?: string }) =>
       fetchJson<{ run_id: string }>("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doc_id: docId }),
+        body: JSON.stringify(body),
       }),
+  });
+
+/**
+ * Generate from two files chosen right here — no volume, no naming convention.
+ * The pair is stored under the run it starts and used as declared; the corpus
+ * is left alone.
+ */
+export const useUploadPair = () =>
+  useMutation({
+    mutationFn: ({ frd, vdd }: { frd: File; vdd: File }) => {
+      const form = new FormData();
+      form.append("frd", frd);
+      form.append("vdd", vdd);
+      return fetchJson<{ run_id: string; doc_id: string; frd: string; vdd: string }>("/api/runs/upload", {
+        method: "POST",
+        body: form,
+      });
+    },
   });
 
 export const useAnswer = (runId: string) =>
@@ -218,6 +241,8 @@ export const workbookUrl = (runId: string) => `/api/runs/${encodeURIComponent(ru
 export const reportUrl = (runId: string) => `/api/runs/${encodeURIComponent(runId)}/report`;
 export const documentUrl = (docId: string, kind: "frd" | "vdd" | "sttm") =>
   `/api/documents/${encodeURIComponent(docId)}/${kind}`;
+export const runInputUrl = (runId: string, kind: "frd" | "vdd") =>
+  `/api/runs/${encodeURIComponent(runId)}/inputs/${kind}`;
 
 export const STATUS_LABEL: Record<string, string> = {
   extracting: "Reading the documents",
@@ -268,4 +293,5 @@ export const QUESTION_KIND_LABEL: Record<string, string> = {
   project_id: "Conflicting project ids",
   file_pairing: "Which dictionary file is this source?",
   target_gap: "Target not stated",
+  dictionary_types: "The dictionary left data types blank",
 };

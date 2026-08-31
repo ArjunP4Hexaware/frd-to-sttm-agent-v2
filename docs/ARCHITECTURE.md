@@ -15,7 +15,7 @@ Anything else is a **question** for the reviewer or a **blocker**. The agent nev
 
 ## Inputs
 
-Two per feed, paired by name: `FRD_<x>.docx` ↔ `VDD_<x>.xlsx` (`DICT_` is accepted). An approved `STTM_<x>.xlsx` in `reference_sttms` marks the FRD as mapped and is used by any run — never the feed's own — as a **layout** (sheets, band labels, headers, styles). No content is read from it.
+Two per feed. Either **paired by name** in the volumes — `FRD_<x>.docx` ↔ `VDD_<x>.xlsx` (`DICT_` is accepted) — or **declared by a reviewer**, who uploads the two files together (`POST /api/runs/upload`); those land in `output_sttms/<run_id>/inputs/`, are used as given whatever they are called, are recorded on the run as `inputs`, and never enter the corpus. Pairing is still never *guessed*: it is a name match or a person's declaration, never similarity. An approved `STTM_<x>.xlsx` in `reference_sttms` marks the FRD as mapped and is used by any run — never the feed's own — as a **layout** (sheets, band labels, headers, styles). No content is read from it.
 
 The FRD template and VDD template that BSAs and vendors fill in are in `templates/`.
 

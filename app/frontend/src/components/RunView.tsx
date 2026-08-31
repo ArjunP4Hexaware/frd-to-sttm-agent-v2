@@ -12,6 +12,7 @@ import {
   useRender,
   useRun,
   useStartRun,
+  runInputUrl,
   workbookUrl,
   type RunView as Run,
   type SourceEntry,
@@ -60,6 +61,20 @@ export function RunView({ runId, onBack, onOpenRun }: { runId: string; onBack: (
           <span className="mono-id text-xs text-muted-foreground">{r.run_id}</span>
           {r.live?.url && <a href={r.live.url} target="_blank" rel="noreferrer" className="text-xs underline">view the job run ↗</a>}
         </div>
+        {/* An uploaded pair is not in the volumes, so this run is the only way back to it. */}
+        {r.inputs?.frd && (
+          <div className="flex items-center gap-2 flex-wrap mt-1.5">
+            <span className="acfc-chip acfc-chip--quiet">uploaded pair · kept with this run, not in the volumes</span>
+            <a className="mono-id text-xs no-underline underline-offset-2 hover:underline" href={runInputUrl(r.run_id, "frd")}>
+              {r.inputs.frd}
+            </a>
+            {r.inputs.vdd && (
+              <a className="mono-id text-xs no-underline underline-offset-2 hover:underline" href={runInputUrl(r.run_id, "vdd")}>
+                {r.inputs.vdd}
+              </a>
+            )}
+          </div>
+        )}
       </div>
 
       {/* The one sentence that says where this run is. */}
@@ -83,10 +98,21 @@ export function RunView({ runId, onBack, onOpenRun }: { runId: string; onBack: (
           <AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription>
           {!r.render && onOpenRun && (
             <div className="mt-3 flex items-center gap-3">
-              <Button disabled={startAgain.isPending} onClick={() => startAgain.mutate(r.doc_id, { onSuccess: (x) => onOpenRun(x.run_id) })}>
+              <Button
+                disabled={startAgain.isPending}
+                onClick={() =>
+                  startAgain.mutate(
+                    { doc_id: r.doc_id, from_run: r.inputs?.frd ? r.run_id : undefined },
+                    { onSuccess: (x) => onOpenRun(x.run_id) },
+                  )
+                }
+              >
                 {startAgain.isPending ? "Starting…" : "Run again"}
               </Button>
-              <span className="text-sm">Starts a fresh run on the same FRD and dictionary.</span>
+              <span className="text-sm">
+                Starts a fresh run on the same FRD and dictionary
+                {r.inputs?.frd ? " — the pair you uploaded, kept with this run." : "."}
+              </span>
               {startAgain.isError && <span className="text-sm text-[var(--brand-red)]">{(startAgain.error as Error).message}</span>}
             </div>
           )}
@@ -201,6 +227,13 @@ export function RunView({ runId, onBack, onOpenRun }: { runId: string; onBack: (
               {r.render.unanswered.length > 0 && <span className="text-[var(--brand-flag)]">{r.render.unanswered.length} question(s) were still open when this was generated.</span>}
               {(r.render.inferred_from_example ?? 0) > 0 && <span className="text-muted-foreground">{r.render.inferred_from_example} standard-layer types inferred from the vendor's example value (a decimal point → Decimal(10,2)) where the vendor declared String. Stage stays String.</span>}
               {r.render.unpromoted_types.length > 0 && <span className="text-muted-foreground">Vendor types with no promotion rule (kept as String in standard): {r.render.unpromoted_types.join(", ")}.</span>}
+              {(r.render.marked_types ?? 0) > 0 && (
+                <span className="text-[var(--brand-flag)]">
+                  {r.render.marked_types} column(s) had neither a vendor data type nor an example value to read one
+                  from — they carry the ACFC default and are marked amber and italic in the workbook, with a legend.
+                  Confirm those before the workbook is used.
+                </span>
+              )}
               {Object.entries(r.render.unfilled_columns ?? {}).map(([sheet, cols]) => (
                 <span key={sheet} className="text-muted-foreground">{sheet}: template columns left empty because no input supplies them — {cols.join(", ")}.</span>
               ))}

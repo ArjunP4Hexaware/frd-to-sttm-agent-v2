@@ -99,3 +99,75 @@ def test_upload_routes_by_kind(api, data_root):
     assert r.status_code == 201 and (data_root / "vdds" / "VDD_New.xlsx").is_file()
     r = client.post("/api/documents/upload?kind=frd", files={"file": ("FRD_New.xlsx", b"x", "application/octet-stream")})
     assert r.status_code == 400
+
+
+def test_upload_pair_generates_without_the_corpus(api, data_root, tmp_path):
+    """Two files a reviewer pairs by hand: names that would never match, and
+    neither file added to the volumes."""
+    from conftest import make_frd, make_vdd
+    client, fake = api
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    frd = make_frd(loose / "Member Eligibility v3.docx")
+    vdd = make_vdd(loose / "acme_columns.xlsx")
+    from frdsttm.corpus import name_key
+    assert name_key(frd.name) != name_key(vdd.name)      # nothing would pair these
+
+    r = client.post("/api/runs/upload", files={
+        "frd": (frd.name, frd.read_bytes(), "application/octet-stream"),
+        "vdd": (vdd.name, vdd.read_bytes(), "application/octet-stream")})
+    assert r.status_code == 201
+    run_id, doc_id = r.json()["run_id"], r.json()["doc_id"]
+    assert doc_id == "Member Eligibility v3"
+
+    run = _wait(client, run_id)
+    assert run["status"] == "rendered" and fake.calls == 1
+    assert run["inputs"] == {"frd": frd.name, "vdd": vdd.name}
+    assert run["vdd"]["file"] == vdd.name and run["preview"][0]["n_rows"] == 7
+    assert client.get(f"/api/runs/{run_id}/workbook").content[:2] == b"PK"
+
+    # the pair lives with the run, and the corpus is untouched
+    inputs = data_root / "output_sttms" / run_id / "inputs"
+    assert (inputs / frd.name).is_file() and (inputs / vdd.name).is_file()
+    assert not (data_root / "frds" / frd.name).exists()
+    assert not (data_root / "vdds" / vdd.name).exists()
+    assert client.get("/api/documents").json()["documents"] == [
+        d for d in client.get("/api/documents").json()["documents"] if d["doc_id"] == "FRD_Claims_Intake"]
+
+    # and the reviewer can get back what they uploaded
+    assert client.get(f"/api/runs/{run_id}/inputs/vdd").content[:2] == b"PK"
+    assert client.get(f"/api/runs/{run_id}/inputs/frd").status_code == 200
+
+
+def test_upload_pair_refuses_the_wrong_file_types(api, data_root):
+    client, _ = api
+    def post(frd_name, vdd_name):
+        return client.post("/api/runs/upload", files={
+            "frd": (frd_name, b"PK\x03\x04", "application/octet-stream"),
+            "vdd": (vdd_name, b"PK\x03\x04", "application/octet-stream")})
+    assert post("FRD.xlsx", "VDD.xlsx").status_code == 400        # an FRD is not a workbook
+    assert post("FRD.docx", "VDD.docx").status_code == 400        # a dictionary is not a document
+    assert not (data_root / "output_sttms").exists() or \
+        not any(p.name != ".keep" for p in (data_root / "output_sttms").iterdir())
+
+
+def test_rerun_uses_the_runs_own_uploaded_pair(api, data_root, tmp_path):
+    from conftest import make_frd, make_vdd
+    client, _ = api
+    loose = tmp_path / "loose2"
+    loose.mkdir()
+    frd = make_frd(loose / "Pharmacy FRD.docx")
+    vdd = make_vdd(loose / "pharma_dict.xlsx")
+    first = client.post("/api/runs/upload", files={
+        "frd": (frd.name, frd.read_bytes(), "application/octet-stream"),
+        "vdd": (vdd.name, vdd.read_bytes(), "application/octet-stream")}).json()["run_id"]
+    _wait(client, first)
+
+    # doc_id alone is not in the index — only from_run can find the pair
+    assert client.post("/api/runs", json={"doc_id": "Pharmacy FRD"}).status_code == 404
+    r = client.post("/api/runs", json={"doc_id": "Pharmacy FRD", "from_run": first})
+    assert r.status_code == 201
+    second = r.json()["run_id"]
+    run = _wait(client, second)
+    assert second != first and run["status"] == "rendered"
+    assert run["inputs"] == {"frd": frd.name, "vdd": vdd.name}

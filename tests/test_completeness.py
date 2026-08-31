@@ -159,3 +159,90 @@ def test_apply_remove_drops_the_value(tmp_path):
     c.record_answer(a, q["id"], c.REMOVE)
     c.apply_answers(spec, a)
     assert spec["feeds"][0]["stage_target"]["tables"] == []
+
+
+# --------------------------------------------------------------------------- #
+# a dictionary that is not perfect
+# --------------------------------------------------------------------------- #
+def _blank_types_vdd(tmp_path, name="vblank.xlsx"):
+    """The vendor filled in the columns but left two data types out."""
+    return parse_dictionary_workbook(make_vdd(tmp_path / name, files={
+        "claims_YYYYMMDD.csv": [
+            ("CLAIM_ID", "int", "Y", "N", "Claim identifier", "", "1001", ""),
+            ("MEMBER_ID", "", "Y", "Y", "Member identifier", "", "", ""),
+            ("AMOUNT", "", "N", "N", "Billed amount", "", "", ""),
+        ]}))
+
+
+def test_missing_datatypes_is_a_question_not_a_silent_default(tmp_path):
+    vdd = _blank_types_vdd(tmp_path)
+    assert any(p["kind"] == "missing_datatypes" for p in vdd["problems"])
+    a = c.assess(spec_for(), _content(tmp_path), vdd, "vblank.xlsx")
+    q = [x for x in a["questions"] if x["kind"] == "dictionary_types"]
+    assert len(q) == 1 and a["status"] == c.STATUS_NEEDS_INPUT
+    assert sorted(q[0]["context"]["columns"]) == ["AMOUNT", "MEMBER_ID"]
+    assert q[0]["options"] == [c.USE_DEFAULT_TYPE, c.LEAVE_TYPE_BLANK]
+    # and it is no longer buried in the notes
+    assert not any("no datatype" in n for n in a["notes"])
+
+
+def test_blank_type_answer_changes_the_workbook(tmp_path):
+    from frdsttm.render import preview_rows
+    vdd = _blank_types_vdd(tmp_path)
+    content = _content(tmp_path)
+
+    def rows_for(answer):
+        a = c.assess(spec_for(), content, vdd, "vblank.xlsx")
+        q = next(x for x in a["questions"] if x["kind"] == "dictionary_types")
+        c.record_answer(a, q["id"], answer)
+        spec = json.loads(json.dumps(spec_for()))
+        applied = c.apply_answers(spec, a)
+        prev = preview_rows(spec, a["sources"], vdd, applied["pairing_override"],
+                            blank_type_sheets=applied["blank_type_sheets"])
+        return {r["source_column"]: r["standard"]["datatype"]
+                for r in prev[0]["rows"] if not r["audit"]}
+
+    kept = rows_for(c.USE_DEFAULT_TYPE)
+    blanked = rows_for(c.LEAVE_TYPE_BLANK)
+    assert kept["MEMBER_ID"] == kept["AMOUNT"] != ""          # today's silent default
+    assert blanked["MEMBER_ID"] == blanked["AMOUNT"] == ""    # the gap is visible instead
+    assert kept["CLAIM_ID"] == blanked["CLAIM_ID"] != ""      # a real vendor type is untouched
+
+
+def test_empty_field_sheet_on_a_paired_source_blocks(tmp_path):
+    """A source paired to a sheet with no columns would render only audit rows."""
+    vdd = parse_dictionary_workbook(make_vdd(tmp_path / "vempty.xlsx", files={
+        "claims_YYYYMMDD.csv": []}))
+    a = c.assess(spec_for(), _content(tmp_path), vdd, "vempty.xlsx")
+    assert a["status"] == c.STATUS_CANNOT
+    assert {b["kind"] for b in a["blockers"]} & {"field_sheet_empty", "empty_dictionary"}
+
+
+def test_a_problem_on_an_unused_sheet_stays_a_note(tmp_path):
+    """The same gap is only worth saying when no source is paired to it. Two
+    dictionary files, only one named by the FRD — a single file would be paired
+    automatically, so the second file is what makes the sheet genuinely unused."""
+    vdd = parse_dictionary_workbook(make_vdd(tmp_path / "vunused.xlsx", files={
+        "claims_YYYYMMDD.csv": [
+            ("CLAIM_ID", "int", "Y", "N", "Claim identifier", "", "1001", ""),
+        ],
+        "roster_YYYYMMDD.csv": [                       # nothing maps this one
+            ("ROSTER_ID", "", "Y", "N", "Roster identifier", "", "", ""),
+        ]}))
+    a = c.assess(spec_for(), _content(tmp_path), vdd, "vunused.xlsx")
+    assert [s["file"] for s in a["sources"]] == ["claims_YYYYMMDD.csv"]
+    assert not [x for x in a["questions"] if x["kind"] == "dictionary_types"]
+    assert any("datatype" in n for n in a["notes"])
+
+
+def test_descriptions_and_flags_stay_notes(tmp_path):
+    """Blank passes through as blank — no answer would write a different workbook."""
+    vdd = parse_dictionary_workbook(make_vdd(tmp_path / "vdesc.xlsx", files={
+        "claims_YYYYMMDD.csv": [
+            ("CLAIM_ID", "int", "", "", "", "", "1001", ""),
+            ("MEMBER_ID", "varchar", "", "", "", "", "M1", ""),
+        ]}))
+    a = c.assess(spec_for(), _content(tmp_path), vdd, "vdesc.xlsx")
+    assert not [x for x in a["questions"] if x["kind"] == "dictionary_types"]
+    assert a["status"] == c.STATUS_READY, a["questions"]
+    assert len([n for n in a["notes"] if n.startswith("dictionary:")]) >= 3

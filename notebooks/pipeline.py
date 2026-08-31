@@ -6,7 +6,7 @@
 # MAGIC
 # MAGIC | task | reads | writes |
 # MAGIC |---|---|---|
-# MAGIC | `extract` | `frds/<doc_id>.docx`, `vdds/VDD_<doc_id>.xlsx` | `output_sttms/<run_id>/run.json` (+ the .xlsx when nothing is missing) |
+# MAGIC | `extract` | `frds/<doc_id>.docx`, `vdds/VDD_<doc_id>.xlsx` — or the pair named by `frd_file`/`vdd_file` under `output_sttms/<run_id>/inputs/` | `output_sttms/<run_id>/run.json` (+ the .xlsx when nothing is missing) |
 # MAGIC | `render`  | `output_sttms/<run_id>/run.json` (with the reviewer's answers) | `output_sttms/<run_id>/<doc_id>.xlsx` |
 # MAGIC | `reindex` | the four volumes | `reference_sttms/corpus_index.json` + table `frd_pairing` |
 # MAGIC
@@ -52,6 +52,10 @@ CATALOG = _param("catalog", "arjun_workspace")
 SCHEMA = _param("schema", "sttm_agent")
 RUN_ID = _param("run_id", "")
 DOC_ID = _param("doc_id", "")
+# A pair the reviewer uploaded for this run, under output_sttms/<run_id>/inputs/.
+# Empty for a corpus run, which pairs FRD to VDD by name as always.
+FRD_FILE = _param("frd_file", "")
+VDD_FILE = _param("vdd_file", "")
 PROVIDER = _param("provider", "databricks")
 MODEL = _param("model", "claude-sonnet-5")
 TRIGGERED_BY = _param("triggered_by", "manual")
@@ -69,7 +73,8 @@ print(f"task={TASK} run_id={RUN_ID} doc_id={DOC_ID}\n{paths}")
 if TASK == "extract":
     assert RUN_ID and DOC_ID, "extract needs run_id and doc_id"
     run = pipeline.run_extract(paths, RUN_ID, DOC_ID, provider=PROVIDER, model=MODEL,
-                               triggered_by=TRIGGERED_BY)
+                               triggered_by=TRIGGERED_BY,
+                               frd_file=FRD_FILE or None, vdd_file=VDD_FILE or None)
     print(pipeline.report_md(run))
 elif TASK == "render":
     assert RUN_ID, "render needs run_id"

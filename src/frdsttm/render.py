@@ -73,12 +73,18 @@ def _target(layer_spec: dict, table: str, column: str, datatype: str) -> dict:
             "table": table, "column": column, "datatype": datatype}
 
 
-def build_rows(source: dict, feed: dict, vdd_fields: list[dict]) -> tuple[list[dict], dict]:
-    """The rendered rows for one source. Returns (rows, notes)."""
+def build_rows(source: dict, feed: dict, vdd_fields: list[dict],
+               leave_type_blank: bool = False) -> tuple[list[dict], dict]:
+    """The rendered rows for one source. Returns (rows, notes).
+
+    `leave_type_blank` is the reviewer's answer to a dictionary that left data
+    types out: write nothing in the standard type rather than the ACFC default,
+    so the gap is visible in the workbook instead of reading like a real type.
+    """
     stage, standard = source["layers"]["stage"], source["layers"]["standard"]
     stage_dt = std.stage_default_type()
     rows, unpromoted, segments = [], set(), []
-    n_from_example = 0
+    n_from_example = n_blank_types = 0
     for f in vdd_fields:
         seg = f.get("segment") or ""
         if seg not in segments:
@@ -97,11 +103,14 @@ def build_rows(source: dict, feed: dict, vdd_fields: list[dict]) -> tuple[list[d
                 promoted, origin = from_example, "example value"
                 n_from_example += 1
         if promoted is None:
-            origin = "default"
+            origin = "blank (vendor gave no type)" if leave_type_blank else "default"
+            n_blank_types += leave_type_blank
         r = _row(f)
         r["type_origin"] = origin
+        r["type_from_vendor"] = bool(f.get("datatype"))
+        std_dt = "" if (promoted is None and leave_type_blank) else (promoted or stage_dt)
         r["stage"] = _target(stage, stage_tbl, f.get("name") or "", stage_dt)
-        r["standard"] = _target(standard, std_tbl, f.get("name") or "", promoted or stage_dt)
+        r["standard"] = _target(standard, std_tbl, f.get("name") or "", std_dt)
         rows.append(r)
     n_audit = 0
     for seg in segments or [""]:
@@ -117,7 +126,8 @@ def build_rows(source: dict, feed: dict, vdd_fields: list[dict]) -> tuple[list[d
             rows.append(r)
             n_audit += 1
     return rows, {"n_rows": len(rows), "n_audit_rows": n_audit, "inferred_from_example": n_from_example,
-                  "unpromoted_types": sorted(unpromoted), "segments": [s for s in segments if s]}
+                  "unpromoted_types": sorted(unpromoted), "blank_types": n_blank_types,
+                  "segments": [s for s in segments if s]}
 
 
 # --------------------------------------------------------------------------- #
@@ -161,6 +171,35 @@ def _source_level_text(placement):
 _HDR_FILL = PatternFill("solid", fgColor="D9E1F2")
 _SEC_FILL = PatternFill("solid", fgColor="BDD7EE")
 _BOLD = Font(bold=True)
+#: A data type nothing in the vendor's document supports: neither a type they
+#: stated nor an example value to read one off, so it is the standards' default.
+#: It reads exactly like a real type on the page, so it is marked where the
+#: reviewer works rather than only in run.json.
+#:
+#: A type refined FROM the vendor's example (they said "String", the example
+#: "0.5" makes it Decimal) is NOT marked — that is still grounded in their
+#: document, and marking it would flag a third of a good workbook. It is counted
+#: as `inferred_from_example` in the run instead.
+_INFERRED_FILL = PatternFill("solid", fgColor="FFF2CC")
+_UNSOURCED_ORIGINS = ("default", "blank (vendor gave no type)")
+TYPE_LEGEND = ("Amber italic DataType = the vendor gave neither a data type nor an example "
+               "value for this column, so the ACFC default applies. Confirm before use.")
+
+
+def _mark_inferred(ws, row: int, col: int) -> None:
+    cell = ws.cell(row, col)
+    cell.fill = _INFERRED_FILL
+    font = copy(cell.font)
+    font.italic = True
+    cell.font = font
+
+
+def _type_marks(r: dict) -> tuple[bool, bool]:
+    """(mark the source cell, mark the standard cell) for one row. Audit rows
+    carry no vendor type and are never marked — they are the standards' own."""
+    if r.get("audit") or r.get("type_origin") is None:
+        return False, False
+    return not r.get("type_from_vendor"), r["type_origin"] in _UNSOURCED_ORIGINS
 _SRC_HEADERS = ["Database column Name", "NULL CHECK", "Description", "Sample Value",
                 "DataType", "PHI Field", "Mandatory Field", "Comment"]
 _TGT_HEADERS = ["Schema", "TableName", "ColumnName", "DataType"]
@@ -175,6 +214,19 @@ def _style_row(ws, r, n_cols, fill):
 
 def _yn(v, yes="Yes", no="No"):
     return "" if v is None else (yes if v else no)
+
+
+def _append_legend(wb, sheet_name: str) -> None:
+    """One line under FILE_DETAILS saying what the amber cells mean. Without it
+    the marking is a colour nobody can interpret."""
+    if sheet_name not in wb.sheetnames:
+        return
+    ws = wb[sheet_name]
+    cell = ws.cell(ws.max_row + 2, 1, TYPE_LEGEND)
+    font = copy(cell.font)
+    font.italic = True
+    cell.font = font
+    cell.fill = _INFERRED_FILL
 
 
 def _render_sheet_per_table(spec, units, out_path):
@@ -194,6 +246,7 @@ def _render_sheet_per_table(spec, units, out_path):
     vh.append(["0.1", datetime.now(timezone.utc).date().isoformat(), GENERATOR,
                f"Auto-generated from {spec.get('source_file', 'FRD')}"])
     n_src, n_tgt = len(_SRC_HEADERS), len(_TGT_HEADERS)
+    n_marked = 0
     for u in units:
         rows, placement = u["rows"], u["placement"]
         if not rows:
@@ -210,22 +263,34 @@ def _render_sheet_per_table(spec, units, out_path):
         for c, h in enumerate(headers, 1):
             ws.cell(2, c, h)
         _style_row(ws, 2, n_cols, _HDR_FILL)
+        src_dt = _SRC_HEADERS.index("DataType") + 1
+        std_dt = n_src + n_tgt + 1 + _TGT_HEADERS.index("DataType") + 1
         for r in rows:
             comment = "\n".join(placement["by_column"].get(r["source_column"], [])
                                 + ([r["comment"]] if r.get("comment") else []))
+            # The Source band transcribes the dictionary: a type the vendor did
+            # not give is blank there, never the default dressed up as theirs.
             line = [r["source_column"], _yn(r["nullable"], "NULL", "Not NULL"), r["description"],
-                    r["sample"], r["datatype"] or "String", _yn(r["phi"]), _yn(r["mandatory"]), comment,
+                    r["sample"], r["datatype"], _yn(r["phi"]), _yn(r["mandatory"]), comment,
                     r["stage"]["schema"], r["stage"]["table"], r["stage"]["column"], r["stage"]["datatype"],
                     "", r["standard"]["schema"], r["standard"]["table"], r["standard"]["column"],
                     r["standard"]["datatype"]]
             if recycle:
                 line.append(f"Y ( {recycle['text']} )" if recycle["column"] == r["source_column"] else "")
             ws.append(line)
+            mark_src, mark_std = _type_marks(r)
+            if mark_src:
+                _mark_inferred(ws, ws.max_row, src_dt)
+            if mark_std:
+                _mark_inferred(ws, ws.max_row, std_dt)
+                n_marked += 1
         ws.freeze_panes = "A3"
         for c in range(1, n_cols + 1):
             ws.column_dimensions[get_column_letter(c)].width = 22
+    if n_marked:
+        _append_legend(wb, "FILE_DETAILS")
     wb.save(out_path)
-    return {"dialect": "sheet_per_table", "layout_from": None}
+    return {"dialect": "sheet_per_table", "layout_from": None, "marked_types": n_marked}
 
 
 def _render_single_sheet(spec, units, out_path):
@@ -257,6 +322,7 @@ def _render_single_sheet(spec, units, out_path):
              "Comments", "Business Rule"]
     tgt_h = ["Catalog", "Schema", "TableName", "ColumnName", "DataType", "Mandatory\nColumn",
              "Primary Key", "Field Description"]
+    n_marked = 0
     label_r = ws.max_row + 1
     ws.cell(label_r, 1, "Source Layout")
     ws.cell(label_r, len(src_h) + 1, "Stage Layer")
@@ -268,18 +334,32 @@ def _render_single_sheet(spec, units, out_path):
     _style_row(ws, label_r + 1, n_cols, _HDR_FILL)
     for idx, r in enumerate(rows, 1):
         def tgt(t):
-            return [t["catalog"], t["schema"], t["table"], t["column"], t["datatype"] or "String",
+            # no `or "String"`: an empty type is the reviewer's answered choice
+            # to leave the gap visible, not something to backfill.
+            return [t["catalog"], t["schema"], t["table"], t["column"], t["datatype"],
                     _yn(r["mandatory"], "Yes", ""), "", r["description"]]
         rule = "\n".join(placement["by_column"].get(r["source_column"], [])
                          + ([r["business_rule"]] if r.get("business_rule") else []))
         ws.append([idx, r["source_column"], r["datatype"], r["length"], r["fixed_length"],
                    r["fixed_start"], r["fixed_end"], r["segment"], _yn(r["phi"], "Yes", ""),
                    r["description"] or r["comment"], rule] + tgt(r["stage"]) + tgt(r["standard"]))
+        mark_src, mark_std = _type_marks(r)
+        if mark_src:
+            _mark_inferred(ws, ws.max_row, src_h.index("Data Type") + 1)
+        if mark_std:
+            _mark_inferred(ws, ws.max_row,
+                           len(src_h) + len(tgt_h) + tgt_h.index("DataType") + 1)
+            n_marked += 1
     ws.freeze_panes = ws.cell(label_r + 2, 1).coordinate
     for c in range(1, n_cols + 1):
         ws.column_dimensions[get_column_letter(c)].width = 18
+    if n_marked:
+        cell = ws.cell(ws.max_row + 2, 1, TYPE_LEGEND)
+        font = copy(cell.font)
+        font.italic = True
+        cell.font, cell.fill = font, _INFERRED_FILL
     wb.save(out_path)
-    return {"dialect": "single_sheet", "layout_from": None}
+    return {"dialect": "single_sheet", "layout_from": None, "marked_types": n_marked}
 
 
 # --------------------------------------------------------------------------- #
@@ -303,7 +383,7 @@ def _field_value(r, role, placement, sheet_has_comment):
             own = [] if sheet_has_comment else rules
             return "\n".join(own + ([r["business_rule"]] if r.get("business_rule") else []))
         if key == "datatype":
-            return r.get("datatype") or "String"
+            return r.get("datatype") or ""      # the vendor's word, or nothing
         return r.get(key, "") or ""
     if kind in ("stage", "standard"):
         return (r.get(kind) or {}).get(key) or ""
@@ -313,7 +393,9 @@ def _field_value(r, role, placement, sheet_has_comment):
     return ""
 
 
-def _fill_sheet(ws, sheet_layout, rows, placement):
+def _fill_sheet(ws, sheet_layout, rows, placement) -> int:
+    """Write the rows into an approved workbook's own columns. Returns how many
+    standard-type cells were marked as not the vendor's word."""
     first, width, cols = sheet_layout["first_data_row"], sheet_layout["width"], sheet_layout["columns"]
     styles = None
     if ws.max_row >= first:
@@ -322,6 +404,11 @@ def _fill_sheet(ws, sheet_layout, rows, placement):
                    ws.cell(first, c).number_format) for c in range(1, width + 1)]
         ws.delete_rows(first, ws.max_row - first + 1)
     has_comment = any(c["role"] == ("source", "comment") for c in cols)
+    dt_col = {("source", "datatype"): None, ("standard", "datatype"): None}
+    for c in cols:
+        if c["role"] in dt_col and dt_col[c["role"]] is None:
+            dt_col[c["role"]] = c["index"] + 1
+    n_marked = 0
     for n, r in enumerate(rows, 1):
         rr = first + n - 1
         for c in cols:
@@ -333,6 +420,14 @@ def _fill_sheet(ws, sheet_layout, rows, placement):
             for ci, (fo, fi, bo, al, nf) in enumerate(styles, 1):
                 cell = ws.cell(rr, ci)
                 cell.font, cell.fill, cell.border, cell.alignment, cell.number_format = fo, fi, bo, al, nf
+        # after the layout's own styles are restored, or the mark is overwritten
+        mark_src, mark_std = _type_marks(r)
+        if mark_src and dt_col[("source", "datatype")]:
+            _mark_inferred(ws, rr, dt_col[("source", "datatype")])
+        if mark_std and dt_col[("standard", "datatype")]:
+            _mark_inferred(ws, rr, dt_col[("standard", "datatype")])
+            n_marked += 1
+    return n_marked
 
 
 def _render_into_sheet_per_table(spec, units, layout, out_path):
@@ -341,7 +436,7 @@ def _render_into_sheet_per_table(spec, units, layout, out_path):
     objs = {n: wb[n] for n in sheets if n in wb.sheetnames}
     lead = next(iter(sheets))
     info = {"dialect": "sheet_per_table", "layout_from": Path(layout["path"]).name,
-            "sheets": {}, "unfilled_columns": {}, "removed_sheets": []}
+            "sheets": {}, "unfilled_columns": {}, "removed_sheets": [], "marked_types": 0}
     fd = layout.get("file_details")
     if fd and "FILE_DETAILS" in wb.sheetnames:
         ws = wb["FILE_DETAILS"]
@@ -379,7 +474,7 @@ def _render_into_sheet_per_table(spec, units, layout, out_path):
             ws = objs[src]
             used.add(src)
         ws.title = title if title not in wb.sheetnames or wb[title] is ws else f"{title[:28]}-{i}"
-        _fill_sheet(ws, sheets[src], u["rows"], u["placement"])
+        info["marked_types"] += _fill_sheet(ws, sheets[src], u["rows"], u["placement"])
         info["sheets"][ws.title] = len(u["rows"])
         if sheets[src]["unmapped"]:
             info["unfilled_columns"][ws.title] = sheets[src]["unmapped"]
@@ -387,6 +482,8 @@ def _render_into_sheet_per_table(spec, units, layout, out_path):
         if name not in used and name in objs:
             wb.remove(objs[name])
             info["removed_sheets"].append(name)
+    if info["marked_types"]:
+        _append_legend(wb, "FILE_DETAILS")
     wb.save(out_path)
     return info
 
@@ -399,7 +496,7 @@ def _render_into_single_sheet(spec, units, layout, out_path):
     info = {"dialect": "single_sheet", "layout_from": Path(layout["path"]).name,
             "sheets": {layout["sheet"]: len(u["rows"])},
             "unfilled_columns": {layout["sheet"]: layout["unmapped"]} if layout["unmapped"] else {},
-            "removed_sheets": []}
+            "removed_sheets": [], "marked_types": 0}
     for m in layout["meta_rows"]:
         field, val = m["field"], None
         if field == "file_name_patterns":
@@ -417,7 +514,14 @@ def _render_into_single_sheet(spec, units, layout, out_path):
     leftover = _source_level_text(placement)
     if leftover:
         info["source_level_rules"] = leftover
-    _fill_sheet(ws, layout, u["rows"], placement)
+    info["marked_types"] = _fill_sheet(ws, layout, u["rows"], placement)
+    if info["marked_types"]:
+        # no FILE_DETAILS in this dialect: the legend goes below the last row,
+        # which leaves the borrowed layout's own structure untouched.
+        cell = ws.cell(ws.max_row + 2, 1, TYPE_LEGEND)
+        font = copy(cell.font)
+        font.italic = True
+        cell.font, cell.fill = font, _INFERRED_FILL
     # Every other sheet carries the template feed's own content (a reference
     # mapping, a lookup) — structure is borrowed, content never is.
     for name in wb.sheetnames:
@@ -432,22 +536,27 @@ def _render_into_single_sheet(spec, units, layout, out_path):
 # entry point
 # --------------------------------------------------------------------------- #
 def render_workbook(spec: dict, sources: list[dict], vdd: dict, out_path: str | Path,
-                    layout: dict | None = None, pairing_override: dict | None = None) -> dict:
+                    layout: dict | None = None, pairing_override: dict | None = None,
+                    blank_type_sheets: "set | list | None" = None) -> dict:
     """Build every source's rows and write the workbook. Returns render info
     (dialect, layout used, rows per sheet, unfilled template columns, rule
     placement, unpromoted vendor types)."""
     override = pairing_override or {}
     files_by_pattern = {f["file_name_pattern"]: f for f in vdd.get("files", [])}
-    units, notes = [], {"unpromoted_types": set(), "rule_placement": [], "inferred_from_example": 0}
+    blank_sheets = set(blank_type_sheets or ())
+    units, notes = [], {"unpromoted_types": set(), "rule_placement": [], "inferred_from_example": 0,
+                        "blank_types": 0}
     for s in sources:
         feed = spec["feeds"][s["feed_index"]]
         pattern = override.get(s["feed_index"]) or s.get("file")
         sheet = files_by_pattern.get(pattern, {}).get("field_sheet") if pattern else None
         fields = vdd.get("fields", {}).get(sheet, []) if sheet else []
-        rows, rn = build_rows(s, feed, fields) if fields else ([], {"unpromoted_types": []})
+        rows, rn = build_rows(s, feed, fields, sheet in blank_sheets) if fields \
+            else ([], {"unpromoted_types": []})
         placement = place_rules(feed, rows)
         notes["unpromoted_types"].update(rn.get("unpromoted_types", []))
         notes["inferred_from_example"] += rn.get("inferred_from_example", 0)
+        notes["blank_types"] += rn.get("blank_types", 0)
         notes["rule_placement"].append({"source": s["feed_name"], **placement})
         units.append({"source": s, "feed": feed, "rows": rows, "placement": placement, "file": pattern})
     if not any(u["rows"] for u in units):
@@ -466,21 +575,24 @@ def render_workbook(spec: dict, sources: list[dict], vdd: dict, out_path: str | 
     info["files_per_source"] = {u["source"]["feed_name"]: u["file"] for u in units}
     info["unpromoted_types"] = sorted(notes["unpromoted_types"])
     info["inferred_from_example"] = notes["inferred_from_example"]
+    info["blank_types"] = notes["blank_types"]
     info["rule_placement"] = notes["rule_placement"]
     return info
 
 
 def preview_rows(spec: dict, sources: list[dict], vdd: dict, pairing_override: dict | None = None,
-                 limit: int = 400) -> list[dict]:
+                 limit: int = 400, blank_type_sheets: "set | list | None" = None) -> list[dict]:
     """The same rows the workbook gets, for the app's table (no file written)."""
     override = pairing_override or {}
+    blank_sheets = set(blank_type_sheets or ())
     files_by_pattern = {f["file_name_pattern"]: f for f in vdd.get("files", [])}
     out = []
     for s in sources:
         pattern = override.get(s["feed_index"]) or s.get("file")
         sheet = files_by_pattern.get(pattern, {}).get("field_sheet") if pattern else None
         fields = vdd.get("fields", {}).get(sheet, []) if sheet else []
-        rows, _ = build_rows(s, spec["feeds"][s["feed_index"]], fields) if fields else ([], {})
+        rows, _ = build_rows(s, spec["feeds"][s["feed_index"]], fields, sheet in blank_sheets) \
+            if fields else ([], {})
         out.append({"source": s["feed_name"], "file": pattern, "n_rows": len(rows),
                     "rows": [{"source_column": r["source_column"], "datatype": r["datatype"],
                               "stage": r["stage"], "standard": r["standard"], "audit": r["audit"],

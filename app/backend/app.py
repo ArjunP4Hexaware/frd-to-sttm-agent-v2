@@ -156,6 +156,9 @@ async def upload_document(kind: str, file: UploadFile = File(...)) -> dict:
 # --------------------------------------------------------------------------- #
 class StartRun(BaseModel):
     doc_id: str
+    #: Re-run the pair a reviewer uploaded for an earlier run (that run's
+    #: doc_id is not in the corpus index, so `doc_id` alone cannot find it).
+    from_run: str | None = None
 
 
 class Answer(BaseModel):
@@ -168,8 +171,51 @@ def list_runs() -> dict:
     return {"runs": runs.list_all()}
 
 
+@app.post("/api/runs/upload", status_code=201)
+async def upload_pair(request: Request, frd: UploadFile = File(...),
+                      vdd: UploadFile = File(...)) -> dict:
+    """Generate an STTM from two files uploaded here and now, without adding
+    them to the corpus.
+
+    The pair is written under this run's own `inputs/` and used exactly as
+    given — the `FRD_<x>` / `VDD_<x>` naming does not have to hold, because a
+    person, not a name key, said these two belong together. That is a stronger
+    declaration than a matching name, and it is recorded on the run.
+    """
+    frd_name, vdd_name = Path(frd.filename or "").name, Path(vdd.filename or "").name
+    if not frd_name or Path(frd_name).suffix.lower() not in SUPPORTED_SUFFIXES:
+        raise HTTPException(status_code=400,
+                            detail=f"an FRD must be one of {', '.join(sorted(SUPPORTED_SUFFIXES))} — got {frd_name!r}")
+    if not vdd_name or Path(vdd_name).suffix.lower() != ".xlsx":
+        raise HTTPException(status_code=400,
+                            detail=f"a vendor data dictionary must be .xlsx — got {vdd_name!r}")
+    if runs.busy():
+        raise HTTPException(status_code=409, detail="a run is already in progress — one at a time")
+    # The id is reserved first: the files have to be under <run_id>/inputs/
+    # before the run (or, in databricks mode, the job) can open them.
+    run_id = runs.allocate_run_id()
+    storage.push_run_input(run_id, frd_name, await frd.read())
+    storage.push_run_input(run_id, vdd_name, await vdd.read())
+    doc_id = Path(frd_name).stem
+    try:
+        runs.start(doc_id, by=_who(request), run_id=run_id, frd_file=frd_name, vdd_file=vdd_name)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"run_id": run_id, "doc_id": doc_id, "frd": frd_name, "vdd": vdd_name}
+
+
 @app.post("/api/runs", status_code=201)
 def start_run(body: StartRun, request: Request) -> dict:
+    if body.from_run:
+        try:
+            run_id = runs.rerun_uploaded(body.from_run, by=_who(request))
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"run_id": run_id, "doc_id": body.doc_id}
     index = _index()
     entry = (index or {"documents": {}})["documents"].get(body.doc_id)
     if entry is None:
@@ -233,6 +279,20 @@ def workbook(run_id: str):
     if path is None or not path.is_file():
         raise HTTPException(status_code=404, detail="no workbook has been generated for this run")
     return FileResponse(str(path), filename=path.name, media_type=_XLSX)
+
+
+@app.get("/api/runs/{run_id}/inputs/{kind}")
+def run_input(run_id: str, kind: str):
+    """The FRD or the dictionary a reviewer uploaded for this run — the corpus
+    has no copy, so this is the only way back to it."""
+    if kind not in ("frd", "vdd"):
+        raise HTTPException(status_code=404, detail="kind must be frd | vdd")
+    name = ((_run_or_404(run_id).get("inputs") or {}).get(kind))
+    path = settings.PATHS.inputs_dir(run_id) / name if name else None
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail=f"this run has no uploaded {kind}")
+    return FileResponse(str(path), filename=path.name,
+                        media_type=_XLSX if path.suffix == ".xlsx" else _DOCX)
 
 
 @app.get("/api/runs/{run_id}/report")

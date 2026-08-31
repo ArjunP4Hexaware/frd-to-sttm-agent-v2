@@ -132,3 +132,101 @@ def test_standard_type_from_example_value_when_vendor_says_string(tmp_path):
     assert by["AMT_D"]["standard"]["datatype"] == "Decimal(10,2)"
     assert all(r["stage"]["datatype"] == "String" for r in rows if not r["audit"])   # stage is never inferred
     assert notes["inferred_from_example"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# a type the vendor never gave must not read like one they did
+# --------------------------------------------------------------------------- #
+_NO_TYPE = {"claims_YYYYMMDD.csv": [
+    ("CLAIM_ID", "int", "Y", "N", "Claim identifier", "", "1001", ""),
+    ("MEMBER_ID", "", "Y", "Y", "Member identifier", "", "", ""),   # vendor gave nothing
+]}
+
+
+def _amber(cell):
+    return (cell.fill is not None and cell.fill.fgColor.rgb == render._INFERRED_FILL.fgColor.rgb
+            and bool(cell.font.italic))
+
+
+def _two_sources(tmp_path):
+    """Two feeds — what makes render_workbook choose the sheet_per_table dialect."""
+    import json
+    spec = spec_for()
+    second = json.loads(json.dumps(spec["feeds"][0]))
+    second.update(feed_name="Roster", file_name_patterns=["roster_YYYYMMDD.csv"],
+                  validation_rules=[],
+                  stage_target={**second["stage_target"], "tables": ["rst_roster_stg"]},
+                  standard_target={**second["standard_target"], "tables": ["rst_roster"]})
+    spec["feeds"].append(second)
+    vdd = parse_dictionary_workbook(make_vdd(tmp_path / "v2.xlsx", {
+        "claims_YYYYMMDD.csv": _NO_TYPE["claims_YYYYMMDD.csv"],
+        "roster_YYYYMMDD.csv": [("ROSTER_ID", "int", "Y", "N", "Roster id", "", "1", "")]}))
+    sources, _ = c.derive_targets(spec)
+    pairing, _ = c.pair_files(spec, vdd)
+    for src in sources:
+        f = pairing.get(src["feed_index"])
+        src["file"], src["field_sheet"] = (f["file_name_pattern"], f["field_sheet"]) if f else (None, None)
+    return spec, vdd, sources
+
+
+def test_single_sheet_blanks_the_source_type_and_marks_the_standard(tmp_path):
+    spec, vdd, sources = _ready(tmp_path, spec_for(), _NO_TYPE)
+    out = tmp_path / "o.xlsx"
+    info = render.render_workbook(spec, sources, vdd, out)
+    assert info["dialect"] == "single_sheet" and info["marked_types"] == 1
+    ws = load_workbook(out).active
+    hdr_r = next(r for r in range(1, 30) if ws.cell(r, 2).value == "Field Name")
+    hdr = [ws.cell(hdr_r, col).value for col in range(1, ws.max_column + 1)]
+    src_dt = hdr.index("Data Type") + 1
+    std_dt = len(hdr) - hdr[::-1].index("DataType")        # last DataType = Standard Layer
+    rows = {ws.cell(r, 2).value: r for r in range(hdr_r + 1, ws.max_row + 1)}
+
+    claim, member = rows["CLAIM_ID"], rows["MEMBER_ID"]
+    # the vendor's own word is transcribed and left alone
+    assert ws.cell(claim, src_dt).value == "int" and not _amber(ws.cell(claim, src_dt))
+    assert not _amber(ws.cell(claim, std_dt))
+    # what the vendor never said is blank on the source side, marked on the target
+    assert ws.cell(member, src_dt).value in (None, "")
+    assert _amber(ws.cell(member, src_dt)) and _amber(ws.cell(member, std_dt))
+    assert ws.cell(member, std_dt).value                   # still carries the ACFC default
+    # and the legend sits below the data
+    assert any(ws.cell(r, 1).value == render.TYPE_LEGEND for r in range(1, ws.max_row + 1))
+
+
+def test_sheet_per_table_legend_lands_on_file_details(tmp_path):
+    spec, vdd, sources = _two_sources(tmp_path)
+    out = tmp_path / "two.xlsx"
+    info = render.render_workbook(spec, sources, vdd, out)
+    assert info["dialect"] == "sheet_per_table" and info["marked_types"] == 1
+    fd = load_workbook(out)["FILE_DETAILS"]
+    assert any(fd.cell(r, 1).value == render.TYPE_LEGEND for r in range(1, fd.max_row + 1))
+
+
+def test_no_legend_when_every_type_came_from_the_vendor(tmp_path):
+    spec, vdd, sources = _ready(tmp_path)                  # the default fixture states every type
+    clean = tmp_path / "clean.xlsx"
+    info = render.render_workbook(spec, sources, vdd, clean)
+    ws = load_workbook(clean).active
+    assert info["marked_types"] == 0
+    assert not any(ws.cell(r, 1).value == render.TYPE_LEGEND for r in range(1, ws.max_row + 1))
+
+
+def test_audit_rows_are_never_marked(tmp_path):
+    """Audit columns are the standards' own — they were never the vendor's to state."""
+    spec, vdd, sources = _ready(tmp_path, spec_for(), _NO_TYPE)
+    rows, _ = render.build_rows(sources[0], spec["feeds"][0], vdd["fields"]["file1"])
+    assert [render._type_marks(r) for r in rows if r["audit"]] == \
+        [(False, False)] * len([r for r in rows if r["audit"]])
+
+
+def test_marking_survives_a_borrowed_layouts_own_styles(tmp_path):
+    """_fill_sheet restores the approved workbook's styles per row; the mark has
+    to be applied after that or it is silently overwritten."""
+    spec, vdd, sources = _ready(tmp_path, spec_for(), _NO_TYPE)
+    ref = make_reference_single_sheet(tmp_path / "STTM_Other.xlsx")
+    out = tmp_path / "borrowed.xlsx"
+    info = render.render_workbook(spec, sources, vdd, out, layout=layout_of(str(ref)))
+    assert info["layout_from"] == "STTM_Other.xlsx" and info["marked_types"] == 1
+    ws = load_workbook(out)[load_workbook(out).sheetnames[0]]
+    assert any(_amber(ws.cell(r, col))
+               for r in range(1, ws.max_row + 1) for col in range(1, ws.max_column + 1))

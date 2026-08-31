@@ -85,7 +85,8 @@ def pull_run(run_id: str) -> None:
     if not settings.IS_DATABRICKS:
         return
     try:
-        _mirror_dir(f"{settings.volume_path('output')}/{run_id}", settings.PATHS.run_dir(run_id))
+        # recursive: an uploaded pair lives in <run_id>/inputs/ and the preview reads it
+        _mirror_dir(f"{settings.volume_path('output')}/{run_id}", settings.PATHS.run_dir(run_id), True)
     except Exception as exc:  # noqa: BLE001 — absent remote dir → the caller's FileNotFoundError
         if "not found" in str(exc).lower() or type(exc).__name__ in ("NotFound", "ResourceDoesNotExist"):
             return
@@ -103,6 +104,20 @@ def push_run_file(run_id: str, name: str) -> None:
         return
     payload = (settings.PATHS.run_dir(run_id) / name).read_bytes()
     client().files.upload(f"{settings.volume_path('output')}/{run_id}/{name}", payload, overwrite=True)
+
+
+def push_run_input(run_id: str, name: str, payload: bytes) -> bytes:
+    """Write one directly-uploaded document under <run_id>/inputs/ — locally
+    always (the picker and the preview read it there) and into the output
+    volume in databricks mode, because the JOB is what opens it."""
+    from frdsttm.pipeline import INPUTS_DIR
+    target = settings.PATHS.inputs_dir(run_id) / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+    if settings.IS_DATABRICKS:
+        client().files.upload(
+            f"{settings.volume_path('output')}/{run_id}/{INPUTS_DIR}/{name}", payload, overwrite=True)
+    return payload
 
 
 def push_document(kind: str, name: str, payload: bytes) -> None:

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle, Button, Spinner } from "@databricks/appkit-ui/react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -7,6 +7,7 @@ import {
   useDocuments,
   useReindexState,
   useStartRun,
+  useUploadPair,
   type DocumentEntry,
 } from "../api";
 import { HowItWorks } from "./HowItWorks";
@@ -37,7 +38,7 @@ export function Picker({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
   const busy = start.isPending;
 
   function generate(d: DocumentEntry) {
-    start.mutate(d.doc_id, { onSuccess: (r) => onOpenRun(r.run_id) });
+    start.mutate({ doc_id: d.doc_id }, { onSuccess: (r) => onOpenRun(r.run_id) });
   }
 
   return (
@@ -47,9 +48,11 @@ export function Picker({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
         <HowItWorks />
       </div>
 
+      <UploadPair onOpenRun={onOpenRun} disabled={busy} />
+
       <div className="flex flex-col gap-4">
         <div>
-          <p className="eyebrow-blue mb-1">Select FRD</p>
+          <p className="eyebrow-blue mb-1">Or select an FRD already in the volumes</p>
           <h2 className="acfc-section-title text-xl mb-1.5">Pick the source to map</h2>
           <p className="text-sm text-muted-foreground max-w-3xl">
             Every FRD in the <span className="mono-id">frds</span> volume, paired by name with its vendor data
@@ -147,6 +150,124 @@ export function Picker({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
       </div>
 
     </div>
+  );
+}
+
+/**
+ * Generate from two files chosen here and now. The pair is stored under the run
+ * it starts, not in the volumes, and is used exactly as given: a person said
+ * these two go together, so no `FRD_<x>` / `VDD_<x>` name has to match.
+ */
+function UploadPair({ onOpenRun, disabled }: { onOpenRun: (runId: string) => void; disabled: boolean }) {
+  const upload = useUploadPair();
+  const [frd, setFrd] = useState<File | null>(null);
+  const [vdd, setVdd] = useState<File | null>(null);
+  const frdRef = useRef<HTMLInputElement>(null);
+  const vddRef = useRef<HTMLInputElement>(null);
+  const busy = upload.isPending || disabled;
+
+  function submit() {
+    if (!frd || !vdd) return;
+    upload.mutate(
+      { frd, vdd },
+      {
+        onSuccess: (r) => {
+          setFrd(null);
+          setVdd(null);
+          if (frdRef.current) frdRef.current.value = "";
+          if (vddRef.current) vddRef.current.value = "";
+          onOpenRun(r.run_id);
+        },
+      },
+    );
+  }
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div>
+        <p className="eyebrow-blue mb-1">Upload a pair</p>
+        <h2 className="acfc-section-title text-xl mb-1.5">Generate from your own two files</h2>
+        <p className="text-sm text-muted-foreground max-w-3xl">
+          Pick an FRD and the vendor data dictionary that goes with it. They are used exactly as you pair them —
+          the <span className="mono-id">FRD_&lt;x&gt;</span> / <span className="mono-id">VDD_&lt;x&gt;</span> naming
+          does not have to match, because you said these two belong together. Neither file is added to the volumes:
+          both are kept with the run they start.
+        </p>
+      </div>
+
+      <div className="acfc-panel flex flex-col gap-3">
+        <div className="grid sm:grid-cols-2 gap-3">
+          <FilePick
+            label="FRD"
+            hint=".docx, .pdf, .md or .txt"
+            accept=".docx,.pdf,.md,.markdown,.txt"
+            file={frd}
+            inputRef={frdRef}
+            onPick={setFrd}
+            disabled={busy}
+          />
+          <FilePick
+            label="Vendor data dictionary"
+            hint=".xlsx"
+            accept=".xlsx"
+            file={vdd}
+            inputRef={vddRef}
+            onPick={setVdd}
+            disabled={busy}
+          />
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          <Button onClick={submit} disabled={busy || !frd || !vdd}>
+            {upload.isPending ? "Uploading…" : "Generate STTM"}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            The agent reads both documents, then asks you only what they do not settle.
+          </span>
+        </div>
+      </div>
+
+      {upload.isError && (
+        <Alert variant="destructive">
+          <AlertTitle>The upload could not be started</AlertTitle>
+          <AlertDescription>{(upload.error as Error).message}</AlertDescription>
+        </Alert>
+      )}
+    </section>
+  );
+}
+
+function FilePick({
+  label,
+  hint,
+  accept,
+  file,
+  inputRef,
+  onPick,
+  disabled,
+}: {
+  label: string;
+  hint: string;
+  accept: string;
+  file: File | null;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  onPick: (f: File | null) => void;
+  disabled: boolean;
+}) {
+  return (
+    <label className={`acfc-row${file ? " acfc-row--ready" : ""} cursor-pointer items-start flex-col gap-1`}>
+      <span className="text-sm font-medium">
+        {label} <span className="text-xs text-muted-foreground font-normal">— {hint}</span>
+      </span>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        disabled={disabled}
+        className="text-xs max-w-full"
+        onChange={(e) => onPick(e.target.files?.[0] ?? null)}
+      />
+      {file && <span className="mono-id text-xs truncate max-w-full">{file.name}</span>}
+    </label>
   );
 }
 

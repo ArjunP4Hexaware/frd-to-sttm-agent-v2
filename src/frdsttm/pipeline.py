@@ -37,6 +37,9 @@ from frdsttm.reference_layout import layout_of
 
 RUN_FILE = "run.json"
 REPORT_FILE = "report.md"
+#: An uploaded pair lives under the run that was started for it — the corpus
+#: volumes stay the curated client library.
+INPUTS_DIR = "inputs"
 STATUS_FAILED = "failed"
 STATUS_RENDERED = "rendered"
 
@@ -56,6 +59,10 @@ class Paths:
 
     def run_dir(self, run_id: str) -> Path:
         return self.output / run_id
+
+    def inputs_dir(self, run_id: str) -> Path:
+        """Where a directly-uploaded FRD/VDD pair lives, for that run only."""
+        return self.run_dir(run_id) / INPUTS_DIR
 
 
 def _now() -> str:
@@ -109,6 +116,14 @@ def _find_vdd(paths: Paths, doc_id: str) -> Path | None:
     return hits[0] if len(hits) == 1 else None
 
 
+def vdd_source(paths: Paths, run: dict) -> Path:
+    """The dictionary this run read. A directly-uploaded pair keeps its own
+    file under the run's ``inputs/``; every other run reads the vdds volume."""
+    if (run.get("inputs") or {}).get("vdd"):
+        return paths.inputs_dir(run["run_id"]) / run["inputs"]["vdd"]
+    return paths.vdds / run["vdd"]["file"]
+
+
 def _own_reference(paths: Paths, doc_id: str) -> Path | None:
     key = corpus.name_key(doc_id)
     hits = [p for p in sorted(paths.reference.glob("*.xlsx"))
@@ -145,14 +160,22 @@ def choose_layout(paths: Paths, doc_id: str, n_sources: int) -> dict | None:
 # --------------------------------------------------------------------------- #
 def run_extract(paths: Paths, run_id: str, doc_id: str, *, provider: str = "databricks",
                 model: str = ex.DEFAULT_MODEL, max_tokens: int = ex.DEFAULT_MAX_TOKENS,
-                client=None, triggered_by: str | None = None, render_if_ready: bool = True) -> dict:
+                client=None, triggered_by: str | None = None, render_if_ready: bool = True,
+                frd_file: str | None = None, vdd_file: str | None = None) -> dict:
+    """``frd_file``/``vdd_file`` name a pair a reviewer uploaded for THIS run,
+    under ``<run_id>/inputs/``. They are used as given: the pair was declared by
+    a person, so no name key is computed and none has to match. Without them the
+    run reads the corpus volumes, paired by name as always."""
     run = {"run_id": run_id, "doc_id": doc_id, "created_at": _now(), "triggered_by": triggered_by,
            "provider": provider, "model": model, "status": "extracting", "error": None,
            "standards_sha256": std.standards_sha256(), "naming_version": std.NAMING_VERSION,
-           "engineering_version": std.ENGINEERING_VERSION}
+           "engineering_version": std.ENGINEERING_VERSION,
+           "inputs": {"frd": frd_file, "vdd": vdd_file} if frd_file else None}
     save_run(paths, run)
     try:
-        frd_path = _find_frd(paths, doc_id)
+        frd_path = paths.inputs_dir(run_id) / frd_file if frd_file else _find_frd(paths, doc_id)
+        if not frd_path.is_file():
+            raise FileNotFoundError(f"no FRD at {frd_path}")
         frd = parse_frd(frd_path)
         run["frd"] = {k: frd[k] for k in ("source_file", "content_sha256", "project_id",
                                           "heading_count", "table_count")}
@@ -160,7 +183,9 @@ def run_extract(paths: Paths, run_id: str, doc_id: str, *, provider: str = "data
         if client is None:
             client = ex.build_client(provider)
         model_name = ex.databricks_model_name(model) if provider == "databricks" else model
-        vdd_path = _find_vdd(paths, doc_id)
+        vdd_path = paths.inputs_dir(run_id) / vdd_file if vdd_file else _find_vdd(paths, doc_id)
+        if vdd_path is not None and not vdd_path.is_file():
+            vdd_path = None                        # → the assessment's no_dictionary blocker, not a traceback
         vdd = None
         run["vdd"] = None
         if vdd_path is not None:
@@ -218,7 +243,7 @@ def run_render(paths: Paths, run_id: str) -> dict:
         raise ValueError("this run cannot be rendered: " +
                          "; ".join(b["text"] for b in run["assessment"]["blockers"]))
     try:
-        vdd = run.get("vdd_normalised") or parse_dictionary_workbook(paths.vdds / run["vdd"]["file"])
+        vdd = run.get("vdd_normalised") or parse_dictionary_workbook(vdd_source(paths, run))
         spec = json.loads(json.dumps(run["extraction"]))
         assessment = json.loads(json.dumps(run["assessment"]))
         applied = completeness.apply_answers(spec, assessment)
@@ -228,12 +253,14 @@ def run_render(paths: Paths, run_id: str) -> dict:
             tmp_path = tmp.name
         try:
             info = render.render_workbook(spec, assessment["sources"], vdd, tmp_path, layout=layout,
-                                          pairing_override=applied["pairing_override"])
+                                          pairing_override=applied["pairing_override"],
+                                          blank_type_sheets=applied.get("blank_type_sheets"))
             shutil.copyfile(tmp_path, out)          # sequential write: UC volumes reject seeks
         finally:
             Path(tmp_path).unlink(missing_ok=True)
         run["applied"] = {"extraction": spec, "sources": assessment["sources"],
-                          "pairing_override": applied["pairing_override"]}
+                          "pairing_override": applied["pairing_override"],
+                          "blank_type_sheets": applied.get("blank_type_sheets") or []}
         run["render"] = {**info, "workbook": out.name, "rendered_at": _now(),
                          "sha256": corpus._sha(out),
                          "unanswered": [q["id"] for q in assessment["questions"] if q.get("answer") is None]}

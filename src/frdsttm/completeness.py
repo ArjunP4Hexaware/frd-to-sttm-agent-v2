@@ -38,6 +38,19 @@ STATUS_CANNOT = "cannot_generate"
 KEEP = "Keep it as extracted"
 REMOVE = "Remove it"
 ALL_SOURCES = "All of them"
+USE_DEFAULT_TYPE = "Use the ACFC default type"
+LEAVE_TYPE_BLANK = "Leave the standard type blank"
+
+#: Dictionary problems that leave a PAIRED source with no columns at all. The
+#: sheet would render as nothing but the standards' audit rows — a workbook that
+#: looks finished and maps nothing. `dictionary.py` records thirteen kinds; the
+#: rest do not change what the workbook says, so by the rule above they are
+#: neither a blocker nor a question, only a note.
+_DICT_BLOCKING = {
+    "field_sheet_missing": "names a field sheet that is not in the workbook",
+    "field_sheet_empty": "names no columns",
+    "field_sheet_unreadable": "could not be read",
+}
 
 # --------------------------------------------------------------------------- #
 # text normalisation (unicode Word emits + markdown chrome)
@@ -434,8 +447,10 @@ def assess(spec: dict, content: str, vdd: dict | None, vdd_name: str | None) -> 
                          "text": "None of the dictionary's files could be matched to the FRD's sources."})
 
     if vdd is not None:
-        for p in vdd.get("problems", []):
-            notes.append(f"dictionary: {p.get('detail')}")
+        db, dq, dn = dictionary_severity(vdd, sources)
+        blockers += db
+        questions += dq
+        notes += dn
 
     # de-duplicate by id, keep first
     seen, uniq = set(), []
@@ -451,6 +466,53 @@ def assess(spec: dict, content: str, vdd: dict | None, vdd_name: str | None) -> 
         "grounding": grounding,
         "notes": notes,
     }
+
+
+def dictionary_severity(vdd: dict, sources: list[dict]) -> tuple[list, list, list]:
+    """Split the dictionary's problems into blockers, questions and notes.
+
+    A problem only matters where it lands on a source the workbook will carry:
+    the same empty sheet is fatal when a source is paired to it and merely worth
+    saying when nothing uses it. Three kinds leave a paired source with no
+    columns (blocker); a missing data type changes what the workbook says
+    (question); everything else is a note, because no answer to it would write a
+    different workbook.
+    """
+    blockers, questions, notes = [], [], []
+    for p in vdd.get("problems", []):
+        detail = p.get("detail")
+        kind = p.get("kind")
+        owners = [s for s in sources
+                  if (p.get("sheet") and p["sheet"] == s.get("field_sheet"))
+                  or (p.get("file") and p["file"] == s.get("file"))]
+        if kind in _DICT_BLOCKING and owners:
+            for s in owners:
+                blockers.append({
+                    "kind": kind,
+                    "text": f"{s['feed_name']} is mapped to dictionary file "
+                            f"{s.get('file') or 'an unnamed file'}, which {_DICT_BLOCKING[kind]}. "
+                            f"That source has no columns to map, so the workbook would carry "
+                            f"only the standards' audit rows for it.",
+                })
+            continue
+        if kind == "missing_datatypes" and owners:
+            cols = p.get("columns") or []
+            for s in owners:
+                first = ", ".join(cols[:5]) + ("…" if len(cols) > 5 else "")
+                questions.append(_question(
+                    "dictionary_types",
+                    f"The vendor left the data type blank for {len(cols)} column(s) on "
+                    f"{s['feed_name']} ({first}). Nothing in the dictionary or the standards "
+                    f"says what they are. The standard-layer type falls back to the ACFC "
+                    f"default ({std.stage_default_type()}), which reads exactly like a real "
+                    f"type. What should the workbook say?",
+                    {"sheet": s.get("field_sheet"), "file": s.get("file"), "columns": cols},
+                    options=(USE_DEFAULT_TYPE, LEAVE_TYPE_BLANK),
+                    source=s["feed_name"],
+                ))
+            continue
+        notes.append(f"dictionary: {detail}")
+    return blockers, questions, notes
 
 
 def _status(blockers, questions) -> str:
@@ -475,8 +537,9 @@ def record_answer(assessment: dict, qid: str, value: str, by: str | None = None,
 
 def apply_answers(spec: dict, assessment: dict) -> dict:
     """Fold the reviewer's answers into the spec and the derived targets.
-    Returns {"pairing_override": {feed_index: file pattern}}. Mutates both."""
-    overrides = {}
+    Returns {"pairing_override": {feed_index: file pattern},
+             "blank_type_sheets": [sheet, ...]}. Mutates both."""
+    overrides, blank_types = {}, set()
     feeds = spec.get("feeds", [])
     for q in assessment["questions"]:
         ans = (q.get("answer") or {}).get("value")
@@ -509,6 +572,11 @@ def apply_answers(spec: dict, assessment: dict) -> dict:
                 f["validation_rules"] = [r for r in f.get("validation_rules") or [] if norm(r) != rule]
                 if f.get("recycle_rule") and norm(f["recycle_rule"]) == rule:
                     f["recycle_rule"] = None
+        elif kind == "dictionary_types":
+            # Only the standard layer is affected: the stage layer is the
+            # standards' default type for every column by design.
+            if ans == LEAVE_TYPE_BLANK and ctx.get("sheet"):
+                blank_types.add(ctx["sheet"])
         elif kind == "file_pairing":
             overrides[ctx["feed_index"]] = ans
         elif kind == "target_gap":
@@ -523,4 +591,4 @@ def apply_answers(spec: dict, assessment: dict) -> dict:
             else:
                 lay[ctx["attribute"]] = ans or None
                 lay["origin"][ctx["attribute"]] = "reviewer"
-    return {"pairing_override": overrides}
+    return {"pairing_override": overrides, "blank_type_sheets": sorted(blank_types)}
