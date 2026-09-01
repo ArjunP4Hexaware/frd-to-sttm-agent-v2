@@ -1,0 +1,24 @@
+# Databricks App manifest (deployed from the repo root: the backend imports
+# src/frdsttm and reads standards/). Prerequisites in the workspace:
+#   - the bundle job frd_sttm_pipeline is deployed; STTM_JOB_ID pins its id
+#     (a dev-mode deploy prefixes the name, so the id is the reliable handle)
+#   - volumes frds, vdds, reference_sttms, output_sttms exist in CATALOG.SCHEMA
+#   - the app's service principal can run the job, READ the first three
+#     volumes and READ/WRITE output_sttms
+command: ["python", "app/backend/app.py"]
+env:
+  - name: "STTM_APP_MODE"
+    value: "databricks"
+  - name: "CATALOG"
+    value: "arjun_workspace"
+  - name: "SCHEMA"
+    value: "sttm_agent"
+  - name: "STTM_PROVIDER"
+    value: "databricks"
+  - name: "STTM_MODEL"
+    value: "claude-sonnet-5"
+  - name: "STTM_JOB_NAME"
+    value: "frd_sttm_pipeline"
+  # Set after `databricks bundle deploy` to the job id it created.
+  - name: "STTM_JOB_ID"
+    value: "542994480165767"

@@ -1,0 +1,424 @@
+@import "@databricks/appkit-ui/styles.css";
+
+/*
+ * AmeriHealth Caritas theme, v2 (2026-08-21) — sampled from the LIVE
+ * amerihealthcaritas.com (computed styles read off the rendered page), not
+ * guessed and no longer deck-derived:
+ *   - brand blue #003DA5: headlines, primary buttons, links
+ *   - body #2D2D2D near-black; utility slate #333F48; muted #455560
+ *   - white ground with #EEEEEE section bands; deep navy #0A2458 (footer)
+ *   - sky #69B3E7 as the light accent
+ *   - SQUARED corners: the site uses border-radius 0 everywhere, so
+ *     --radius is 0 and every rounded-* utility collapses to square
+ *   - typeface "Area Normal" (Adobe Fonts, licensed) — listed first so an
+ *     environment that has it uses it, with Avenir/Segoe-class geometric
+ *     fallbacks that ship with the OS; nothing is fetched from the network
+ *   - headings are BOLD SANS in brand blue, sentence case, tight tracking;
+ *     the serif exists only in the corporate logo, so no serif here
+ * Status green/orange are not on the marketing site; they come from the
+ * client program deck's own palette (darkened for text contrast) since the
+ * app needs a functional status system the brand site doesn't define.
+ *
+ * This overrides @databricks/appkit-ui/styles.css's own `:root` tokens
+ * (same variable names -- --background, --primary, --radius, etc.) rather
+ * than replacing its components: every appkit-ui component already reads
+ * these names via its own `@theme inline` mapping, so redefining the leaf
+ * variables here re-themes Button/Input/RadioGroup/Alert/Progress/Spinner/
+ * Collapsible everywhere they're used, with no per-component changes. Only
+ * Badge and Card are hand-authored replacements (see components/ui/), since
+ * those are the highest-visibility elements (status chips, containers).
+ */
+:root {
+  --background: #ffffff;
+  --foreground: #2d2d2d;
+  --card: #ffffff;
+  --card-foreground: #2d2d2d;
+  --primary: #003da5;
+  --primary-foreground: #ffffff;
+  --secondary: #eeeeee;
+  --secondary-foreground: #2d2d2d;
+  --muted: #eeeeee;
+  --muted-foreground: #455560;
+  --accent: #e8f0fb;
+  --accent-foreground: #003da5;
+  --destructive: #b23b3b;
+  --border: #dde1e5;
+  --input: #c6ccd2;
+  --ring: #003da5;
+  --radius: 0rem;
+
+  --brand-blue: #003da5;
+  --brand-sky: #69b3e7;
+  /* Flag red, sampled from the LOGO MARK itself (2026-08-27), not from the
+     marketing site's text palette. It is the attention colour and nothing
+     else: "the agent will not guess this". Never decorative — if it appears
+     on a surface that is fine, the reader has been told the wrong thing. */
+  --brand-red: #d2202f;
+  --brand-red-tint: #fcecee;
+  --brand-navy: #0a2458;
+  --brand-slate: #333f48;
+  --brand-pass: #5c7f22;
+  --brand-pass-bright: #78a22f;
+  --brand-flag: #b26a0e;
+  --brand-flag-bright: #f8971d;
+
+  /* Status chip pairs: tinted background + darker text of the same hue. */
+  --status-blocked-bg: #f9e9e8;
+  --status-blocked-fg: #a63a32;
+  --status-advisory-bg: #fdf0dd;
+  --status-advisory-fg: #b26a0e;
+  --status-eligible-bg: #eef4e0;
+  --status-eligible-fg: #5c7f22;
+  --status-neutral-bg: #eeeeee;
+  --status-neutral-fg: #455560;
+
+  --font-geist-sans: "Area Normal", "Avenir Next", Avenir, "Segoe UI",
+    "Helvetica Neue", ui-sans-serif, system-ui, -apple-system, Roboto, Arial,
+    sans-serif;
+  --font-geist-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+    Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+/*
+ * appkit-ui's own `@theme inline` block already maps --color-background,
+ * --color-primary, etc. to `var(--background)`/`var(--primary)`/... (the
+ * same leaf variables overridden above), and --radius to a single
+ * `var(--radius)` with no lg/md/sm scale. This block only adds what that
+ * one doesn't already provide: the 3-tier radius scale and font family
+ * mapping (appkit-ui defines no --font-sans/--font-mono at all, so
+ * `font-sans`/`font-mono` utilities were previously unstyled).
+ */
+@theme inline {
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 0.0625rem);
+  --radius-sm: calc(var(--radius) - 0.125rem);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  /* Brand color UTILITIES (text-pass, bg-pass-bright, text-flag, border-flag,
+     text-brand, bg-brand-sky, …) so components never hardcode a Tailwind
+     palette color (emerald/amber/blue) that drifts from the deck. */
+  --color-brand: var(--brand-blue);
+  --color-brand-sky: var(--brand-sky);
+  --color-pass: var(--brand-pass);
+  --color-pass-bright: var(--brand-pass-bright);
+  --color-flag: var(--brand-flag);
+  --color-flag-bright: var(--brand-flag-bright);
+}
+
+/*
+ * This is a light-only product surface: force it regardless of OS/browser
+ * `prefers-color-scheme`. (The `light` class on <html> in index.html is
+ * what actually defeats appkit-ui's `:root:not(.light)` dark-mode block;
+ * this property only affects native form-control rendering.)
+ */
+html {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  min-height: 100svh;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans);
+  font-size: 14px;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+code,
+kbd,
+samp {
+  font-family: var(--font-geist-mono);
+}
+
+/* Small uppercase micro-label used as a section eyebrow above content
+   blocks — styled like amerihealthcaritas.com's utility nav: 12px, 600,
+   slate, modest tracking (their headlines carry the blue; labels stay
+   quiet). */
+.eyebrow {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--brand-slate);
+}
+
+/* The site's headline voice: bold geometric sans, brand blue, sentence
+   case, tight tracking (their h1 computes to -0.014em). */
+.display-heading {
+  font-weight: 700;
+  letter-spacing: -0.014em;
+  color: var(--brand-blue);
+}
+
+/* Applied to any rendered identifier / count / timestamp value. */
+.mono-id {
+  font-family: var(--font-geist-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* ===========================================================================
+ * ACFC layout primitives (2026-08-27)
+ * ---------------------------------------------------------------------------
+ * The tokens above have carried the client's COLOUR since 2026-08-21, but the
+ * app still read as a generic admin panel: no masthead, floating cards on an
+ * undifferentiated white page, no footer. These classes add the client site's
+ * LAYOUT language, which is what actually makes a page look like theirs:
+ *
+ *   - a masthead with a hairline rule beneath it and the flag device;
+ *   - FULL-BLEED alternating bands (white / #f0f0f0) with the content in a
+ *     centred container, which is how every section on their site is built;
+ *   - square everything (the site's buttons are border-radius 0 — --radius is
+ *     already 0, so this is about not reintroducing rounding by hand);
+ *   - outlined-not-filled controls;
+ *   - a deep-navy footer band.
+ *
+ * PORTABILITY (Arjun, 2026-08-27): the frontend must be ESSENTIALLY THE SAME
+ * in the Hexaware environment and in ACFC's rebuild, because the backend will
+ * differ and the UI is the half that has to survive the move. So every rule
+ * here is expressed in the leaf tokens above and NOTHING here branches on
+ * environment, catalog, tenant or mode. The one place the environment shows
+ * through is `.acfc-envchip`, which changes its TEXT and never its layout —
+ * a chip in the same place in the masthead either way.
+ * =========================================================================== */
+
+.acfc-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+}
+
+/* Content measure. Wider than the old max-w-5xl: the client's own pages run
+   generous, and the FRD rows carry long file names + several chips. */
+.acfc-container {
+  width: 100%;
+  max-width: 76rem;
+  margin-inline: auto;
+  padding-inline: 1.75rem;
+}
+
+/* Full-bleed section band. The tint variant is the site's #f0f0f0 section
+   band; alternate them so a long page reads as sections rather than as one
+   scroll of cards. */
+.acfc-band {
+  width: 100%;
+  background: var(--background);
+}
+.acfc-band--tint {
+  background: #f4f5f7;
+  border-block: 1px solid var(--border);
+}
+.acfc-band > .acfc-container {
+  padding-block: 1.75rem;
+}
+
+/* Masthead: white, hairline rule beneath, a 3px brand edge along the top of
+   the page. Deliberately NOT a coloured bar — the client's own header is
+   white with the colour carried by the headline. */
+.acfc-masthead {
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+.acfc-topline {
+  height: 3px;
+  background: var(--brand-blue);
+}
+
+/* The flag in the client's logo mark, evoked rather than reproduced: three
+   tapering red bars. Their MARK is never used — matching a palette on a
+   vendor's app is ordinary practice, reproducing their logo is not. */
+.acfc-flag {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 34px;
+  flex: none;
+}
+.acfc-flag i {
+  display: block;
+  height: 3px;
+  background: var(--brand-red);
+}
+.acfc-flag i:nth-child(2) { width: 86%; margin-left: 2px; }
+.acfc-flag i:nth-child(3) { width: 70%; margin-left: 5px; }
+
+/* Environment chip — the ONE element whose text differs between the Hexaware
+   and ACFC deployments. Its box, position and size do not. */
+.acfc-envchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  padding: 0.2rem 0.55rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.acfc-envchip b {
+  color: var(--brand-blue);
+  font-weight: 700;
+}
+
+/* Section head: a blue eyebrow over a navy title, the site's own hierarchy. */
+.acfc-section-title {
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--brand-navy);
+}
+.eyebrow-blue {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--brand-blue);
+}
+
+/* A panel with a square accent edge — the deck's container, so the app and
+   the slides read as one system. */
+.acfc-panel {
+  position: relative;
+  border: 1px solid var(--border);
+  background: var(--card);
+  padding: 1rem 1.15rem;
+}
+.acfc-panel::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 3px;
+  background: var(--accent-edge, var(--brand-blue));
+}
+.acfc-panel--tint { background: var(--accent); }
+.acfc-panel--warn { background: var(--brand-red-tint); --accent-edge: var(--brand-red); }
+.acfc-panel--quiet { background: #f4f5f7; --accent-edge: var(--brand-navy); }
+
+/* A row in a list of documents: square, hairline, accent edge on hover so the
+   list reads as one object rather than a stack of floating cards. */
+.acfc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  background: var(--card);
+  padding: 0.7rem 0.9rem;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.acfc-row + .acfc-row { margin-top: -1px; }
+.acfc-row:hover { border-left-color: var(--brand-blue); background: #fafbfc; }
+.acfc-row--ready { border-left-color: var(--brand-sky); }
+
+/* Stat tile: square, outlined, the numeral in brand blue and tabular. */
+.acfc-stat {
+  border: 1px solid var(--border);
+  background: var(--card);
+  padding: 0.85rem 0.9rem;
+}
+.acfc-stat b {
+  display: block;
+  font-family: var(--font-geist-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 1.75rem;
+  line-height: 1.1;
+  font-weight: 700;
+  color: var(--brand-blue);
+}
+/* Direct child only: `b` carries an inline span for the "/ of" denominator,
+   which must stay on the numeral's line. */
+.acfc-stat > span {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+.acfc-stat b span {
+  font-size: 1rem;
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+.acfc-stat--muted b { color: var(--muted-foreground); }
+.acfc-stat--alert b { color: var(--brand-red); }
+
+/* Inline status chip. Square, 1px, no fill — the site's control language. */
+.acfc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid currentColor;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.acfc-chip--ok { color: var(--brand-blue); }
+.acfc-chip--gap { color: var(--brand-red); }
+.acfc-chip--quiet { color: var(--muted-foreground); }
+
+/* Footer band. The one dark surface in the app, as on the client's site. */
+.acfc-footer {
+  margin-top: auto;
+  background: var(--brand-navy);
+  color: #cdd6e6;
+}
+.acfc-footer .acfc-container {
+  padding-block: 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+}
+.acfc-footer strong { color: #ffffff; font-weight: 600; }
+.acfc-footer .sep { color: #5f7099; }
+
+/* Compact notice. The backend's configuration warnings are context, not the
+   work: they get one tight line each under the masthead rather than two tall
+   alert boxes above the picker (which is what the first render of the ACFC
+   shell showed, 2026-08-27). */
+.acfc-notice {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  border-left: 3px solid var(--brand-navy);
+  background: #f4f5f7;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+.acfc-notice--warn { border-left-color: var(--brand-red); background: var(--brand-red-tint); }
+.acfc-notice b { font-weight: 600; color: var(--brand-navy); white-space: nowrap; }
+.acfc-notice--warn b { color: var(--brand-red); }
+.acfc-notice span { color: var(--muted-foreground); }
+
+/* The client's mark, cleared for use 2026-08-27. ONE placement: the masthead,
+   full colour, on white, at 54px. A knockout in the navy footer was tried and
+   removed the same day — at the height that band allows, the lockup's "Care is
+   the heart of our work" line turns to mud, and a half-legible logo reads as
+   carelessness rather than as branding. One placement done properly beats two.
+   (acfc-white.png is kept for surfaces that can give it real size.)
+   CO-BRANDING, not a merge: the mark says whose programme this is, the blue
+   headline beside it says which tool. The hairline keeps them distinct. */
+.acfc-mark {
+  height: 54px;
+  width: auto;
+  flex: none;
+}
+.acfc-mark-rule {
+  width: 1px;
+  align-self: stretch;
+  margin-block: 0.35rem;
+  background: var(--border);
+  flex: none;
+}

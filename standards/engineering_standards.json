@@ -1,0 +1,133 @@
+{
+  "version": "1.1.0",
+  "kind": "engineering_standards",
+  "_about": [
+    "Transcription of the STTM-relevant rules from the client's engineering/coding",
+    "standards document. Most of that document is Azure Data Factory and Databricks BUILD",
+    "practice (IIG Framework, Key Vault, ForEach parallelism, dynamic linked services) —",
+    "that is the CodeGen agent's input, not this agent's, and is deliberately not",
+    "transcribed here. Only rules that decide an STTM cell or a gate appear below.",
+    "",
+    "Same doctrine as naming_standards.json: versioned, loaded loudly, no hardcoded",
+    "fallback, and anything not stated in the document is marked UNSOURCED."
+  ],
+  "source_documents": [
+    {
+      "name": "EDO Data Engineering Coding Standards.docx",
+      "sha256": "8648d329c28d567c49cc41a6bab8183ceca12d687d92d8313c0ef6d310f8c2e8",
+      "read_on": "2026-08-26"
+    }
+  ],
+  "type_promotion": {
+    "basis": "source_datatype",
+    "_status": "STATED",
+    "_quote": "Standard table should be created with proper datatype as per the source column datatype.",
+    "_never": "sample_value",
+    "_corroboration": [
+      "docs/THREE_INPUT_ARCHITECTURE.md §8a: in the SD golden STTM all 90 standard-layer",
+      "Decimal(10,2) cells are exactly the rows whose SAMPLE had a fractional part, and a",
+      "_pct column whose sample was 0 stayed String. Sample-driven typing reproduces the",
+      "golden workbook but is NOT the client's rule — the golden-pair eval must report",
+      "those rows as disagreements, not as agent errors."
+    ],
+    "stage_default": "String",
+    "_stage_default_status": "OBSERVED",
+    "_stage_default_evidence": "Both mapped STTMs type every stage-layer column String regardless of source type. Not stated in the document.",
+    "promotions": {
+      "_status": "UNSOURCED",
+      "_note": "The mapping from a vendor datatype to a standard-layer datatype is not tabulated anywhere. Observed pairs only, from the two mapped STTMs.",
+      "observed": [
+        {
+          "source_type": [
+            "int",
+            "integer"
+          ],
+          "standard": "Int"
+        },
+        {
+          "source_type": [
+            "numeric",
+            "decimal"
+          ],
+          "standard": "Decimal(10,2)"
+        },
+        {
+          "source_type": [
+            "varchar",
+            "char",
+            "string",
+            "alpha numeric"
+          ],
+          "standard": "String"
+        },
+        {
+          "source_type": [
+            "datetime2",
+            "date",
+            "timestamp"
+          ],
+          "standard": "String",
+          "_caution": "CAQH types 20 datetime2 source fields but renders them String in BOTH layers ('Load as is'). Do not promote dates without checking the convention in force."
+        }
+      ]
+    },
+    "infer_from_example": {
+      "_status": "OBSERVED",
+      "_about": [
+        "When the vendor declares no specific type (String / blank), the standard-layer type may be",
+        "inferred from the vendor's EXAMPLE VALUE in the data dictionary. Measured 2026-08-28 on the",
+        "approved SD STTM: an example with a decimal point -> Decimal(10,2) on 139 of 139 rows; no",
+        "decimal point -> String on 241 of 258. The column NAME does not predict the type (`_pct` is",
+        "Decimal 93 / String 42; every `_count` column is String), so the name is deliberately not used.",
+        "Stage stays String regardless. Switch off with enabled=false; every inferred cell is recorded",
+        "in the run's provenance as 'example value'."
+      ],
+      "enabled": true,
+      "decimal_point_example": "Decimal(10,2)"
+    }
+  },
+  "data_quality": {
+    "recycle_flag": {
+      "_status": "STATED",
+      "_quote": "NULL check on the referential column(s), If the recycle flag is enabled.",
+      "column_name": "Recycle Flag",
+      "_column_name_status": "OBSERVED",
+      "_column_name_evidence": "The rendered column name comes from the render path (04) and the mapped STTMs, not from the document."
+    },
+    "rejects": {
+      "_status": "STATED",
+      "_quote": "All the rejects need to be captured in the reject table and email alert generated for the Production Support team.",
+      "reject_table": null,
+      "_reject_table_note": "The document mandates a reject table but does not name it. UNSOURCED — ask before emitting a name.",
+      "notify": "Production Support team"
+    },
+    "apply_at": {
+      "_status": "STATED",
+      "_quote": "Ensure to apply the proper Data Quality rules when loading the data into the Stage and Standard tables.",
+      "layers": [
+        "stage",
+        "standard"
+      ]
+    }
+  },
+  "run_control_table": {
+    "_status": "STATED",
+    "_about": "The run-log shape the client's pipelines write. Not an STTM cell — recorded so the agent never invents a different one, and so CodeGen has it.",
+    "columns": [
+      "OBJECT_NAME",
+      "SRC_REC_COUNT",
+      "TGT_REC_COUNT",
+      "REJECTED_REC_COUNT",
+      "EXEC_STATUS",
+      "ERROR_MESSAGE",
+      "BATCH_DATE"
+    ]
+  },
+  "security": {
+    "_status": "STATED",
+    "no_hardcoded_credentials": true,
+    "secret_store": "Azure Key Vault",
+    "suppress_pii_in_activity_logs": true,
+    "_note": "Recorded because it constrains the landing-zone probe of docs/THREE_INPUT_ARCHITECTURE.md §7: raw rows must never reach a model or a log line."
+  }
+}

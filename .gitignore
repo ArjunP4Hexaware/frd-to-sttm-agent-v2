@@ -1,51 +1,25 @@
-# Client artifacts never leave Unity Catalog volumes
+# client documents never enter the repo except sample_documents/ (deliberate, purged on a date)
+local_data/
+screenshots/
 *.xlsx
 *.docx
 *.pdf
-*.contract.json
-*.contract.v2.json
-extractions/
-rendered/
-reports/
-warehouse/
-data/
-
-# Local-mode fixtures/outputs are the local-filesystem equivalent of the UC
-# volumes above -- same "client artifacts never leave" rule applies here too.
-local_dev_fixtures/
-
-# Personal data (individuals' names, mailboxes, a direct phone number) split
-# out of tools/anonymization_mapping.py. Never tracked; see that module's
-# _resolve() for how it is spliced back in, and note it is NOT recoverable
-# from git if lost.
-tools/anonymization_pii_rules_local.py
-
-# local
-.DS_Store
-venv/
-.env*
+!sample_documents/*
+!standards/*.docx
+!templates/*
+.env
+.env.*
 !.env.example
+.DS_Store
 __pycache__/
 *.pyc
-
-# review_app_react/frontend build artifacts -- rebuilt via `npm run build`
-# before any Databricks App deploy (see review_app_react/app.yaml)
-review_app_react/frontend/node_modules/
-review_app_react/frontend/dist/
-
-# ---------------------------------------------------------------------------
-# 2026-08-22: the anonymized demo pair (demo_frd.docx / demo_sttm.xlsx), the
-# local_dev_fixtures/ inputs, and the tracked replay set
-# (sttm_out_live_e2e_20260807b/) were REMOVED from the repo and from git's
-# index -- no FRD/STTM material of any kind is tracked any more (they remain
-# in history until a purge is decided). The `!` re-include negations that
-# used to carve those files past the rules above were deleted with them on
-# purpose: do NOT add them back. New fixture material must go through
-# tools/ anonymization AND a deliberate decision before it is tracked.
-# ---------------------------------------------------------------------------
-
-# Local venv + editable-install build metadata
 .venv/
+venv/
 src/*.egg-info/
 .pytest_cache/
-
+.databricks/
+.~lock.*#
+~$*
+app/frontend/node_modules/
+# app/frontend/dist is TRACKED: the Databricks workspace serves it without a build step.
+# Run `npm run build` before committing a UI change.

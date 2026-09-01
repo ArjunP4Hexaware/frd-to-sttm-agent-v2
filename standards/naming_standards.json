@@ -1,0 +1,296 @@
+{
+  "version": "1.1.0",
+  "kind": "naming_standards",
+  "_about": [
+    "Transcription of the client's naming standards document into versioned config.",
+    "Precedent and doctrine: contracts/frd_label_contract.json — loaded at start-up by a",
+    "loader that fails loudly if the file is missing or unversioned, with NO hardcoded",
+    "fallback. A rule baked into Python is invisible to the reviewer, silently stale when",
+    "the client revises the document, and not re-derivable in the ACFC rebuild.",
+    "",
+    "Every vocabulary below is VERBATIM from the source document. Anything not in that",
+    "document is marked _status UNSOURCED and must never be silently applied — see",
+    "column_rules."
+  ],
+  "source_documents": [
+    {
+      "name": "EDO Data Engineering Naming Standards.docx",
+      "sha256": "508575aaeca4e078952e43177426eafbdffd4c94566dd9775e779d8b8b70c83f",
+      "read_on": "2026-08-26",
+      "tables_transcribed": [
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
+    }
+  ],
+  "vocabularies": {
+    "data_layers": {
+      "_source": "table 12 'Data Layers'",
+      "values": {
+        "RAW": "RAW",
+        "STAGE": "STG",
+        "STANDARD": "STD",
+        "GOLD": "GLD",
+        "CONSUMPTION": "CMP",
+        "EVENTHUB": "EVN",
+        "ON-PREM": "ONP",
+        "MDM PUBLISH": "MDM",
+        "RDM PUBLISH": "RDM"
+      }
+    },
+    "domains": {
+      "_source": "table 8 'Domain/Subdomain'",
+      "_incomplete": "The SD FRD's domain 'sdoh' is NOT in this table. Real documents use domains the standard does not list, so an unknown domain must fall through to the FRD's own value and gate — never be invented.",
+      "values": {
+        "CLAIMS": "CLM",
+        "CLINICAL": "CLIN",
+        "PROVIDER": "PRV",
+        "NETWORK": "NWK",
+        "VISION": "VISN",
+        "PHARMACY": "RX",
+        "DENTAL": "DNTL",
+        "MEMBER": "MBR",
+        "ENROLLMENT": "ENRL",
+        "ELIGIBLITY": "ELIG",
+        "COVERAGE": "CVRG",
+        "LABORATORY": "LAB",
+        "MEDICATION": "MED",
+        "IMMUNIZATION": "IMNZ",
+        "VITAL SIGN": "VTL",
+        "GENERIC": "GNR"
+      }
+    },
+    "load_strategies": {
+      "_source": "table 11 'Load Strategy'",
+      "_note": "These four are the sanctioned set. CodeGen's FrdContract enum currently accepts only {'Truncate and Load','Append'} and therefore rejects the SFMC FRD, which states 'Upsert'. The enum is wrong, not the FRD.",
+      "values": {
+        "TRUNCATE & LOAD": "TRUNC",
+        "TRUNCATE AND LOAD": "TRUNC",
+        "APPEND": "INSRT",
+        "UPDATE ELSE INSERT": "UPSRT",
+        "UPSERT": "UPSRT",
+        "EXTRACTS": "EXTR"
+      },
+      "_alias_note": "'Truncate and Load' and 'Upsert' are not in the document; they are the spellings real FRDs use for the sanctioned strategies above. Aliases, not new strategies."
+    },
+    "product_codes": {
+      "_source": "table 6 'Project / Use Case'",
+      "values": {
+        "CMS – CONSUMPTION LOAD, JSONS CREATIONS": "CMS",
+        "HEDIS2.0": "HDS",
+        "WIDER CIRCLE": "WDC",
+        "MILLIMAN": "MMN",
+        "FEE SCHEDULE": "FSC",
+        "SOMATUS": "SOM",
+        "DIGITAL": "DGT",
+        "ACTUARIAL": "ACT",
+        "MDM/RDM": "MDM",
+        "DATA LAKE": "DLK",
+        "EDH": "EDH"
+      }
+    },
+    "sub_product_codes": {
+      "_source": "table 7 'Project / Use Case'",
+      "values": {
+        "BITS2.0": "BCL",
+        "LAKE TO LAKE": "LTL",
+        "HVR": "HVR",
+        "FHIR": "FHR",
+        "DATA SCIENCE -SERVING LAYER (SANDBOX)": "BDS",
+        "FORCAST": "FCT",
+        "NO SUB-PRODUCT": "NSP"
+      }
+    },
+    "frequencies": {
+      "_source": "table 10 'Frequency'",
+      "values": {
+        "HOURLY": "HRL",
+        "DAILY": "DLY",
+        "WEEKLY": "WKL",
+        "FORTNIGHTLY": "FRT",
+        "MONTHLY": "MTH",
+        "QUARTERLY": "QTR",
+        "YEARLY": "YRL",
+        "AD-HOC": "ADH",
+        "ONE TIME": "ONT",
+        "HISTORY DATA LOAD": "HST"
+      }
+    },
+    "region_lob": {
+      "_source": "table 9 'Region'",
+      "values": {
+        "REGION 1": "REG_1",
+        "REGION 2": "REG_2",
+        "REGION 5": "REG_5",
+        "REGION 6": "REG_6",
+        "EXCHANGE": "REG_EXCH",
+        "MMP": "REG_MMP",
+        "ALL REGION": "REG_ALL",
+        "ALL": "ALL"
+      }
+    },
+    "source_target": {
+      "_source": "table 5 'Source / Target'",
+      "values": {
+        "FACETS": "FACETS",
+        "JIVA": "JIVA",
+        "CDR": "CDR",
+        "UTIL": "UTIL",
+        "ENTERPRISE DATA WAREHOUSE": "EDWH",
+        "ELTSS": "LTSS",
+        "FILE": "FILE"
+      }
+    }
+  },
+  "derivations": {
+    "_about": "How an STTM cell is COMPUTED from the vocabularies above plus the FRD's Structural Metadata. Each carries its evidence and its confidence; anything OBSERVED rather than STATED must be gated, not silently applied.",
+    "schema": {
+      "stage": {
+        "pattern": "STG_{domain}",
+        "_status": "OBSERVED",
+        "_evidence": "CAQH STTM stage schema 'STG_MBR' (domain MEMBER→MBR); SFMC FRD 'Stage: stg_mbr'; SD STTM 'stg_sdoh'. Three documents agree on the shape.",
+        "_case": "UNSOURCED — CAQH renders it upper (STG_MBR), SD and SFMC lower (stg_sdoh, stg_mbr). The standards document states no case rule. Follow the matched template's case; gate if there is no template."
+      },
+      "standard": {
+        "pattern": "{domain}",
+        "_status": "OBSERVED",
+        "_evidence": "CAQH standard schema 'MBR'; SFMC FRD 'Standard: mbr'; SD STTM 'sdoh'. The standard layer drops the layer prefix."
+      }
+    },
+    "catalog": {
+      "stage": "PR_DLK",
+      "standard": "PR_STD",
+      "_status": "OBSERVED_SINGLE_PAIR",
+      "_evidence": "CAQH STTM only: stage Catalog 'PR_DLK', standard Catalog 'PR_STD'. The SD STTM has NO catalog columns at all.",
+      "_caution": "The two are not built the same way: PR_DLK is PR_ + the PRODUCT code for Data Lake, while PR_STD is PR_ + the STANDARD LAYER abbreviation. That is one workbook's convention, not a stated rule. Do not generalise to other layers without a second mapped pair; gate instead."
+    }
+  },
+  "column_rules": {
+    "_status": "PARTIALLY_SOURCED",
+    "_about": [
+      "NEITHER standards document contains a target COLUMN naming rule or an audit-column",
+      "set. Both were grepped on 2026-08-26 for SRC_FILE_NAME / REC_CREATION_TIME /",
+      "REC_UPDATED_TIME / case rules / prefix rules: no hits. The documents stop at object",
+      "level (layers, domains, catalogs, load strategy).",
+      "",
+      "v1.1.0 (2026-08-26) splits what was one UNSOURCED blob, after measuring each rule",
+      "against the two mapped STTMs. One naming convention reproduces perfectly and is now",
+      "DERIVABLE; the other reproduces 19% and is not a rule at all. The audit columns turned",
+      "out to be consistent across BOTH pairs once segment role is accounted for, so they",
+      "move out of the per-convention blocks into a shared set."
+    ],
+    "confirmed_by": null,
+    "audit_columns": {
+      "_about": [
+        "Target columns with NO source field. Measured over both mapped STTMs: the core three",
+        "appear on EVERY table of BOTH workbooks, in BOTH layers, with identical datatypes",
+        "(case differs only: 'String' vs 'string'). They are not convention-specific.",
+        "",
+        "LOB appears on data-bearing tables only -- CAQH's EXT_TPL_CAQH_DTL and all three SD",
+        "tables -- and NOT on CAQH's header/trailer control tables, which is coherent: a line",
+        "of business is a per-record business attribute, meaningless on a file control record.",
+        "",
+        "An EARLIER NOTE IN THIS REPO CLAIMED THE TWO WORKBOOKS DISAGREED (three columns vs",
+        "four). They do not. The apparent conflict was reading only CAQH's header segment."
+      ],
+      "core": {
+        "_status": "OBSERVED_BOTH_PAIRS",
+        "_evidence": "Present on all 3 CAQH tables and all 3 SD tables, stage and standard.",
+        "applies_to": "every table",
+        "columns": [
+          {
+            "name": "SRC_FILE_NAME",
+            "datatype": "String",
+            "layers": [
+              "stage",
+              "standard"
+            ]
+          },
+          {
+            "name": "REC_CREATION_TIME",
+            "datatype": "timestamp",
+            "layers": [
+              "stage",
+              "standard"
+            ]
+          },
+          {
+            "name": "REC_UPDATED_TIME",
+            "datatype": "timestamp",
+            "layers": [
+              "stage",
+              "standard"
+            ]
+          }
+        ]
+      },
+      "data_bearing_only": {
+        "_status": "OBSERVED_BOTH_PAIRS",
+        "_evidence": "CAQH EXT_TPL_CAQH_DTL and all three SD tables; absent from CAQH's HDR and TRL.",
+        "applies_to": "tables carrying business records, not file header/trailer control records",
+        "columns": [
+          {
+            "name": "LOB",
+            "datatype": "String",
+            "layers": [
+              "stage",
+              "standard"
+            ]
+          }
+        ]
+      },
+      "feed_specific": {
+        "_status": "OBSERVED_SINGLE_PAIR",
+        "_evidence": "FILE_TYPE appears on CAQH's detail table only. One workbook, one table.",
+        "_note": "Do NOT emit for a new feed. Recorded so a reviewer recognises it, and so the template-fill path is not mistaken for an agent error when it appears.",
+        "columns": [
+          {
+            "name": "FILE_TYPE",
+            "datatype": "String",
+            "layers": [
+              "stage",
+              "standard"
+            ]
+          }
+        ]
+      },
+      "_case_note": "CAQH writes datatypes 'String'/'timestamp', SD writes 'string'/'timestamp'. No case rule is stated anywhere; follow the matched template's case."
+    },
+    "conventions": {
+      "as_is": {
+        "_status": "DERIVABLE",
+        "_evidence": "Measured 2026-08-26 over the SD STTM: target column == source column on 399 of 399 non-audit rows across all three sheets. 100%. Every apparent miss was an audit row (source 'NA'), not a naming failure.",
+        "target_column": "as_is",
+        "prefix": "",
+        "strip_source_prefix": false
+      },
+      "prefixed_upper_snake": {
+        "_status": "NOT_DERIVABLE",
+        "_evidence": "Measured 2026-08-26 over the CAQH STTM: the rule 'TPL_' + UPPER_SNAKE(source) reproduces 22 of 115 rows = 19.1%. 46 distinct word substitutions, and 58 of the 93 misses change the WORD COUNT -- words are dropped entirely ('Member ID Family Sequence Number' -> TPL_FAMILY_SEQ_NO; 'National Payer ID' -> TPL_PAYER_ID).",
+        "target_column": "upper_snake",
+        "prefix": "TPL_",
+        "_prefix_lead": "TPL_ equals the CAQH source's own Sub-Domain value ('TPL'). One data point -- check a third mapped STTM before encoding it as a rule.",
+        "_why_not_derivable": [
+          "These are not abbreviations of the source names; they are an EXISTING WAREHOUSE",
+          "VOCABULARY. 'Member ID' -> TPL_MEME_ID and 'Subscriber or Dependent indicator' ->",
+          "TPL_SBSB_IND: MEME, SBSB and GRP are Facets column names, and the CAQH FRD names",
+          "Facets as the incumbent on-prem system. So the missing input is not a rule document",
+          "-- it is a TERM CATALOG of the columns that already exist in the client's warehouse.",
+          "",
+          "The right source for it is information_schema.columns over the existing PR_STD /",
+          "PR_DLK tables, which needs read access rather than a client meeting. Matching a",
+          "source field to an existing column is then a scored alignment against a REAL column,",
+          "never a generated string. Until that exists, this convention must be gated."
+        ]
+      }
+    },
+    "default_convention": null,
+    "_default_note": "Deliberately null. Which convention applies to a given FRD is stated in neither FRD and in neither standards document; today it is inferred from the matched template STTM. Selecting one by default would reintroduce the implicit borrow this file exists to remove. This is an open question for the client."
+  }
+}

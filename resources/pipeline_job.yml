@@ -1,0 +1,45 @@
+# The one job: notebooks/pipeline.py, task chosen per run (extract | render |
+# reindex). Triggered by the review app through the Jobs API, or by hand:
+#   databricks bundle run frd_sttm_pipeline -t dev --params task=reindex
+# Serverless compute (no job_cluster). No retries: a failed extraction is a
+# real failure the run records; the app shows it.
+resources:
+  jobs:
+    frd_sttm_pipeline:
+      name: frd_sttm_pipeline
+      parameters:
+        - name: task
+          default: reindex
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: run_id
+          default: ""
+        - name: doc_id
+          default: ""
+        - name: provider
+          default: databricks
+        - name: model
+          default: claude-sonnet-5
+        - name: triggered_by
+          default: manual
+      tasks:
+        - task_key: pipeline
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/pipeline.py
+            base_parameters:
+              task: "{{job.parameters.task}}"
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              run_id: "{{job.parameters.run_id}}"
+              doc_id: "{{job.parameters.doc_id}}"
+              provider: "{{job.parameters.provider}}"
+              model: "{{job.parameters.model}}"
+              triggered_by: "{{job.parameters.triggered_by}}"
+              frds_volume: frds
+              vdds_volume: vdds
+              reference_volume: reference_sttms
+              output_volume: output_sttms
+              pairing_table: frd_pairing
