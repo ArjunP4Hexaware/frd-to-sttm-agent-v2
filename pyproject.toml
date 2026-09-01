@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-app = ["fastapi", "uvicorn[standard]"]
+app = ["fastapi", "uvicorn[standard]", "python-multipart"]
 dev = ["pytest", "httpx"]
 
 [build-system]

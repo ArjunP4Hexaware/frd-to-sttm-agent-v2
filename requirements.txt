@@ -1,6 +1,9 @@
 # Databricks Apps installs this file. Keep in step with pyproject.toml.
 fastapi
 uvicorn[standard]
+# FastAPI needs this for the multipart upload routes (/api/runs/upload,
+# /api/documents/upload) — the backend refuses to start without it.
+python-multipart
 pydantic>=2
 databricks-sdk
 anthropic>=0.60
