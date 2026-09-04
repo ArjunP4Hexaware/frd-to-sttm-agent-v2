@@ -844,6 +844,22 @@ frd-sttm-review-app --source-code-path /Workspace/Users/<you>/frd-to-sttm-agent-
 open the url; walk section E's workspace checks; `databricks apps stop
 frd-sttm-review-app`. Redeploy = sync + deploy.
 
+**Reached through the unified agent console (optional, 2026-09-04).** The
+program's one-screen console (repo `unified-agent-console`, Databricks App
+`unified-agent-console`) reverse-proxies this backend under `/api/sttm/*`
+using the console's own service principal. To light that side up in a
+workspace: deploy this App there, grant the console's
+`service_principal_client_id` **CAN_USE** on `frd-sttm-review-app`
+(`databricks apps update-permissions frd-sttm-review-app --json
+'{"access_control_list":[{"service_principal_name":"<console sp>",
+"permission_level":"CAN_USE"}]}'`), set `STTM_BACKEND_URL` to this App's
+URL in the console's `app.yaml` (same workspace only — the SP token does
+not cross workspaces) and redeploy the console. Until then the console
+reports the FRD→STTM side as "not configured for this deployment". The
+console surfaces every `detail` string and status code of section B12
+verbatim, so keep them meaningful (409 one-at-a-time, 400 cannot-generate,
+404 unknown run, 502 corpus index).
+
 ---
 
 ## D. Verbatim artifacts
