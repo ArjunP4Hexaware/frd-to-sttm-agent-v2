@@ -780,7 +780,9 @@ E lists the assertions.
 `tools/push_documents.py <folder> [--dry-run] [--no-reindex]`: route by prefix
 (`FRD_*`+FRD suffix → `frds`; `VDD_*|DICT_*.xlsx` → `vdds`; `STTM_*.xlsx` →
 `reference_sttms`; others skipped), create missing managed volumes, upload via
-Files API, run the job `task=reindex` (id from `STTM_JOB_ID` or the single job
+Files API (`w.files.upload` takes a **file-like object** on databricks-sdk
+≥ 0.60 — bytes raise `'bytes' object has no attribute 'seekable'`; fixed
+2026-09-04), run the job `task=reindex` (id from `STTM_JOB_ID` or the single job
 named `STTM_JOB_NAME`), poll to completion; reads `CATALOG`, `SCHEMA`.
 P2 `tools/eval_against_approved.py <agent.xlsx> <approved.xlsx> [--run
 run.json] [--out eval.xlsx]`: both through `parse_reference_workbook`, tables
@@ -854,9 +856,20 @@ workspace: deploy this App there, grant the console's
 '{"access_control_list":[{"service_principal_name":"<console sp>",
 "permission_level":"CAN_USE"}]}'`), set `STTM_BACKEND_URL` to this App's
 URL in the console's `app.yaml` (same workspace only — the SP token does
-not cross workspaces) and redeploy the console. Until then the console
-reports the FRD→STTM side as "not configured for this deployment". The
-console surfaces every `detail` string and status code of section B12
+not cross workspaces) and redeploy the console. **Done in Soham's workspace
+`adb-7405617821962942.2` on 2026-09-04** (second deployment of this app,
+beside Arjun's in `adb-7405616719878880.0`): schema `soham_workspace.
+sttm_agent` (it already held the CodeGen-facing `frd_contracts` /
+`frd_documents` tables and the older `frd_raw` / `sttm_out` /
+`sttm_reference` volumes — the four volumes of §A were added beside them),
+bundle deployed with `--var catalog=soham_workspace` → job
+`[dev 2000198474] frd_sttm_pipeline` id 836543925094877, app
+`frd-sttm-review-app` (SP `c24cd889-…`) with exactly the grants above, the
+SD + CAQH pairs from `sample_documents/` pushed and reindexed. The
+per-workspace `app.yaml` values (`CATALOG`, `STTM_JOB_ID`) were edited in a
+**staged copy** for the sync, never in the repo, so the tracked manifest
+still describes Arjun's workspace — repeat that for any third workspace.
+The console surfaces every `detail` string and status code of section B12
 verbatim, so keep them meaningful (409 one-at-a-time, 400 cannot-generate,
 404 unknown run, 502 corpus index).
 

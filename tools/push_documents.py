@@ -61,7 +61,9 @@ def main() -> int:
             w.volumes.create(catalog_name=CATALOG, schema_name=SCHEMA, name=v, volume_type=VolumeType.MANAGED)
             print(f"created volume {CATALOG}.{SCHEMA}.{v}")
     for p, vol in plan:
-        w.files.upload(f"/Volumes/{CATALOG}/{SCHEMA}/{vol}/{p.name}", p.read_bytes(), overwrite=True)
+        # databricks-sdk >= 0.60 wants a file-like object, not bytes.
+        with p.open("rb") as fh:
+            w.files.upload(f"/Volumes/{CATALOG}/{SCHEMA}/{vol}/{p.name}", fh, overwrite=True)
         print(f"uploaded {p.name}")
     if a.no_reindex:
         return 0

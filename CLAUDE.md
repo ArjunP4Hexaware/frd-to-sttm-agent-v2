@@ -44,6 +44,21 @@ App `frd-sttm-review-app`, deployed from the repo root. Claude through the
 workspace's Foundation Model APIs (`databricks-claude-sonnet-5`); no Anthropic key.
 Stop the App when not demoing — it bills per hour.
 
+## Soham's workspace (second deployment, 2026-09-04)
+
+`adb-7405617821962942.2` (CLI profile `DEFAULT`), so the unified agent console
+there can reach this agent. `soham_workspace.sttm_agent` (the schema already
+held the CodeGen-facing `frd_contracts`/`frd_documents` tables and older
+volumes; the four volumes were added beside them), job
+`[dev 2000198474] frd_sttm_pipeline` = **836543925094877** (bundle deployed
+with `--var catalog=soham_workspace`), App `frd-sttm-review-app` (SP
+`c24cd889-d705-4b3e-a2c8-173fecc6996a`, grants exactly per the skill's
+section C), SD + CAQH sample pairs pushed via `tools/push_documents.py` and
+indexed. The App's `CATALOG`/`STTM_JOB_ID` for that workspace live only in the
+staged copy used for `databricks sync` — `app.yaml` in the repo keeps Arjun's
+values. Redeploy there = stage the tree, edit those two values, sync to
+`/Workspace/Users/2000198474@hexaware.com/frd-to-sttm-agent-app`, deploy.
+
 ## Arjun's working rules (from ~/.claude/CLAUDE.md)
 
 Concise. Real-world examples. Ask when ambiguous. Anything that costs money —
