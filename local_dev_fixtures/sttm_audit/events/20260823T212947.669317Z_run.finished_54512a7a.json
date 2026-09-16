@@ -1,0 +1,15 @@
+{
+  "actor": "unknown",
+  "actor_source": "unknown",
+  "app_mode": "local",
+  "artifact_set": "sttm_out_demo_20260823_172947",
+  "doc_id": "client_frd",
+  "error": "JobRunnerError: extract: AssertionError: no key in scope",
+  "event_id": "54512a7a5601477781d763d88bf9df32",
+  "frd_sha256": "f0abcf998d363c442b1744dea9145286f80569aa5b64adf115b597965f3d7289",
+  "job_run_id": 42,
+  "kind": "run.finished",
+  "run_id": "demo_20260823_172947",
+  "status": "failed",
+  "ts": "2026-08-23T21:29:47.669317+00:00"
+}

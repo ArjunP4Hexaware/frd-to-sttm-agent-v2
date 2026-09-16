@@ -1,0 +1,10 @@
+{
+  "actor": "system:startup",
+  "actor_source": "startup",
+  "app_mode": "local",
+  "event_id": "048b78750c54425c8623d86c0055d478",
+  "kind": "corpus.sync.started",
+  "mode": "reindex",
+  "trigger": "startup",
+  "ts": "2026-08-25T14:20:27.532248+00:00"
+}

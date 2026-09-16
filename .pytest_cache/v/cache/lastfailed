@@ -1,0 +1,5 @@
+{
+  "tests/test_sync.py::test_corrupt_manifest_means_a_full_resync_and_says_so": true,
+  "tests/test_corpus_routes.py::test_source_client_503_names_both_gaps": true,
+  "tests/test_local_folder.py::test_tilde_is_expanded": true
+}

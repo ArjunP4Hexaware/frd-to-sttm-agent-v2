@@ -1,25 +1,8 @@
-# client documents never enter the repo except sample_documents/ (deliberate, purged on a date)
-local_data/
-screenshots/
-*.xlsx
-*.docx
-*.pdf
-!sample_documents/*
-!standards/*.docx
-!templates/*
-.env
-.env.*
-!.env.example
-.DS_Store
-__pycache__/
-*.pyc
+# Only genuine size constraints are ignored (Arjun, 2026-09-16). Everything
+# else in the tree is committed and pushed to GitHub.
+
+# 612 MB, 16,060 files
 .venv/
-venv/
-src/*.egg-info/
-.pytest_cache/
-.databricks/
-.~lock.*#
-~$*
-app/frontend/node_modules/
-# app/frontend/dist is TRACKED: the Databricks workspace serves it without a build step.
-# Run `npm run build` before committing a UI change.
+
+# 302 MB, 22,088 files (review_app_react/frontend/node_modules)
+node_modules/
