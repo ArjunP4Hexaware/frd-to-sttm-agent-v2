@@ -4,6 +4,11 @@ bundle:
 include:
   - resources/*.yml
 
+sync:
+  exclude:
+    - local_dev_fixtures
+    - review_app_react
+
 variables:
   catalog:
     description: Unity Catalog catalog holding the sttm_agent schema.

@@ -1,0 +1,85 @@
+{
+ "state_version": 2,
+ "cli_version": "1.13.0",
+ "lineage": "6a3f1fc3-72b6-4b8a-847f-0ed8d6620e84",
+ "serial": 6,
+ "state": {
+  "resources.jobs.frd_sttm_pipeline": {
+   "__id__": "542994480165767",
+   "state": {
+    "deployment": {
+     "kind": "BUNDLE",
+     "metadata_file_path": "/Workspace/Users/2000198467@hexaware.com/.bundle/frd_sttm_agent/dev/state/metadata.json"
+    },
+    "edit_mode": "UI_LOCKED",
+    "format": "MULTI_TASK",
+    "max_concurrent_runs": 4,
+    "name": "[dev 2000198467] frd_sttm_pipeline",
+    "parameters": [
+     {
+      "default": "reindex",
+      "name": "task"
+     },
+     {
+      "default": "arjun_workspace",
+      "name": "catalog"
+     },
+     {
+      "default": "sttm_agent",
+      "name": "schema"
+     },
+     {
+      "default": "",
+      "name": "run_id"
+     },
+     {
+      "default": "",
+      "name": "doc_id"
+     },
+     {
+      "default": "databricks",
+      "name": "provider"
+     },
+     {
+      "default": "claude-sonnet-5",
+      "name": "model"
+     },
+     {
+      "default": "manual",
+      "name": "triggered_by"
+     }
+    ],
+    "queue": {
+     "enabled": true
+    },
+    "tags": {
+     "dev": "2000198467"
+    },
+    "tasks": [
+     {
+      "max_retries": 0,
+      "notebook_task": {
+       "base_parameters": {
+        "catalog": "{{job.parameters.catalog}}",
+        "doc_id": "{{job.parameters.doc_id}}",
+        "frds_volume": "frds",
+        "model": "{{job.parameters.model}}",
+        "output_volume": "output_sttms",
+        "pairing_table": "frd_pairing",
+        "provider": "{{job.parameters.provider}}",
+        "reference_volume": "reference_sttms",
+        "run_id": "{{job.parameters.run_id}}",
+        "schema": "{{job.parameters.schema}}",
+        "task": "{{job.parameters.task}}",
+        "triggered_by": "{{job.parameters.triggered_by}}",
+        "vdds_volume": "vdds"
+       },
+       "notebook_path": "/Workspace/Users/2000198467@hexaware.com/.bundle/frd_sttm_agent/dev/files/notebooks/pipeline"
+      },
+      "task_key": "pipeline"
+     }
+    ]
+   }
+  }
+ }
+}
