@@ -1,8 +1,36 @@
-# Only genuine size constraints are ignored (Arjun, 2026-09-16). Everything
-# else in the tree is committed and pushed to GitHub.
+# A path is ignored only if it is (a) a size constraint, (b) machine-generated
+# and regenerated automatically, or (c) a credential. Everything the agent
+# needs in order to RUN is tracked, so `git archive HEAD` produces a complete,
+# portable copy of the agent for another Databricks workspace.
+#
+# Deliberately NOT ignored, because the zip must stay functional:
+#   app/frontend/dist/  - the workspace serves it; there is no build step there
+#   standards/*.docx + standards/*.json, templates/*, *.xlsx
+#                       - config and templates the agent reads at run time
 
-# 612 MB, 16,060 files
+# (a) size
 .venv/
-
-# 302 MB, 22,088 files (review_app_react/frontend/node_modules)
+venv/
 node_modules/
+
+# (b) machine-generated. .databricks/ is the Databricks CLI's local state: it
+# pins THIS workspace's job id and user paths, so it must never travel to
+# another workspace. `databricks bundle deploy` rebuilds it from databricks.yml.
+.databricks/
+__pycache__/
+*.pyc
+.pytest_cache/
+src/*.egg-info/
+
+# (c) credentials. The README's `cp .env.example .env` creates a real one.
+.env
+.env.*
+!.env.example
+
+# runtime output
+local_data/
+
+# OS / editor junk
+.DS_Store
+~$*
+.~lock.*#
