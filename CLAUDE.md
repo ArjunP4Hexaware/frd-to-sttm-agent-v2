@@ -44,6 +44,17 @@ App `frd-sttm-review-app`, deployed from the repo root. Claude through the
 workspace's Foundation Model APIs (`databricks-claude-sonnet-5`); no Anthropic key.
 Stop the App when not demoing — it bills per hour.
 
+Host `adb-7405616719878880.0.azuredatabricks.net` (CLI profile `ahc`), App at
+`https://frd-sttm-review-app-7405616719878880.0.azure.databricksapps.com`.
+The App's **source-code path is
+`/Workspace/Users/2000198467@hexaware.com/frd-to-sttm-agent-app`** — synced
+there 2026-09-09 (217 files; `app.yaml` at its root is what makes it an App
+folder). It was `…/frd-to-sttm-agent` (no `-app`) until 2026-08-25; that
+older folder is **gone** from the workspace (checked 2026-09-16). `README.md`'s deploy line
+still names the old path and is **stale**; `.claude/skills/frd-sttm-agent/SKILL.md`
+has the current one. Redeploy = `databricks sync` to the `-app` folder, then
+`databricks apps deploy`.
+
 ## Arjun's working rules (from ~/.claude/CLAUDE.md)
 
 Concise. Real-world examples. Ask when ambiguous. Anything that costs money —
